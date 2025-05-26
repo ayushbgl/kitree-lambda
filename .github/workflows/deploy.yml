@@ -11,6 +11,7 @@ on:
           - test
           - prod
           - both
+          - only-sync-rules
 
 env:
   DEPLOYMENT_BUCKET: kitree-backend
@@ -44,8 +45,10 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
 
       - name: Copy secret files
+        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
         run: |
           mkdir -p src/main/resources
           cp secrets/kitree-lambda/secrets.json src/main/resources/
@@ -54,25 +57,39 @@ jobs:
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
+        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Build and Test
+        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
         run: |
           chmod +x ./gradlew
           ./gradlew clean build test
 
       - name: Install AWS SAM CLI
+        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
         run: |
           pip install aws-sam-cli
 
       - name: Deploy Test Environment
         if: ${{ github.event.inputs.environment == 'test' || github.event.inputs.environment == 'both' }}
         run: |
+          echo "🚀 Deploying to TEST environment..."
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
+          
+          # Verify credentials
+          echo "✅ Verifying TEST credentials..."
+          if [ -f "firebase-test-key.json" ]; then
+            echo "✅ Test service account file created successfully"
+          else
+            echo "❌ Failed to create test service account file"
+            exit 1
+          fi
+          
           sam build
           sam package \
             --template-file .aws-sam/build/template.yaml \
@@ -87,12 +104,25 @@ jobs:
             Environment=test \
             FirebaseProject=${{ env.FIREBASE_PROJECT_ID_TEST }} \
             --no-fail-on-empty-changeset
+          
+          echo "✅ TEST deployment completed successfully"
 
       - name: Deploy Production Environment
         if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
         run: |
+          echo "🚀 Deploying to PRODUCTION environment..."
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
+          
+          # Verify credentials
+          echo "✅ Verifying PRODUCTION credentials..."
+          if [ -f "firebase-prod-key.json" ]; then
+            echo "✅ Production service account file created successfully"
+          else
+            echo "❌ Failed to create production service account file"
+            exit 1
+          fi
+          
           sam build
           sam package \
             --template-file .aws-sam/build/template.yaml \
@@ -107,19 +137,57 @@ jobs:
             Environment=prod \
             FirebaseProject=${{ env.FIREBASE_PROJECT_ID_PROD }} \
             --no-fail-on-empty-changeset
+          
+          echo "✅ PRODUCTION deployment completed successfully"
 
       - name: Sync Firebase Rules and Indexes
-        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
+        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' || github.event.inputs.environment == 'only-sync-rules' }}
         run: |
+          echo "🔄 Starting Firebase Rules and Indexes sync..."
+          echo "📋 Selected environment: ${{ github.event.inputs.environment }}"
+          
           # Install Firebase CLI and Admin SDK
+          echo "📦 Installing Firebase CLI and Admin SDK..."
           npm install -g firebase-tools
           npm install firebase-admin
+          echo "✅ Packages installed successfully"
 
           # Create service account files
+          echo "🔑 Creating service account files..."
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
+          
+          # Verify both credential files
+          if [ -f "firebase-test-key.json" ]; then
+            echo "✅ Test service account file created"
+            # Check if file is valid JSON
+            if jq empty firebase-test-key.json 2>/dev/null; then
+              echo "✅ Test service account JSON is valid"
+            else
+              echo "❌ Test service account JSON is invalid"
+              exit 1
+            fi
+          else
+            echo "❌ Failed to create test service account file"
+            exit 1
+          fi
+          
+          if [ -f "firebase-prod-key.json" ]; then
+            echo "✅ Production service account file created"
+            # Check if file is valid JSON
+            if jq empty firebase-prod-key.json 2>/dev/null; then
+              echo "✅ Production service account JSON is valid"
+            else
+              echo "❌ Production service account JSON is invalid"
+              exit 1
+            fi
+          else
+            echo "❌ Failed to create production service account file"
+            exit 1
+          fi
 
           # Create .firebaserc file for project aliases
+          echo "⚙️ Creating Firebase configuration..."
           cat > .firebaserc << 'EOF'
           {
             "projects": {
@@ -138,40 +206,75 @@ jobs:
             }
           }
           EOF
+          echo "✅ Firebase configuration files created"
 
-          # Export indexes from test project
+          # Export from test project
+          echo "📤 Exporting from TEST project (${{ env.FIREBASE_PROJECT_ID_TEST }})..."
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
+          
+          # Test Firebase CLI authentication
+          echo "🔐 Testing Firebase CLI authentication with test project..."
+          firebase projects:list --json > test_auth_check.json || {
+            echo "❌ Failed to authenticate with Firebase CLI using test credentials"
+            cat test_auth_check.json 2>/dev/null || echo "No output from Firebase CLI"
+            exit 1
+          }
+          echo "✅ Firebase CLI authentication successful"
+          
           firebase use test
+          echo "✅ Switched to test project"
+          
+          # Export indexes
+          echo "📋 Exporting indexes from test project..."
           firebase firestore:indexes > firestore.indexes.json
-          echo "Exported indexes from test project"
+          if [ -f "firestore.indexes.json" ]; then
+            echo "✅ Indexes exported successfully"
+            echo "📄 Indexes content preview:"
+            head -n 10 firestore.indexes.json
+          else
+            echo "❌ Failed to export indexes"
+            exit 1
+          fi
 
-          # Export rules from test project using Firebase Admin SDK
+          # Export rules using Firebase Admin SDK
+          echo "📋 Exporting rules from test project using Admin SDK..."
           cat > export-rules.js << 'EOF'
           const admin = require('firebase-admin');
           const fs = require('fs');
 
           async function exportRules() {
             try {
+              console.log('🔐 Initializing Firebase Admin SDK for test project...');
               const serviceAccount = require('./firebase-test-key.json');
+              console.log('📋 Service account project_id:', serviceAccount.project_id);
+              
               admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount),
                 projectId: process.env.FIREBASE_PROJECT_ID_TEST
               });
+              console.log('✅ Firebase Admin SDK initialized successfully');
 
+              console.log('📋 Getting security rules...');
               const securityRules = admin.securityRules();
               const rulesets = await securityRules.listRulesetMetadata();
+              console.log(`📊 Found ${rulesets.length} rulesets`);
               
               if (rulesets.length > 0) {
+                console.log('📤 Getting latest ruleset...');
                 const latestRuleset = rulesets[0];
+                console.log('📋 Latest ruleset name:', latestRuleset.name);
                 const ruleset = await securityRules.getRuleset(latestRuleset.name);
                 
                 if (ruleset.source && ruleset.source.files) {
+                  console.log(`📁 Found ${ruleset.source.files.length} files in ruleset`);
                   const rulesFile = ruleset.source.files.find(file => file.name === 'firestore.rules');
                   if (rulesFile && rulesFile.content) {
                     fs.writeFileSync('firestore.rules', rulesFile.content);
-                    console.log('Successfully exported rules from test project');
+                    console.log('✅ Successfully exported rules from test project');
+                    console.log('📄 Rules preview (first 5 lines):');
+                    console.log(rulesFile.content.split('\n').slice(0, 5).join('\n'));
                   } else {
-                    console.log('No rules content found in test project');
+                    console.log('⚠️ No rules content found in test project, creating default rules');
                     fs.writeFileSync('firestore.rules', `rules_version = '2';
           service cloud.firestore {
             match /databases/{database}/documents {
@@ -183,7 +286,7 @@ jobs:
                   }
                 }
               } else {
-                console.log('No rulesets found in test project');
+                console.log('⚠️ No rulesets found in test project, creating default rules');
                 fs.writeFileSync('firestore.rules', `rules_version = '2';
           service cloud.firestore {
             match /databases/{database}/documents {
@@ -194,7 +297,9 @@ jobs:
           }`);
               }
             } catch (error) {
-              console.error('Error exporting rules:', error);
+              console.error('❌ Error exporting rules:', error.message);
+              console.error('📋 Full error:', error);
+              // Create a basic rules file as fallback
               fs.writeFileSync('firestore.rules', `rules_version = '2';
           service cloud.firestore {
             match /databases/{database}/documents {
@@ -203,6 +308,7 @@ jobs:
               }
             }
           }`);
+              console.log('⚠️ Created fallback rules file');
             }
           }
 
@@ -212,33 +318,37 @@ jobs:
           export FIREBASE_PROJECT_ID_TEST='${{ env.FIREBASE_PROJECT_ID_TEST }}'
           node export-rules.js
 
-          # Switch to production project and deploy
+          # Deploy to production project
+          echo "📤 Deploying to PRODUCTION project (${{ env.FIREBASE_PROJECT_ID_PROD }})..."
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
+          
+          # Test Firebase CLI authentication for prod
+          echo "🔐 Testing Firebase CLI authentication with production project..."
+          firebase projects:list --json > prod_auth_check.json || {
+            echo "❌ Failed to authenticate with Firebase CLI using production credentials"
+            cat prod_auth_check.json 2>/dev/null || echo "No output from Firebase CLI"
+            exit 1
+          }
+          echo "✅ Firebase CLI authentication successful for production"
+          
           firebase use prod
+          echo "✅ Switched to production project"
 
           # Deploy rules to production
           if [ -f "firestore.rules" ]; then
-            firebase deploy --only firestore:rules
-            echo "Deployed rules to production project"
+            echo "📋 Deploying rules to production..."
+            firebase deploy --only firestore:rules --debug
+            if [ $? -eq 0 ]; then
+              echo "✅ Rules deployed to production successfully"
+            else
+              echo "❌ Failed to deploy rules to production"
+              exit 1
+            fi
+          else
+            echo "⚠️ No rules file found to deploy"
           fi
 
           # Deploy indexes to production
           if [ -f "firestore.indexes.json" ]; then
-            firebase deploy --only firestore:indexes
-            echo "Deployed indexes to production project"
-          fi
-
-          # Cleanup
-          rm firebase-test-key.json firebase-prod-key.json firestore.rules firestore.indexes.json export-rules.js .firebaserc firebase.json
-          echo "Successfully synced Firebase rules and indexes from test to prod"
-
-      - name: Cleanup S3 Artifacts
-        if: always()
-        run: |
-          if [ -f ".aws-sam/build/packaged.yaml" ]; then
-            S3_URI=$(grep -A 1 "CodeUri:" .aws-sam/build/packaged.yaml | grep "s3://" | tr -d ' ')
-            if [ ! -z "$S3_URI" ]; then
-              echo "Cleaning up S3 artifact: $S3_URI"
-              aws s3 rm "$S3_URI" || echo "Failed to delete S3 artifact"
-            fi
-          fi
+            echo "📋 Deploying indexes to production..."
+            firebase deploy --only fire
