@@ -113,32 +113,53 @@ jobs:
       - name: Sync Firebase Rules and Indexes
         if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
         run: |
+          # Install required packages
+          npm install firebase-admin @google-cloud/firestore
+
           # Create a temporary Node.js script to handle Firebase operations
           cat > sync-firebase.js << 'EOF'
           const admin = require('firebase-admin');
-          const fs = require('fs');
+          const {Firestore} = require('@google-cloud/firestore');
 
           async function syncFirebaseRules() {
             try {
               // Initialize test project with test service account
               const testApp = admin.initializeApp({
-                credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_TEST_KEY)),
+                credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_TEST)),
                 projectId: process.env.FIREBASE_PROJECT_ID_TEST
               }, 'test');
 
-              // Get rules and indexes from test project
-              const testRules = await testApp.firestore().getRules();
-              const testIndexes = await testApp.firestore().getIndexes();
-
               // Initialize prod project with prod service account
               const prodApp = admin.initializeApp({
-                credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_PROD_KEY)),
+                credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_PROD)),
                 projectId: process.env.FIREBASE_PROJECT_ID_PROD
               }, 'prod');
 
-              // Deploy rules and indexes to prod project
-              await prodApp.firestore().setRules(testRules);
-              await prodApp.firestore().setIndexes(testIndexes);
+              // Get Firestore instances
+              const testFirestore = new Firestore({
+                projectId: process.env.FIREBASE_PROJECT_ID_TEST,
+                credentials: JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_TEST)
+              });
+
+              const prodFirestore = new Firestore({
+                projectId: process.env.FIREBASE_PROJECT_ID_PROD,
+                credentials: JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_PROD)
+              });
+
+              // Get rules from test
+              const testRules = await testFirestore.getRules();
+              console.log('Retrieved rules from test project');
+
+              // Get indexes from test
+              const testIndexes = await testFirestore.getIndexes();
+              console.log('Retrieved indexes from test project');
+
+              // Deploy to prod
+              await prodFirestore.setRules(testRules);
+              console.log('Deployed rules to prod project');
+
+              await prodFirestore.setIndexes(testIndexes);
+              console.log('Deployed indexes to prod project');
 
               console.log('Successfully synced Firebase rules and indexes from test to prod');
             } catch (error) {
@@ -159,12 +180,11 @@ jobs:
           EOF
 
           # Run the sync script with both service account keys
-          export FIREBASE_TEST_KEY='${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}'
-          export FIREBASE_PROD_KEY='${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}'
+          export FIREBASE_SERVICE_ACCOUNT_KEY_TEST='${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}'
+          export FIREBASE_SERVICE_ACCOUNT_KEY_PROD='${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}'
           export FIREBASE_PROJECT_ID_TEST='${{ env.FIREBASE_PROJECT_ID_TEST }}'
           export FIREBASE_PROJECT_ID_PROD='${{ env.FIREBASE_PROJECT_ID_PROD }}'
           
-          npm install firebase-admin
           node sync-firebase.js
 
       - name: Cleanup S3 Artifacts
