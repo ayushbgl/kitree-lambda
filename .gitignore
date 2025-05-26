@@ -165,3 +165,8 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Secret files
+src/main/resources/secrets.json
+src/main/resources/serviceAccountKey.json
+src/main/resources/serviceAccountKeyTest.json
