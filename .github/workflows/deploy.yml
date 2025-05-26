@@ -47,6 +47,14 @@ jobs:
           java-version: '17'
         if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
 
+      - name: Install Google Cloud SDK
+        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' || github.event.inputs.environment == 'only-sync-rules' }}
+        run: |
+          echo "📦 Installing Google Cloud SDK for debugging..."
+          curl https://sdk.cloud.google.com | bash
+          source ~/google-cloud-sdk/path.bash.inc
+          echo "✅ Google Cloud SDK installed"
+
       - name: Copy secret files
         if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
         run: |
@@ -85,6 +93,8 @@ jobs:
           echo "✅ Verifying TEST credentials..."
           if [ -f "firebase-test-key.json" ]; then
             echo "✅ Test service account file created successfully"
+            echo "📧 Test service account email: $(cat firebase-test-key.json | jq -r '.client_email')"
+            echo "📋 Test project ID: $(cat firebase-test-key.json | jq -r '.project_id')"
           else
             echo "❌ Failed to create test service account file"
             exit 1
@@ -118,6 +128,8 @@ jobs:
           echo "✅ Verifying PRODUCTION credentials..."
           if [ -f "firebase-prod-key.json" ]; then
             echo "✅ Production service account file created successfully"
+            echo "📧 Production service account email: $(cat firebase-prod-key.json | jq -r '.client_email')"
+            echo "📋 Production project ID: $(cat firebase-prod-key.json | jq -r '.project_id')"
           else
             echo "❌ Failed to create production service account file"
             exit 1
@@ -158,8 +170,13 @@ jobs:
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
           
           # Verify both credential files
+          echo "🔍 Verifying credential files..."
           if [ -f "firebase-test-key.json" ]; then
             echo "✅ Test service account file created"
+            echo "📧 Test service account email: $(cat firebase-test-key.json | jq -r '.client_email')"
+            echo "📋 Test project ID from key: $(cat firebase-test-key.json | jq -r '.project_id')"
+            echo "📋 Expected test project ID: ${{ env.FIREBASE_PROJECT_ID_TEST }}"
+          
             # Check if file is valid JSON
             if jq empty firebase-test-key.json 2>/dev/null; then
               echo "✅ Test service account JSON is valid"
@@ -174,6 +191,10 @@ jobs:
           
           if [ -f "firebase-prod-key.json" ]; then
             echo "✅ Production service account file created"
+            echo "📧 Production service account email: $(cat firebase-prod-key.json | jq -r '.client_email')"
+            echo "📋 Production project ID from key: $(cat firebase-prod-key.json | jq -r '.project_id')"
+            echo "📋 Expected production project ID: ${{ env.FIREBASE_PROJECT_ID_PROD }}"
+          
             # Check if file is valid JSON
             if jq empty firebase-prod-key.json 2>/dev/null; then
               echo "✅ Production service account JSON is valid"
@@ -185,6 +206,25 @@ jobs:
             echo "❌ Failed to create production service account file"
             exit 1
           fi
+
+          # Verify production service account permissions using gcloud
+          echo "🔍 Verifying production service account permissions..."
+          source ~/google-cloud-sdk/path.bash.inc
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
+          gcloud auth activate-service-account --key-file=firebase-prod-key.json
+          gcloud config set project ${{ env.FIREBASE_PROJECT_ID_PROD }}
+          
+          echo "👤 Current authenticated account:"
+          gcloud auth list --filter=status:ACTIVE --format="value(account)"
+          
+          echo "🔐 Checking IAM permissions for production service account..."
+          PROD_EMAIL=$(cat firebase-prod-key.json | jq -r '.client_email')
+          echo "📧 Checking permissions for: $PROD_EMAIL"
+          
+          gcloud projects get-iam-policy ${{ env.FIREBASE_PROJECT_ID_PROD }} \
+            --flatten="bindings[].members" \
+            --format="table(bindings.role)" \
+            --filter="bindings.members:$PROD_EMAIL" || echo "⚠️ Could not retrieve IAM policy"
 
           # Create .firebaserc file for project aliases
           echo "⚙️ Creating Firebase configuration..."
@@ -219,7 +259,7 @@ jobs:
             cat test_auth_check.json 2>/dev/null || echo "No output from Firebase CLI"
             exit 1
           }
-          echo "✅ Firebase CLI authentication successful"
+          echo "✅ Firebase CLI authentication successful for test project"
           
           firebase use test
           echo "✅ Switched to test project"
@@ -229,6 +269,7 @@ jobs:
           firebase firestore:indexes > firestore.indexes.json
           if [ -f "firestore.indexes.json" ]; then
             echo "✅ Indexes exported successfully"
+            echo "📄 Indexes file size: $(wc -l < firestore.indexes.json) lines"
             echo "📄 Indexes content preview:"
             head -n 10 firestore.indexes.json
           else
@@ -246,8 +287,9 @@ jobs:
             try {
               console.log('🔐 Initializing Firebase Admin SDK for test project...');
               const serviceAccount = require('./firebase-test-key.json');
+              console.log('📧 Service account email:', serviceAccount.client_email);
               console.log('📋 Service account project_id:', serviceAccount.project_id);
-              
+          
               admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount),
                 projectId: process.env.FIREBASE_PROJECT_ID_TEST
@@ -257,57 +299,38 @@ jobs:
               console.log('📋 Getting security rules...');
               const securityRules = admin.securityRules();
               const rulesets = await securityRules.listRulesetMetadata();
-              console.log(`📊 Found ${rulesets.length} rulesets`);
-              
-              if (rulesets.length > 0) {
+              console.log(`📊 Found ${rulesets ? rulesets.length : 0} rulesets`);
+          
+              if (rulesets && rulesets.length > 0) {
                 console.log('📤 Getting latest ruleset...');
                 const latestRuleset = rulesets[0];
                 console.log('📋 Latest ruleset name:', latestRuleset.name);
                 const ruleset = await securityRules.getRuleset(latestRuleset.name);
-                
+          
                 if (ruleset.source && ruleset.source.files) {
                   console.log(`📁 Found ${ruleset.source.files.length} files in ruleset`);
                   const rulesFile = ruleset.source.files.find(file => file.name === 'firestore.rules');
                   if (rulesFile && rulesFile.content) {
                     fs.writeFileSync('firestore.rules', rulesFile.content);
                     console.log('✅ Successfully exported rules from test project');
+                    console.log('📄 Rules file size:', rulesFile.content.length, 'characters');
                     console.log('📄 Rules preview (first 5 lines):');
                     console.log(rulesFile.content.split('\n').slice(0, 5).join('\n'));
                   } else {
                     console.log('⚠️ No rules content found in test project, creating default rules');
-                    fs.writeFileSync('firestore.rules', `rules_version = '2';
-          service cloud.firestore {
-            match /databases/{database}/documents {
-              match /{document=**} {
-                allow read, write: if false;
-              }
-            }
-          }`);
+                    fs.writeFileSync('firestore.rules', `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}`);
                   }
                 }
               } else {
                 console.log('⚠️ No rulesets found in test project, creating default rules');
-                fs.writeFileSync('firestore.rules', `rules_version = '2';
-          service cloud.firestore {
-            match /databases/{database}/documents {
-              match /{document=**} {
-                allow read, write: if false;
-              }
-            }
-          }`);
+                fs.writeFileSync('firestore.rules', `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}`);
               }
             } catch (error) {
               console.error('❌ Error exporting rules:', error.message);
+              console.error('📋 Error code:', error.code);
               console.error('📋 Full error:', error);
               // Create a basic rules file as fallback
-              fs.writeFileSync('firestore.rules', `rules_version = '2';
-          service cloud.firestore {
-            match /databases/{database}/documents {
-              match /{document=**} {
-                allow read, write: if false;
-              }
-            }
-          }`);
+              fs.writeFileSync('firestore.rules', `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}`);
               console.log('⚠️ Created fallback rules file');
             }
           }
@@ -331,17 +354,28 @@ jobs:
           }
           echo "✅ Firebase CLI authentication successful for production"
           
+          # Show which account Firebase CLI is using
+          echo "👤 Firebase CLI authenticated as:"
+          firebase auth:list 2>/dev/null || echo "Could not list Firebase auth accounts"
+          
           firebase use prod
           echo "✅ Switched to production project"
 
           # Deploy rules to production
           if [ -f "firestore.rules" ]; then
             echo "📋 Deploying rules to production..."
-            firebase deploy --only firestore:rules --debug
+            echo "📄 Rules file content preview:"
+            head -n 5 firestore.rules
+            echo "🚀 Starting Firebase rules deployment with enhanced debugging..."
+            firebase deploy --only firestore:rules --debug --force
             if [ $? -eq 0 ]; then
               echo "✅ Rules deployed to production successfully"
             else
               echo "❌ Failed to deploy rules to production"
+              echo "🔍 Checking Firebase project configuration..."
+              firebase projects:list
+              echo "🔍 Current project settings:"
+              firebase use
               exit 1
             fi
           else
@@ -351,4 +385,32 @@ jobs:
           # Deploy indexes to production
           if [ -f "firestore.indexes.json" ]; then
             echo "📋 Deploying indexes to production..."
-            firebase deploy --only fire
+            echo "📄 Indexes file content preview:"
+            head -n 5 firestore.indexes.json
+            echo "🚀 Starting Firebase indexes deployment with enhanced debugging..."
+            firebase deploy --only firestore:indexes --debug --force
+            if [ $? -eq 0 ]; then
+              echo "✅ Indexes deployed to production successfully"
+            else
+              echo "❌ Failed to deploy indexes to production"
+              exit 1
+            fi
+          else
+            echo "⚠️ No indexes file found to deploy"
+          fi
+
+          # Cleanup
+          echo "🧹 Cleaning up temporary files..."
+          rm -f firebase-test-key.json firebase-prod-key.json firestore.rules firestore.indexes.json export-rules.js .firebaserc firebase.json test_auth_check.json prod_auth_check.json
+          echo "✅ Successfully completed Firebase rules and indexes sync"
+
+      - name: Cleanup S3 Artifacts
+        if: always() && github.event.inputs.environment != 'only-sync-rules'
+        run: |
+          if [ -f ".aws-sam/build/packaged.yaml" ]; then
+            S3_URI=$(grep -A 1 "CodeUri:" .aws-sam/build/packaged.yaml | grep "s3://" | tr -d ' ')
+            if [ ! -z "$S3_URI" ]; then
+              echo "🧹 Cleaning up S3 artifact: $S3_URI"
+              aws s3 rm "$S3_URI" || echo "❌ Failed to delete S3 artifact"
+            fi
+          fi
