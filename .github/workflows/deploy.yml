@@ -119,16 +119,31 @@ jobs:
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
 
-          # Create temporary directories
-          mkdir -p temp-test temp-prod
+          # Create .firebaserc file for project aliases
+          cat > .firebaserc << 'EOF'
+          {
+            "projects": {
+              "test": "${{ env.FIREBASE_PROJECT_ID_TEST }}",
+              "prod": "${{ env.FIREBASE_PROJECT_ID_PROD }}"
+            }
+          }
+          EOF
+
+          # Create basic firebase.json configuration
+          cat > firebase.json << 'EOF'
+          {
+            "firestore": {
+              "rules": "firestore.rules",
+              "indexes": "firestore.indexes.json"
+            }
+          }
+          EOF
 
           # Export indexes from test project
-          cd temp-test
-          export GOOGLE_APPLICATION_CREDENTIALS=../firebase-test-key.json
-          firebase use ${{ env.FIREBASE_PROJECT_ID_TEST }}
-          firebase firestore:indexes > ../firestore.indexes.json
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
+          firebase use test
+          firebase firestore:indexes > firestore.indexes.json
           echo "Exported indexes from test project"
-          cd ..
 
           # Export rules from test project using Firebase Admin SDK
           cat > export-rules.js << 'EOF'
@@ -147,7 +162,6 @@ jobs:
               const rulesets = await securityRules.listRulesetMetadata();
               
               if (rulesets.length > 0) {
-                // Get the most recent ruleset
                 const latestRuleset = rulesets[0];
                 const ruleset = await securityRules.getRuleset(latestRuleset.name);
                 
@@ -158,7 +172,6 @@ jobs:
                     console.log('Successfully exported rules from test project');
                   } else {
                     console.log('No rules content found in test project');
-                    // Create a basic rules file as fallback
                     fs.writeFileSync('firestore.rules', `rules_version = '2';
           service cloud.firestore {
             match /databases/{database}/documents {
@@ -171,10 +184,17 @@ jobs:
                 }
               } else {
                 console.log('No rulesets found in test project');
+                fs.writeFileSync('firestore.rules', `rules_version = '2';
+          service cloud.firestore {
+            match /databases/{database}/documents {
+              match /{document=**} {
+                allow read, write: if false;
+              }
+            }
+          }`);
               }
             } catch (error) {
               console.error('Error exporting rules:', error);
-              // Create a basic rules file as fallback
               fs.writeFileSync('firestore.rules', `rules_version = '2';
           service cloud.firestore {
             match /databases/{database}/documents {
@@ -192,36 +212,24 @@ jobs:
           export FIREBASE_PROJECT_ID_TEST='${{ env.FIREBASE_PROJECT_ID_TEST }}'
           node export-rules.js
 
-          # Deploy to production project
-          cd temp-prod
-          export GOOGLE_APPLICATION_CREDENTIALS=../firebase-prod-key.json
-          firebase use ${{ env.FIREBASE_PROJECT_ID_PROD }}
-
-          # Create firebase.json for production deployment
-          cat > firebase.json << 'EOF'
-          {
-            "firestore": {
-              "rules": "../firestore.rules",
-              "indexes": "../firestore.indexes.json"
-            }
-          }
-          EOF
+          # Switch to production project and deploy
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
+          firebase use prod
 
           # Deploy rules to production
-          if [ -f "../firestore.rules" ]; then
+          if [ -f "firestore.rules" ]; then
             firebase deploy --only firestore:rules
             echo "Deployed rules to production project"
           fi
 
           # Deploy indexes to production
-          if [ -f "../firestore.indexes.json" ]; then
+          if [ -f "firestore.indexes.json" ]; then
             firebase deploy --only firestore:indexes
             echo "Deployed indexes to production project"
           fi
 
           # Cleanup
-          cd ..
-          rm -rf temp-test temp-prod firebase-test-key.json firebase-prod-key.json firestore.rules firestore.indexes.json export-rules.js
+          rm firebase-test-key.json firebase-prod-key.json firestore.rules firestore.indexes.json export-rules.js .firebaserc firebase.json
           echo "Successfully synced Firebase rules and indexes from test to prod"
 
       - name: Cleanup S3 Artifacts
