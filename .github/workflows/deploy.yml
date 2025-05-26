@@ -250,7 +250,7 @@ jobs:
             exit 1
           fi
 
-          # Export rules using Firebase Admin SDK with FIXED logic
+          # Export rules using Firebase Admin SDK with CORRECTED logic
           echo "📋 Exporting rules from test project using Admin SDK..."
           cat > export-rules.js << 'EOF'
           const admin = require('firebase-admin');
@@ -276,7 +276,6 @@ jobs:
               console.log('🔍 Attempting to list all rulesets...');
               const rulesetsResponse = await securityRules.listRulesetMetadata();
               console.log('📊 Raw rulesets response type:', typeof rulesetsResponse);
-              console.log('📊 Raw rulesets response:', JSON.stringify(rulesetsResponse, null, 2));
           
               // FIXED: Access the rulesets array from the response object
               const rulesets = rulesetsResponse.rulesets || rulesetsResponse;
@@ -289,12 +288,15 @@ jobs:
           
                 const ruleset = await securityRules.getRuleset(latestRuleset.name);
                 console.log('📋 Retrieved ruleset has source:', !!ruleset.source);
+                console.log('📋 Source type:', typeof ruleset.source);
+                console.log('📋 Source is array:', Array.isArray(ruleset.source));
           
-                if (ruleset.source && ruleset.source.files) {
-                  console.log(`📁 Found ${ruleset.source.files.length} files in ruleset`);
-                  console.log('📁 Files in ruleset:', ruleset.source.files.map(f => f.name));
+                // CORRECTED: ruleset.source is directly the array of files
+                if (ruleset.source && Array.isArray(ruleset.source)) {
+                  console.log(`📁 Found ${ruleset.source.length} files in ruleset`);
+                  console.log('📁 Files in ruleset:', ruleset.source.map(f => f.name));
           
-                  const rulesFile = ruleset.source.files.find(file => file.name === 'firestore.rules');
+                  const rulesFile = ruleset.source.find(file => file.name === 'firestore.rules');
                   if (rulesFile && rulesFile.content) {
                     fs.writeFileSync('firestore.rules', rulesFile.content);
                     console.log('✅ Successfully exported rules from test project');
@@ -309,9 +311,9 @@ jobs:
                     throw new Error('No rules content in file');
                   }
                 } else {
-                  console.log('⚠️ No source files found in ruleset');
-                  console.log('📋 Ruleset source:', ruleset.source);
-                  throw new Error('No source files in ruleset');
+                  console.log('⚠️ Source is not an array');
+                  console.log('📋 Ruleset source structure:', ruleset.source);
+                  throw new Error('Unexpected source structure');
                 }
               } else {
                 console.log('⚠️ No rulesets found or rulesets is not an array');
