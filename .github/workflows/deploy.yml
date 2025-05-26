@@ -1,0 +1,163 @@
+name: Deploy Lambda Stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        type: choice
+        options:
+          - test
+          - prod
+          - both
+
+env:
+  DEPLOYMENT_BUCKET: kitree-backend
+  FIREBASE_PROJECT_ID_TEST: kitree-test
+  FIREBASE_PROJECT_ID_PROD: mirai-1111
+  FIREBASE_TEST_DIR: firebase-test
+  FIREBASE_PROD_DIR: firebase-prod
+  LAMBDA_RESOURCE_NAME: JavaFunction
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v3
+
+      - name: Checkout secrets repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.repository_owner }}/kitree-secrets
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          path: secrets
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Copy secret files
+        run: |
+          mkdir -p src/main/resources
+          cp secrets/kitree-lambda/secrets.json src/main/resources/
+          cp secrets/kitree-lambda/serviceAccountKey.json src/main/resources/
+          cp secrets/kitree-lambda/serviceAccountKeyTest.json src/main/resources/
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install Firebase CLI
+        run: |
+          npm install -g firebase-tools
+
+      - name: Setup Firebase Test Environment
+        if: ${{ github.event.inputs.environment == 'test' || github.event.inputs.environment == 'both' }}
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
+          cd ${{ env.FIREBASE_TEST_DIR }}
+          firebase use ${{ env.FIREBASE_PROJECT_ID_TEST }}
+          firebase init firestore --non-interactive
+          cd ..
+
+      - name: Setup Firebase Prod Environment
+        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
+          cd ${{ env.FIREBASE_PROD_DIR }}
+          firebase use ${{ env.FIREBASE_PROJECT_ID_PROD }}
+          firebase init firestore --non-interactive
+          cd ..
+
+      - name: Build and Test
+        run: |
+          chmod +x ./gradlew
+          ./gradlew clean build test
+
+      - name: Install AWS SAM CLI
+        run: |
+          pip install aws-sam-cli
+
+      - name: Deploy Test Environment
+        if: ${{ github.event.inputs.environment == 'test' || github.event.inputs.environment == 'both' }}
+        run: |
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
+          sam build
+          sam package \
+            --template-file .aws-sam/build/template.yaml \
+            --output-template-file .aws-sam/build/packaged.yaml \
+            --s3-bucket ${{ env.DEPLOYMENT_BUCKET }}
+          
+          sam deploy \
+            --template-file .aws-sam/build/packaged.yaml \
+            --stack-name java-lambda-test \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+            Environment=test \
+            FirebaseProject=${{ env.FIREBASE_PROJECT_ID_TEST }} \
+            --no-fail-on-empty-changeset
+
+      - name: Deploy Production Environment
+        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
+        run: |
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
+          sam build
+          sam package \
+            --template-file .aws-sam/build/template.yaml \
+            --output-template-file .aws-sam/build/packaged.yaml \
+            --s3-bucket ${{ env.DEPLOYMENT_BUCKET }}
+          
+          sam deploy \
+            --template-file .aws-sam/build/packaged.yaml \
+            --stack-name java-lambda-prod \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+            Environment=prod \
+            FirebaseProject=${{ env.FIREBASE_PROJECT_ID_PROD }} \
+            --no-fail-on-empty-changeset
+
+      - name: Sync Firebase Rules and Indexes
+        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
+        run: |
+          # Export from test
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
+          cd ${{ env.FIREBASE_TEST_DIR }}
+          firebase use ${{ env.FIREBASE_PROJECT_ID_TEST }}
+          firebase firestore:rules:get > firestore.rules
+          firebase firestore:indexes:get > firestore.indexes.json
+          cd ..
+
+          # Deploy to prod
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
+          cd ${{ env.FIREBASE_PROD_DIR }}
+          firebase use ${{ env.FIREBASE_PROJECT_ID_PROD }}
+          cp ../${{ env.FIREBASE_TEST_DIR }}/firestore.rules .
+          cp ../${{ env.FIREBASE_TEST_DIR }}/firestore.indexes.json .
+          firebase deploy --only firestore:rules,firestore:indexes --non-interactive
+          cd ..
+
+      - name: Cleanup S3 Artifacts
+        if: always()
+        run: |
+          # Get the S3 URI from the packaged template
+          if [ -f ".aws-sam/build/packaged.yaml" ]; then
+            S3_URI=$(grep -A 1 "CodeUri:" .aws-sam/build/packaged.yaml | grep "s3://" | tr -d ' ')
+            if [ ! -z "$S3_URI" ]; then
+              echo "Cleaning up S3 artifact: $S3_URI"
+              aws s3 rm "$S3_URI" || echo "Failed to delete S3 artifact"
+            fi
+          fi 
