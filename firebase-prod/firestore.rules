@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+  
+    match /categories/{document=**} {
+      allow read: if true;
+      allow write: if false;
+  	}
+    
+    match /remedies/{document=**} {
+      allow read: if true; // TODO: Allow all remedies not to be read by user.
+      allow write: if false;
+  	}
+    
+    match /content/{document=**} {
+    	allow read: if true;
+      allow write: if false;
+    }
+    
+    match /tools/tarotdecks/{document=**} {
+    	allow read: if true;
+      allow write: if false;
+    }
+    
+    match /tools/mokshapat/cells/{document=**} {
+    	allow read: if true;
+      allow write: if false;
+    }
+    
+    match /faqs/{document=**} {
+      allow read: if true;
+      allow write: if false;
+  	}
+    
+    match /{path=**}/orders/{orderId} {
+    	allow read: if request.auth != null && (request.auth.token.admin == true || (request.auth.uid == resource.data.expertId));
+      allow update: if request.auth != null && request.auth.uid == resource.data.expertId && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'statusUpdateTime', 'profileId', 'sessionStartedAt', 'moves', 'sessionCompletedAt', 'cardsDrawn', 'remedies']));
+      allow delete: if false;
+    }
+    
+    match /users/{userId} {
+      allow read, update: if (request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true));
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false;
+      
+      match /coupons/{couponId} {
+      	allow read: if request.auth != null && (request.auth.uid == userId || request.auth.uid in resource.data.userIdsAllowed);
+        allow create: if false;
+        allow update: if (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isScratched']));
+        allow delete: if false;
+      }
+      
+      match /orders/{orderId} {
+      	allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true || request.auth.uid == resource.data.expertId) && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['profileId']));
+         allow delete: if false;
+      }
+      
+      match /addresses/{addressId} {
+      	allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null && request.auth.uid == userId;
+        allow delete: if false;
+      }
+      
+      match /profiles/{profileId} {
+        allow read: if request.auth != null && request.auth.uid == userId || request.auth.token.admin == true;
+        allow create: if request.auth != null && request.auth.uid == userId || request.auth.token.admin == true;
+        allow update: if request.auth != null && request.auth.uid == userId || request.auth.token.admin == true;
+        allow delete: if false;
+      }
+      
+      match /public/{document=**} {
+      // Remove coupons from public?
+        allow read: if true;
+        allow write: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+      }
+      
+      match /private {
+      	allow read: if false;
+        allow write: if false;
+      }
+      
+      match /plans/{document=**} {
+      	allow read: if true;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+  }
+}

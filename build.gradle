@@ -1,0 +1,35 @@
+plugins {
+    id 'com.github.johnrengelman.shadow' version '7.1.1'
+    id 'java'
+}
+
+group 'in.co.kitree'
+version '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.amazonaws:aws-lambda-java-core:1.2.3'
+    implementation 'com.google.firebase:firebase-admin:9.4.1'
+    implementation 'com.google.cloud:google-cloud-firestore:3.27.3'
+    implementation 'com.razorpay:razorpay-java:1.4.8'
+    implementation 'com.amazonaws:aws-java-sdk-lambda:1.12.777'
+    implementation 'com.cloudinary:cloudinary-http44:1.39.0'
+    implementation 'com.stripe:stripe-java:27.1.1'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.9.2'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.9.2'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+jar {
+    manifest {
+        attributes 'Main-Class': 'in.co.kitree.Handler'
+    }
+}

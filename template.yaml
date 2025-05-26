@@ -1,0 +1,90 @@
+# kitreelambda/template.yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Java Lambda with Firebase Authentication via API Gateway
+
+Parameters:
+  Environment:
+    Type: String
+    Default: test
+    AllowedValues:
+      - test
+      - prod
+    Description: Deployment environment (test or prod)
+
+  FirebaseProject:
+    Type: String
+    Description: Firebase project ID for authentication
+
+Globals:
+  Function:
+    Timeout: 120
+    MemorySize: 512
+    LoggingConfig:
+      LogFormat: JSON
+      LogGroup:
+        !Sub "/aws/lambda/${AWS::StackName}"
+      ApplicationLogLevel: INFO
+      SystemLogLevel: WARN
+
+Resources:
+  # API Gateway
+  ApiGateway:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Auth:
+        Authorizers:
+          FirebaseAuth:
+            JwtConfiguration:
+              Issuer: !Sub "https://securetoken.google.com/${FirebaseProject}"
+              Audience:
+                - !Ref FirebaseProject
+            IdentitySource: "$request.header.Authorization"
+        DefaultAuthorizer: FirebaseAuth
+
+  # Lambda Function
+  JavaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: in.co.kitree.Handler::handleRequest
+      Runtime: java21
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource:
+                - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:certgen"
+      AutoPublishAlias: !Ref Environment
+      DeploymentPreference:
+        Type: !If [ IsProd, AllAtOnce, Canary10Percent5Minutes ]
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /api
+            Method: ANY
+            ApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: FirebaseAuth
+
+  # CloudWatch LogGroup for retention policy
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${JavaFunction}"
+      RetentionInDays: !If [ IsProd, 30, 1 ]
+
+Conditions:
+  IsProd: !Equals [ !Ref Environment, "prod" ]
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
