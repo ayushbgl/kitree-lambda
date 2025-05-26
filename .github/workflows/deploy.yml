@@ -59,30 +59,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Install Firebase CLI
-        run: |
-          npm install -g firebase-tools
-
-      - name: Setup Firebase Test Environment
-        if: ${{ github.event.inputs.environment == 'test' || github.event.inputs.environment == 'both' }}
-        run: |
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
-          export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
-          cd ${{ env.FIREBASE_TEST_DIR }}
-          firebase use ${{ env.FIREBASE_PROJECT_ID_TEST }}
-          firebase init firestore --non-interactive
-          cd ..
-
-      - name: Setup Firebase Prod Environment
-        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
-        run: |
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
-          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
-          cd ${{ env.FIREBASE_PROD_DIR }}
-          firebase use ${{ env.FIREBASE_PROJECT_ID_PROD }}
-          firebase init firestore --non-interactive
-          cd ..
-
       - name: Build and Test
         run: |
           chmod +x ./gradlew
@@ -95,6 +71,8 @@ jobs:
       - name: Deploy Test Environment
         if: ${{ github.event.inputs.environment == 'test' || github.event.inputs.environment == 'both' }}
         run: |
+          # Use test service account for test environment
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
           sam build
           sam package \
@@ -114,6 +92,8 @@ jobs:
       - name: Deploy Production Environment
         if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
         run: |
+          # Use prod service account for prod environment
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
           sam build
           sam package \
@@ -133,22 +113,59 @@ jobs:
       - name: Sync Firebase Rules and Indexes
         if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
         run: |
-          # Export from test
-          export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
-          cd ${{ env.FIREBASE_TEST_DIR }}
-          firebase use ${{ env.FIREBASE_PROJECT_ID_TEST }}
-          firebase firestore:rules:get > firestore.rules
-          firebase firestore:indexes:get > firestore.indexes.json
-          cd ..
+          # Create a temporary Node.js script to handle Firebase operations
+          cat > sync-firebase.js << 'EOF'
+          const admin = require('firebase-admin');
+          const fs = require('fs');
 
-          # Deploy to prod
-          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
-          cd ${{ env.FIREBASE_PROD_DIR }}
-          firebase use ${{ env.FIREBASE_PROJECT_ID_PROD }}
-          cp ../${{ env.FIREBASE_TEST_DIR }}/firestore.rules .
-          cp ../${{ env.FIREBASE_TEST_DIR }}/firestore.indexes.json .
-          firebase deploy --only firestore:rules,firestore:indexes --non-interactive
-          cd ..
+          async function syncFirebaseRules() {
+            try {
+              // Initialize test project with test service account
+              const testApp = admin.initializeApp({
+                credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_TEST_KEY)),
+                projectId: process.env.FIREBASE_PROJECT_ID_TEST
+              }, 'test');
+
+              // Get rules and indexes from test project
+              const testRules = await testApp.firestore().getRules();
+              const testIndexes = await testApp.firestore().getIndexes();
+
+              // Initialize prod project with prod service account
+              const prodApp = admin.initializeApp({
+                credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_PROD_KEY)),
+                projectId: process.env.FIREBASE_PROJECT_ID_PROD
+              }, 'prod');
+
+              // Deploy rules and indexes to prod project
+              await prodApp.firestore().setRules(testRules);
+              await prodApp.firestore().setIndexes(testIndexes);
+
+              console.log('Successfully synced Firebase rules and indexes from test to prod');
+            } catch (error) {
+              console.error('Error syncing Firebase rules and indexes:', error);
+              process.exit(1);
+            } finally {
+              // Cleanup Firebase apps
+              try {
+                await admin.app('test').delete();
+                await admin.app('prod').delete();
+              } catch (error) {
+                console.error('Error cleaning up Firebase apps:', error);
+              }
+            }
+          }
+
+          syncFirebaseRules();
+          EOF
+
+          # Run the sync script with both service account keys
+          export FIREBASE_TEST_KEY='${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}'
+          export FIREBASE_PROD_KEY='${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}'
+          export FIREBASE_PROJECT_ID_TEST='${{ env.FIREBASE_PROJECT_ID_TEST }}'
+          export FIREBASE_PROJECT_ID_PROD='${{ env.FIREBASE_PROJECT_ID_PROD }}'
+          
+          npm install firebase-admin
+          node sync-firebase.js
 
       - name: Cleanup S3 Artifacts
         if: always()
