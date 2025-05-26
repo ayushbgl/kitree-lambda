@@ -1,425 +1,241 @@
-name: Deploy Lambda Stack
+#!/bin/bash
 
-on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment Environment'
-        required: true
-        type: choice
-        options:
-          - test
-          - prod
-          - both
-          - only-sync-rules
+# Configuration variables
+DEPLOYMENT_BUCKET="kitree-backend"
+FIREBASE_PROJECT_ID_TEST="kitree-test"
+FIREBASE_PROJECT_ID_PROD="mirai-1111"
+FIREBASE_TEST_DIR="firebase-test"
+FIREBASE_PROD_DIR="firebase-prod"
+# Define the logical resource ID of your Lambda function in template.yaml
+LAMBDA_RESOURCE_NAME="JavaFunction" # <-- Make sure this matches your template.yaml
+PACKAGED_TEMPLATE_FILE=".aws-sam/build/packaged.yaml" # <-- Output of 'sam package' in this script
 
-env:
-  DEPLOYMENT_BUCKET: kitree-backend
-  FIREBASE_PROJECT_ID_TEST: kitree-test
-  FIREBASE_PROJECT_ID_PROD: mirai-1111
-  FIREBASE_TEST_DIR: firebase-test
-  FIREBASE_PROD_DIR: firebase-prod
-  LAMBDA_RESOURCE_NAME: JavaFunction
+# Color definitions
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout main repository
-        uses: actions/checkout@v3
+# Error handling
+# set -e # Disable immediate exit on error to allow cleanup
+trap 'error_handler $? $LINENO "$BASH_COMMAND"' ERR # Keep trap for detailed error logging
 
-      - name: Checkout secrets repository
-        uses: actions/checkout@v3
-        with:
-          repository: ${{ github.repository_owner }}/kitree-secrets
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          path: secrets
+error_handler() {
+    local exit_code=$1
+    local line_no=$2
+    local command=$3
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+    echo -e "${RED}--------------------- ERROR ---------------------${NC}" >&2
+    echo -e "${RED}Error on line $line_no: Command exited with status $exit_code${NC}" >&2
+    echo -e "${RED}Command: $command${NC}" >&2
+    echo -e "${RED}-----------------------------------------------${NC}" >&2
 
-      - name: Setup Java
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
+    # Continue script execution for cleanup
+    # Note: The exit code is captured later after cleanup
+}
 
-      - name: Install Google Cloud SDK
-        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' || github.event.inputs.environment == 'only-sync-rules' }}
-        run: |
-          echo "📦 Installing Google Cloud SDK for debugging..."
-          curl https://sdk.cloud.google.com | bash
-          source ~/google-cloud-sdk/path.bash.inc
-          echo "✅ Google Cloud SDK installed"
 
-      - name: Copy secret files
-        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
-        run: |
-          mkdir -p src/main/resources
-          cp secrets/kitree-lambda/secrets.json src/main/resources/
-          cp secrets/kitree-lambda/serviceAccountKey.json src/main/resources/
-          cp secrets/kitree-lambda/serviceAccountKeyTest.json src/main/resources/
+# --- Helper Functions (print_status, check_prerequisites, verify_project_structure, Firebase funcs, select_environment) ---
+# (Keep these functions as they were in the previous version,
+#  ensure check_prerequisites still checks for aws, sam, firebase, and warns about yq)
+print_status() {
+    echo -e "${BLUE}--- $1 ---${NC}"
+}
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+print_warning() {
+    echo -e "${YELLOW}! $1${NC}"
+}
+check_prerequisites() {
+    print_status "Checking prerequisites"
+    local error_found=0
+    if ! command -v sam &> /dev/null; then print_error "AWS SAM CLI is not installed."; error_found=1; fi
+    if ! command -v firebase &> /dev/null; then print_error "Firebase CLI is not installed."; error_found=1; fi
+    if [ ! -f "./gradlew" ]; then print_error "Gradle wrapper not found."; error_found=1; fi
+    if ! command -v aws &> /dev/null; then print_error "AWS CLI is not installed."; error_found=1; fi
+    if ! command -v yq &> /dev/null; then print_warning "'yq' command not found. Automatic S3 artifact cleanup will be skipped."; fi # Just warn
+    if [ $error_found -ne 0 ]; then exit 1; fi
+    print_success "Prerequisites checked."
+}
+verify_project_structure() {
+    print_status "Verifying project structure"
+    PROJECT_ROOT=$(pwd); TEMPLATE_FILE="$PROJECT_ROOT/template.yaml"; BUILD_GRADLE="$PROJECT_ROOT/build.gradle"
+    if [ ! -f "$TEMPLATE_FILE" ]; then print_error "Template file not found at: $TEMPLATE_FILE"; exit 1; fi
+    if [ ! -f "$BUILD_GRADLE" ]; then print_error "build.gradle not found at: $BUILD_GRADLE"; exit 1; fi
+    if [ ! -d "$FIREBASE_TEST_DIR" ] || [ ! -d "$FIREBASE_PROD_DIR" ]; then print_error "Firebase directories not found ($FIREBASE_TEST_DIR, $FIREBASE_PROD_DIR)."; exit 1; fi
+    mkdir -p .aws-sam/build
+    print_success "Project structure verified."
+}
+init_firebase_test() {
+    print_status "Initializing Firebase in test environment"
+    cd "$FIREBASE_TEST_DIR"
+    print_status "> Running Firebase use $FIREBASE_PROJECT_ID_TEST"
+    firebase use "$FIREBASE_PROJECT_ID_TEST"
+    print_status "> Running Firebase init firestore (may prompt for overwrite)"
+    firebase init firestore || { print_error "Firebase init failed in $FIREBASE_TEST_DIR"; cd ..; exit 1; }
+    cd ..
+    print_success "Firebase test environment initialized."
+}
+init_firebase_prod() {
+    print_status "Initializing Firebase in production environment"
+    cd "$FIREBASE_PROD_DIR"
+    print_status "> Running Firebase use $FIREBASE_PROJECT_ID_PROD"
+    firebase use "$FIREBASE_PROJECT_ID_PROD"
+    print_status "> Running Firebase init firestore (may prompt for overwrite)"
+    firebase init firestore || { print_error "Firebase init failed in $FIREBASE_PROD_DIR"; cd ..; exit 1; }
+    cd ..
+    print_success "Firebase production environment initialized."
+}
+sync_firebase_rules() {
+    print_status "Syncing Firebase rules & indexes (Test -> Prod)"
+    init_firebase_test # Fetch latest from test
+    init_firebase_prod # Ensure prod dir is ready
+    print_status "> Copying rules & indexes to $FIREBASE_PROD_DIR"
+    cp "$FIREBASE_TEST_DIR/firestore.rules" "$FIREBASE_PROD_DIR/firestore.rules"
+    cp "$FIREBASE_TEST_DIR/firestore.indexes.json" "$FIREBASE_PROD_DIR/firestore.indexes.json"
+    print_status "> Deploying rules & indexes to production ($FIREBASE_PROJECT_ID_PROD)"
+    cd "$FIREBASE_PROD_DIR"
+    firebase use "$FIREBASE_PROJECT_ID_PROD" # Ensure correct project
+    firebase deploy --only firestore:rules,firestore:indexes || { print_error "Firebase deploy failed in $FIREBASE_PROD_DIR"; cd ..; exit 1; }
+    cd ..
+    print_success "Firebase rules & indexes synced successfully!"
+}
+select_environment() {
+    print_status "Select deployment environment"
+    select env in "test" "prod"; do
+        case $env in
+            test | prod)
+                ENVIRONMENT=$env
+                FIREBASE_PROJECT_ID=$([ "$env" = "test" ] && echo "$FIREBASE_PROJECT_ID_TEST" || echo "$FIREBASE_PROJECT_ID_PROD")
+                print_success "Environment set to: $ENVIRONMENT (Firebase: $FIREBASE_PROJECT_ID)"
+                break
+                ;;
+            *)
+                print_error "Invalid selection. Please enter 1 or 2."
+                ;;
+        esac
+    done
+}
+# --- End Helper Functions ---
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+# Build function
+build() {
+    print_status "Building project"
+    print_status "> Running ./gradlew clean build..."
+    chmod +x ./gradlew
+    ./gradlew clean build || { print_error "Gradle build failed."; exit 1; }
 
-      - name: Build and Test
-        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
-        run: |
-          chmod +x ./gradlew
-          ./gradlew clean build test
+    print_status "> Running sam build..."
+    sam build --template "$TEMPLATE_FILE" --build-dir .aws-sam/build || { print_error "SAM build failed."; exit 1; }
+    print_success "Build completed."
+}
 
-      - name: Install AWS SAM CLI
-        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
-        run: |
-          pip install aws-sam-cli
 
-      - name: Deploy Test Environment
-        if: ${{ github.event.inputs.environment == 'test' || github.event.inputs.environment == 'both' }}
-        run: |
-          echo "🚀 Deploying to TEST environment..."
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
-          export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
-          
-          echo "✅ Verifying TEST credentials..."
-          if [ -f "firebase-test-key.json" ]; then
-            echo "✅ Test service account file created successfully"
-            echo "📧 Test service account email: $(cat firebase-test-key.json | jq -r '.client_email')"
-            echo "📋 Test project ID: $(cat firebase-test-key.json | jq -r '.project_id')"
-          else
-            echo "❌ Failed to create test service account file"
-            exit 1
-          fi
-          
-          sam build
-          sam package \
-            --template-file .aws-sam/build/template.yaml \
-            --output-template-file .aws-sam/build/packaged.yaml \
-            --s3-bucket ${{ env.DEPLOYMENT_BUCKET }}
-          
-          sam deploy \
-            --template-file .aws-sam/build/packaged.yaml \
-            --stack-name java-lambda-test \
-            --capabilities CAPABILITY_IAM \
-            --parameter-overrides \
-            Environment=test \
-            FirebaseProject=${{ env.FIREBASE_PROJECT_ID_TEST }} \
-            --no-fail-on-empty-changeset
+# Main deployment function
+deploy() {
+    local stack_name="java-lambda-${ENVIRONMENT}"
+    STACK_NAME=$stack_name
+    local s3_uri_to_delete="" # Initialize variable to store S3 URI
 
-      - name: Deploy Production Environment
-        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
-        run: |
-          echo "🚀 Deploying to PRODUCTION environment..."
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
-          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
-          
-          echo "✅ Verifying PRODUCTION credentials..."
-          if [ -f "firebase-prod-key.json" ]; then
-            echo "✅ Production service account file created successfully"
-            echo "📧 Production service account email: $(cat firebase-prod-key.json | jq -r '.client_email')"
-            echo "📋 Production project ID: $(cat firebase-prod-key.json | jq -r '.project_id')"
-          else
-            echo "❌ Failed to create production service account file"
-            exit 1
-          fi
-          
-          sam build
-          sam package \
-            --template-file .aws-sam/build/template.yaml \
-            --output-template-file .aws-sam/build/packaged.yaml \
-            --s3-bucket ${{ env.DEPLOYMENT_BUCKET }}
-          
-          sam deploy \
-            --template-file .aws-sam/build/packaged.yaml \
-            --stack-name java-lambda-prod \
-            --capabilities CAPABILITY_IAM \
-            --parameter-overrides \
-            Environment=prod \
-            FirebaseProject=${{ env.FIREBASE_PROJECT_ID_PROD }} \
-            --no-fail-on-empty-changeset
+    print_status "Starting deployment process for '$ENVIRONMENT'"
 
-      - name: Sync Firebase Rules and Indexes
-        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' || github.event.inputs.environment == 'only-sync-rules' }}
-        run: |
-          echo "🔄 Starting Firebase Rules and Indexes sync..."
-          echo "📋 Selected environment: ${{ github.event.inputs.environment }}"
-          
-          # Install Firebase CLI and Admin SDK
-          echo "📦 Installing Firebase CLI and Admin SDK..."
-          npm install -g firebase-tools
-          npm install firebase-admin
-          echo "✅ Packages installed successfully"
+    build # Call build function
 
-          # Create service account files
-          echo "🔑 Creating service account files..."
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
-          
-          # Verify both credential files
-          echo "🔍 Verifying credential files..."
-          if [ -f "firebase-test-key.json" ]; then
-            echo "✅ Test service account file created"
-            echo "📧 Test service account email: $(cat firebase-test-key.json | jq -r '.client_email')"
-            echo "📋 Test project ID from key: $(cat firebase-test-key.json | jq -r '.project_id')"
-            echo "📋 Expected test project ID: ${{ env.FIREBASE_PROJECT_ID_TEST }}"
-            
-            if jq empty firebase-test-key.json 2>/dev/null; then
-              echo "✅ Test service account JSON is valid"
+    print_status "Packaging application to s3://${DEPLOYMENT_BUCKET}"
+    sam package \
+        --template-file .aws-sam/build/template.yaml \
+        --output-template-file $PACKAGED_TEMPLATE_FILE \
+        --s3-bucket "$DEPLOYMENT_BUCKET" || { print_error "SAM package failed."; exit 1; }
+    print_success "Packaging complete."
+
+    # --- Extract S3 URI BEFORE deployment ---
+    if command -v yq &> /dev/null; then
+        if [ -f "$PACKAGED_TEMPLATE_FILE" ]; then
+            s3_uri_to_delete=$(yq e ".Resources.${LAMBDA_RESOURCE_NAME}.Properties.CodeUri" "$PACKAGED_TEMPLATE_FILE" 2>/dev/null)
+            if [[ "$s3_uri_to_delete" != s3://* ]]; then
+                print_warning "Extracted CodeUri ('$s3_uri_to_delete') is not a valid S3 URI. Cleanup may fail."
+                s3_uri_to_delete="" # Reset if invalid
             else
-              echo "❌ Test service account JSON is invalid"
-              exit 1
+                print_status "Identified artifact for cleanup: $s3_uri_to_delete"
             fi
-          else
-            echo "❌ Failed to create test service account file"
-            exit 1
-          fi
-          
-          if [ -f "firebase-prod-key.json" ]; then
-            echo "✅ Production service account file created"
-            echo "📧 Production service account email: $(cat firebase-prod-key.json | jq -r '.client_email')"
-            echo "📋 Production project ID from key: $(cat firebase-prod-key.json | jq -r '.project_id')"
-            echo "📋 Expected production project ID: ${{ env.FIREBASE_PROJECT_ID_PROD }}"
-            
-            if jq empty firebase-prod-key.json 2>/dev/null; then
-              echo "✅ Production service account JSON is valid"
-            else
-              echo "❌ Production service account JSON is invalid"
-              exit 1
-            fi
-          else
-            echo "❌ Failed to create production service account file"
-            exit 1
-          fi
+        else
+            print_warning "$PACKAGED_TEMPLATE_FILE not found before deployment. Cannot determine S3 artifact URI."
+        fi
+    fi
+    # --- End Extraction ---
 
-          # Create .firebaserc file for project aliases
-          echo "⚙️ Creating Firebase configuration..."
-          cat > .firebaserc << 'EOF'
-          {
-            "projects": {
-              "test": "${{ env.FIREBASE_PROJECT_ID_TEST }}",
-              "prod": "${{ env.FIREBASE_PROJECT_ID_PROD }}"
-            }
-          }
-          EOF
+    print_status "Deploying stack: $STACK_NAME"
+    # Run sam deploy and capture exit code
+    sam deploy \
+        --template-file $PACKAGED_TEMPLATE_FILE \
+        --stack-name "$STACK_NAME" \
+        --capabilities CAPABILITY_IAM \
+        --parameter-overrides \
+        Environment="$ENVIRONMENT" \
+        FirebaseProject="$FIREBASE_PROJECT_ID" \
+        --no-fail-on-empty-changeset
+    local deploy_exit_code=$? # Capture exit code immediately
 
-          # Create basic firebase.json configuration
-          cat > firebase.json << 'EOF'
-          {
-            "firestore": {
-              "rules": "firestore.rules",
-              "indexes": "firestore.indexes.json"
-            }
-          }
-          EOF
-          echo "✅ Firebase configuration files created"
+    # --- Always attempt Cleanup AFTER deployment attempt ---
+    print_status "Attempting S3 artifact cleanup (regardless of deployment outcome)"
+    if [[ -n "$s3_uri_to_delete" ]]; then # Check if we have a valid-looking URI
+         print_status "> Deleting artifact: $s3_uri_to_delete"
+         if aws s3 rm "$s3_uri_to_delete"; then
+             print_success "Successfully deleted deployment artifact from S3."
+         else
+             # This is just a warning, script continues
+             print_warning "Failed to delete deployment artifact: $s3_uri_to_delete. Manual cleanup might be required."
+         fi
+    elif command -v yq &> /dev/null; then
+         # Only warn if yq exists but we couldn't find the URI earlier
+         print_warning "Skipping S3 artifact cleanup as URI could not be determined."
+    else
+         # Message if yq wasn't found initially
+         # Warning already printed by check_prerequisites
+         :
+    fi
+    # --- End Cleanup ---
 
-          # Export from test project
-          echo "📤 Exporting from TEST project (${{ env.FIREBASE_PROJECT_ID_TEST }})..."
-          export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
-          
-          # Test Firebase CLI authentication
-          echo "🔐 Testing Firebase CLI authentication with test project..."
-          firebase projects:list --json > test_auth_check.json || {
-            echo "❌ Failed to authenticate with Firebase CLI using test credentials"
-            cat test_auth_check.json 2>/dev/null || echo "No output from Firebase CLI"
-            exit 1
-          }
-          echo "✅ Firebase CLI authentication successful for test project"
-          
-          firebase use test
-          echo "✅ Switched to test project"
-          
-          # Export indexes
-          echo "📋 Exporting indexes from test project..."
-          firebase firestore:indexes > firestore.indexes.json
-          if [ -f "firestore.indexes.json" ]; then
-            echo "✅ Indexes exported successfully"
-            echo "📄 Indexes file size: $(wc -l < firestore.indexes.json) lines"
-            echo "📄 Indexes content preview:"
-            head -n 10 firestore.indexes.json
-          else
-            echo "❌ Failed to export indexes"
-            exit 1
-          fi
+    # --- Handle Deployment Outcome ---
+    if [ $deploy_exit_code -ne 0 ]; then
+        # Error already printed by the trap
+        exit $deploy_exit_code # Exit with the original error code from sam deploy
+    fi
 
-          # Export rules using Firebase Admin SDK with FIXED logic
-          echo "📋 Exporting rules from test project using Admin SDK..."
-          cat > export-rules.js << 'EOF'
-          const admin = require('firebase-admin');
-          const fs = require('fs');
+    # --- Post-Success Actions ---
+    print_success "Deployment command completed successfully"
 
-          async function exportRules() {
-            try {
-              console.log('🔐 Initializing Firebase Admin SDK for test project...');
-              const serviceAccount = require('./firebase-test-key.json');
-              console.log('📧 Service account email:', serviceAccount.client_email);
-              console.log('📋 Service account project_id:', serviceAccount.project_id);
-              console.log('📋 Environment FIREBASE_PROJECT_ID_TEST:', process.env.FIREBASE_PROJECT_ID_TEST);
-              
-              admin.initializeApp({
-                credential: admin.credential.cert(serviceAccount),
-                projectId: process.env.FIREBASE_PROJECT_ID_TEST
-              });
-              console.log('✅ Firebase Admin SDK initialized successfully');
+    # Sync Firebase rules ONLY if deploying to prod
+    if [ "$ENVIRONMENT" = "prod" ]; then
+        sync_firebase_rules
+    fi
 
-              console.log('📋 Getting security rules...');
-              const securityRules = admin.securityRules();
-              
-              console.log('🔍 Attempting to list all rulesets...');
-              const rulesetsResponse = await securityRules.listRulesetMetadata();
-              console.log('📊 Raw rulesets response type:', typeof rulesetsResponse);
-              console.log('📊 Raw rulesets response:', JSON.stringify(rulesetsResponse, null, 2));
-              
-              // FIXED: Access the rulesets array from the response object
-              const rulesets = rulesetsResponse.rulesets || rulesetsResponse;
-              console.log(`📊 Found ${rulesets ? rulesets.length : 0} rulesets`);
-              
-              if (rulesets && Array.isArray(rulesets) && rulesets.length > 0) {
-                console.log('📤 Getting latest ruleset...');
-                const latestRuleset = rulesets[0];
-                console.log('📋 Latest ruleset details:', JSON.stringify(latestRuleset, null, 2));
-                
-                const ruleset = await securityRules.getRuleset(latestRuleset.name);
-                console.log('📋 Retrieved ruleset has source:', !!ruleset.source);
-                
-                if (ruleset.source && ruleset.source.files) {
-                  console.log(`📁 Found ${ruleset.source.files.length} files in ruleset`);
-                  console.log('📁 Files in ruleset:', ruleset.source.files.map(f => f.name));
-                  
-                  const rulesFile = ruleset.source.files.find(file => file.name === 'firestore.rules');
-                  if (rulesFile && rulesFile.content) {
-                    fs.writeFileSync('firestore.rules', rulesFile.content);
-                    console.log('✅ Successfully exported rules from test project');
-                    console.log('📄 Rules file size:', rulesFile.content.length, 'characters');
-                    console.log('📄 Rules preview (first 10 lines):');
-                    console.log(rulesFile.content.split('\n').slice(0, 10).join('\n'));
-                    console.log('📄 Rules preview (last 5 lines):');
-                    console.log(rulesFile.content.split('\n').slice(-5).join('\n'));
-                  } else {
-                    console.log('⚠️ No rules content found in ruleset file');
-                    console.log('📋 Rules file details:', rulesFile);
-                    throw new Error('No rules content in file');
-                  }
-                } else {
-                  console.log('⚠️ No source files found in ruleset');
-                  console.log('📋 Ruleset source:', ruleset.source);
-                  throw new Error('No source files in ruleset');
-                }
-              } else {
-                console.log('⚠️ No rulesets found or rulesets is not an array');
-                if (rulesetsResponse) {
-                  console.log('📋 Full response structure:', Object.keys(rulesetsResponse));
-                }
-                throw new Error('No rulesets found');
-              }
-            } catch (error) {
-              console.error('❌ Error in exportRules:', error.message);
-              console.error('📋 Error code:', error.code);
-              console.error('📋 Full error:', error);
-              
-              // Create a basic rules file as fallback
-              console.log('⚠️ Creating fallback rules file due to error');
-              fs.writeFileSync('firestore.rules', `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}`);
-              console.log('📄 Fallback rules created');
-              
-              // Re-throw the error so we know something went wrong
-              throw error;
-            }
-          }
+    # Get deployment outputs
+    print_status "Stack Outputs ($STACK_NAME)"
+    aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs' \
+        --output table
+}
 
-          exportRules().catch(error => {
-            console.error('💥 Final error in exportRules:', error);
-            process.exit(1);
-          });
-          EOF
+main() {
+    clear
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE} AWS Lambda Deployment Script (Java)    ${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    check_prerequisites
+    verify_project_structure
+    select_environment
+    deploy
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}      Deployment Script Finished        ${NC}"
+    echo -e "${GREEN}========================================${NC}"
+}
 
-          export FIREBASE_PROJECT_ID_TEST='${{ env.FIREBASE_PROJECT_ID_TEST }}'
-          node export-rules.js
-
-          # Verify the exported rules
-          if [ -f "firestore.rules" ]; then
-            echo "📄 Final exported rules file content:"
-            cat firestore.rules
-            echo ""
-            echo "📊 Rules file stats:"
-            echo "  - Size: $(wc -c < firestore.rules) bytes"
-            echo "  - Lines: $(wc -l < firestore.rules) lines"
-            echo "  - Words: $(wc -w < firestore.rules) words"
-          else
-            echo "❌ No rules file was created!"
-            exit 1
-          fi
-
-          # Deploy to production project
-          echo "📤 Deploying to PRODUCTION project (${{ env.FIREBASE_PROJECT_ID_PROD }})..."
-          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
-          
-          # Test Firebase CLI authentication for prod
-          echo "🔐 Testing Firebase CLI authentication with production project..."
-          firebase projects:list --json > prod_auth_check.json || {
-            echo "❌ Failed to authenticate with Firebase CLI using production credentials"
-            cat prod_auth_check.json 2>/dev/null || echo "No output from Firebase CLI"
-            exit 1
-          }
-          echo "✅ Firebase CLI authentication successful for production"
-          
-          firebase use prod
-          echo "✅ Switched to production project"
-
-          # Deploy rules to production with force flag to avoid confirmations
-          if [ -f "firestore.rules" ]; then
-            echo "📋 Deploying rules to production..."
-            echo "📄 Rules file content preview:"
-            head -n 5 firestore.rules
-            echo "🚀 Starting Firebase rules deployment (force mode to avoid confirmations)..."
-            firebase deploy --only firestore:rules --force --non-interactive
-            if [ $? -eq 0 ]; then
-              echo "✅ Rules deployed to production successfully"
-            else
-              echo "❌ Failed to deploy rules to production"
-              exit 1
-            fi
-          else
-            echo "⚠️ No rules file found to deploy"
-          fi
-
-          # Deploy indexes to production with force flag to avoid confirmations
-          if [ -f "firestore.indexes.json" ]; then
-            echo "📋 Deploying indexes to production..."
-            echo "📄 Indexes file content preview:"
-            head -n 5 firestore.indexes.json
-            echo "🚀 Starting Firebase indexes deployment (force mode to avoid confirmations)..."
-            firebase deploy --only firestore:indexes --force --non-interactive
-            if [ $? -eq 0 ]; then
-              echo "✅ Indexes deployed to production successfully"
-            else
-              echo "❌ Failed to deploy indexes to production"
-              exit 1
-            fi
-          else
-            echo "⚠️ No indexes file found to deploy"
-          fi
-
-          # Cleanup
-          echo "🧹 Cleaning up temporary files..."
-          rm -f firebase-test-key.json firebase-prod-key.json firestore.rules firestore.indexes.json export-rules.js .firebaserc firebase.json test_auth_check.json prod_auth_check.json
-          echo "✅ Successfully completed Firebase rules and indexes sync"
-
-      - name: Cleanup S3 Artifacts
-        if: always() && github.event.inputs.environment != 'only-sync-rules'
-        run: |
-          if [ -f ".aws-sam/build/packaged.yaml" ]; then
-            S3_URI=$(grep -A 1 "CodeUri:" .aws-sam/build/packaged.yaml | grep "s3://" | tr -d ' ')
-            if [ ! -z "$S3_URI" ]; then
-              echo "🧹 Cleaning up S3 artifact: $S3_URI"
-              aws s3 rm "$S3_URI" || echo "❌ Failed to delete S3 artifact"
-            fi
-          fi
+# Execute main function
+main
