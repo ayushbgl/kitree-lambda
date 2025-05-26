@@ -114,13 +114,11 @@ jobs:
         if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
         run: |
           # Install required packages
-          npm install firebase-admin @google-cloud/firestore @google-cloud/firestore-admin
+          npm install firebase-admin
 
           # Create a temporary Node.js script to handle Firebase operations
           cat > sync-firebase.js << 'EOF'
           const admin = require('firebase-admin');
-          const {Firestore} = require('@google-cloud/firestore');
-          const {FirestoreAdmin} = require('@google-cloud/firestore-admin');
 
           async function syncFirebaseRules() {
             try {
@@ -136,30 +134,23 @@ jobs:
                 projectId: process.env.FIREBASE_PROJECT_ID_PROD
               }, 'prod');
 
-              // Get Firestore Admin instances
-              const testFirestoreAdmin = new FirestoreAdmin({
-                projectId: process.env.FIREBASE_PROJECT_ID_TEST,
-                credentials: JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_TEST)
-              });
-
-              const prodFirestoreAdmin = new FirestoreAdmin({
-                projectId: process.env.FIREBASE_PROJECT_ID_PROD,
-                credentials: JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_PROD)
-              });
+              // Get Firestore instances
+              const testFirestore = testApp.firestore();
+              const prodFirestore = prodApp.firestore();
 
               // Get rules from test
-              const testRules = await testFirestoreAdmin.getFirestoreRules();
+              const testRules = await testFirestore.settings().get();
               console.log('Retrieved rules from test project');
 
               // Get indexes from test
-              const testIndexes = await testFirestoreAdmin.getFirestoreIndexes();
+              const testIndexes = await testFirestore.indexes().get();
               console.log('Retrieved indexes from test project');
 
               // Deploy to prod
-              await prodFirestoreAdmin.updateFirestoreRules(testRules);
+              await prodFirestore.settings().update(testRules);
               console.log('Deployed rules to prod project');
 
-              await prodFirestoreAdmin.updateFirestoreIndexes(testIndexes);
+              await prodFirestore.indexes().update(testIndexes);
               console.log('Deployed indexes to prod project');
 
               console.log('Successfully synced Firebase rules and indexes from test to prod');
