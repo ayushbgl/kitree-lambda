@@ -203,33 +203,21 @@ jobs:
             exit 1
           fi
 
-          # Debug service account identity and permissions
-          echo "🔍 Debugging production service account identity..."
+          # Debug test service account permissions
+          echo "🔍 Debugging test service account permissions..."
           source ~/google-cloud-sdk/path.bash.inc
-          export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
-          gcloud auth activate-service-account --key-file=firebase-prod-key.json
-          gcloud config set project ${{ env.FIREBASE_PROJECT_ID_PROD }}
+          export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
+          gcloud auth activate-service-account --key-file=firebase-test-key.json
+          gcloud config set project ${{ env.FIREBASE_PROJECT_ID_TEST }}
           
-          echo "👤 Currently active account:"
-          gcloud auth list --filter=status:ACTIVE --format="value(account)"
+          TEST_EMAIL=$(cat firebase-test-key.json | jq -r '.client_email')
+          echo "📧 Test service account email: $TEST_EMAIL"
           
-          echo "🔐 Checking IAM permissions for production service account..."
-          PROD_EMAIL=$(cat firebase-prod-key.json | jq -r '.client_email')
-          echo "📧 Checking permissions for: $PROD_EMAIL"
-          
-          echo "🏷️ All IAM roles for this service account:"
-          gcloud projects get-iam-policy ${{ env.FIREBASE_PROJECT_ID_PROD }} \
+          echo "🏷️ Test service account IAM roles:"
+          gcloud projects get-iam-policy ${{ env.FIREBASE_PROJECT_ID_TEST }} \
             --flatten="bindings[].members" \
             --format="table(bindings.role)" \
-            --filter="bindings.members:$PROD_EMAIL" || echo "⚠️ Could not retrieve IAM policy"
-          
-          echo "🧪 Testing Firebase API access..."
-          gcloud auth print-access-token > /dev/null
-          if [ $? -eq 0 ]; then
-            echo "✅ Can generate access token"
-          else
-            echo "❌ Cannot generate access token"
-          fi
+            --filter="bindings.members:$TEST_EMAIL" || echo "⚠️ Could not retrieve test IAM policy"
 
           # Create .firebaserc file for project aliases
           echo "⚙️ Creating Firebase configuration..."
@@ -269,6 +257,14 @@ jobs:
           firebase use test
           echo "✅ Switched to test project"
           
+          # Check current Firestore rules in test project using Firebase CLI
+          echo "🔍 Checking current rules in test project using Firebase CLI..."
+          firebase firestore:rules get > current-test-rules.txt 2>&1 || echo "Could not get current rules via CLI"
+          if [ -f "current-test-rules.txt" ]; then
+            echo "📄 Current rules in test project (Firebase CLI):"
+            head -n 20 current-test-rules.txt
+          fi
+          
           # Export indexes
           echo "📋 Exporting indexes from test project..."
           firebase firestore:indexes > firestore.indexes.json
@@ -282,7 +278,7 @@ jobs:
             exit 1
           fi
 
-          # Export rules using Firebase Admin SDK
+          # Export rules using Firebase Admin SDK with enhanced debugging
           echo "📋 Exporting rules from test project using Admin SDK..."
           cat > export-rules.js << 'EOF'
           const admin = require('firebase-admin');
@@ -294,6 +290,14 @@ jobs:
               const serviceAccount = require('./firebase-test-key.json');
               console.log('📧 Service account email:', serviceAccount.client_email);
               console.log('📋 Service account project_id:', serviceAccount.project_id);
+              console.log('📋 Environment FIREBASE_PROJECT_ID_TEST:', process.env.FIREBASE_PROJECT_ID_TEST);
+          
+              // Verify project IDs match
+              if (serviceAccount.project_id !== process.env.FIREBASE_PROJECT_ID_TEST) {
+                console.log('⚠️  WARNING: Project ID mismatch!');
+                console.log('  Service account project_id:', serviceAccount.project_id);
+                console.log('  Environment variable:', process.env.FIREBASE_PROJECT_ID_TEST);
+              }
           
               admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount),
@@ -303,48 +307,101 @@ jobs:
 
               console.log('📋 Getting security rules...');
               const securityRules = admin.securityRules();
-              const rulesets = await securityRules.listRulesetMetadata();
-              console.log(`📊 Found ${rulesets ? rulesets.length : 0} rulesets`);
           
-              if (rulesets && rulesets.length > 0) {
-                console.log('📤 Getting latest ruleset...');
-                const latestRuleset = rulesets[0];
-                console.log('📋 Latest ruleset name:', latestRuleset.name);
-                const ruleset = await securityRules.getRuleset(latestRuleset.name);
+              // Enhanced debugging for rulesets
+              console.log('🔍 Attempting to list all rulesets...');
+              try {
+                const rulesets = await securityRules.listRulesetMetadata();
+                console.log('📊 Raw rulesets response type:', typeof rulesets);
+                console.log('📊 Raw rulesets response:', JSON.stringify(rulesets, null, 2));
+                console.log(`📊 Found ${rulesets ? rulesets.length : 'undefined'} rulesets`);
           
-                if (ruleset.source && ruleset.source.files) {
-                  console.log(`📁 Found ${ruleset.source.files.length} files in ruleset`);
-                  const rulesFile = ruleset.source.files.find(file => file.name === 'firestore.rules');
-                  if (rulesFile && rulesFile.content) {
-                    fs.writeFileSync('firestore.rules', rulesFile.content);
-                    console.log('✅ Successfully exported rules from test project');
-                    console.log('📄 Rules file size:', rulesFile.content.length, 'characters');
-                    console.log('📄 Rules preview (first 5 lines):');
-                    console.log(rulesFile.content.split('\n').slice(0, 5).join('\n'));
-                  } else {
-                    console.log('⚠️ No rules content found in test project, creating default rules');
-                    fs.writeFileSync('firestore.rules', `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}`);
+                if (rulesets && Array.isArray(rulesets) && rulesets.length > 0) {
+                  console.log('📤 Getting latest ruleset...');
+                  const latestRuleset = rulesets[0];
+                  console.log('📋 Latest ruleset details:', JSON.stringify(latestRuleset, null, 2));
+          
+                  try {
+                    const ruleset = await securityRules.getRuleset(latestRuleset.name);
+                    console.log('📋 Retrieved ruleset details:', JSON.stringify(ruleset, null, 2));
+          
+                    if (ruleset.source && ruleset.source.files) {
+                      console.log(`📁 Found ${ruleset.source.files.length} files in ruleset`);
+                      console.log('📁 Files in ruleset:', ruleset.source.files.map(f => f.name));
+          
+                      const rulesFile = ruleset.source.files.find(file => file.name === 'firestore.rules');
+                      if (rulesFile && rulesFile.content) {
+                        fs.writeFileSync('firestore.rules', rulesFile.content);
+                        console.log('✅ Successfully exported rules from test project');
+                        console.log('📄 Rules file size:', rulesFile.content.length, 'characters');
+                        console.log('📄 Rules preview (first 10 lines):');
+                        console.log(rulesFile.content.split('\n').slice(0, 10).join('\n'));
+                        console.log('📄 Rules preview (last 5 lines):');
+                        console.log(rulesFile.content.split('\n').slice(-5).join('\n'));
+                      } else {
+                        console.log('⚠️ No rules content found in ruleset file');
+                        console.log('📋 Rules file details:', rulesFile);
+                        throw new Error('No rules content in file');
+                      }
+                    } else {
+                      console.log('⚠️ No source files found in ruleset');
+                      console.log('📋 Ruleset source:', ruleset.source);
+                      throw new Error('No source files in ruleset');
+                    }
+                  } catch (rulesetError) {
+                    console.error('❌ Error getting specific ruleset:', rulesetError.message);
+                    throw rulesetError;
                   }
+                } else {
+                  console.log('⚠️ No rulesets found or rulesets is not an array');
+                  if (rulesets) {
+                    console.log('📋 Rulesets value:', rulesets);
+                  }
+                  throw new Error('No rulesets found');
                 }
-              } else {
-                console.log('⚠️ No rulesets found in test project, creating default rules');
-                fs.writeFileSync('firestore.rules', `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}`);
+              } catch (listError) {
+                console.error('❌ Error listing rulesets:', listError.message);
+                console.error('📋 List error code:', listError.code);
+                console.error('📋 Full list error:', listError);
+                throw listError;
               }
             } catch (error) {
-              console.error('❌ Error exporting rules:', error.message);
+              console.error('❌ Error in exportRules:', error.message);
               console.error('📋 Error code:', error.code);
               console.error('📋 Full error:', error);
+          
               // Create a basic rules file as fallback
+              console.log('⚠️ Creating fallback rules file due to error');
               fs.writeFileSync('firestore.rules', `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}`);
-              console.log('⚠️ Created fallback rules file');
+              console.log('📄 Fallback rules created');
+          
+              // Re-throw the error so we know something went wrong
+              throw error;
             }
           }
 
-          exportRules();
+          exportRules().catch(error => {
+            console.error('💥 Final error in exportRules:', error);
+            process.exit(1);
+          });
           EOF
 
           export FIREBASE_PROJECT_ID_TEST='${{ env.FIREBASE_PROJECT_ID_TEST }}'
           node export-rules.js
+
+          # Verify the exported rules
+          if [ -f "firestore.rules" ]; then
+            echo "📄 Final exported rules file content:"
+            cat firestore.rules
+            echo ""
+            echo "📊 Rules file stats:"
+            echo "  - Size: $(wc -c < firestore.rules) bytes"
+            echo "  - Lines: $(wc -l < firestore.rules) lines"
+            echo "  - Words: $(wc -w < firestore.rules) words"
+          else
+            echo "❌ No rules file was created!"
+            exit 1
+          fi
 
           # Deploy to production project
           echo "📤 Deploying to PRODUCTION project (${{ env.FIREBASE_PROJECT_ID_PROD }})..."
@@ -367,20 +424,12 @@ jobs:
             echo "📋 Deploying rules to production..."
             echo "📄 Rules file content preview:"
             head -n 5 firestore.rules
-            echo "🚀 Starting Firebase rules deployment with enhanced debugging..."
-            firebase deploy --only firestore:rules --debug --force
+            echo "🚀 Starting Firebase rules deployment..."
+            firebase deploy --only firestore:rules --force
             if [ $? -eq 0 ]; then
               echo "✅ Rules deployed to production successfully"
             else
               echo "❌ Failed to deploy rules to production"
-              echo "🔍 Checking Firebase project configuration..."
-              firebase projects:list
-              echo "🔍 Current project settings:"
-              firebase use
-              echo "⚠️  Please add the following roles to service account $PROD_EMAIL:"
-              echo "   - Firebase Admin"
-              echo "   - Cloud Datastore Index Admin" 
-              echo "   - Firebase Rules Admin"
               exit 1
             fi
           else
@@ -392,16 +441,12 @@ jobs:
             echo "📋 Deploying indexes to production..."
             echo "📄 Indexes file content preview:"
             head -n 5 firestore.indexes.json
-            echo "🚀 Starting Firebase indexes deployment with enhanced debugging..."
-            firebase deploy --only firestore:indexes --debug --force
+            echo "🚀 Starting Firebase indexes deployment..."
+            firebase deploy --only firestore:indexes --force
             if [ $? -eq 0 ]; then
               echo "✅ Indexes deployed to production successfully"
             else
               echo "❌ Failed to deploy indexes to production"
-              echo "⚠️  Please add the following roles to service account $PROD_EMAIL:"
-              echo "   - Firebase Admin"
-              echo "   - Cloud Datastore Index Admin" 
-              echo "   - Firebase Rules Admin"
               exit 1
             fi
           else
@@ -410,7 +455,7 @@ jobs:
 
           # Cleanup
           echo "🧹 Cleaning up temporary files..."
-          rm -f firebase-test-key.json firebase-prod-key.json firestore.rules firestore.indexes.json export-rules.js .firebaserc firebase.json test_auth_check.json prod_auth_check.json
+          rm -f firebase-test-key.json firebase-prod-key.json firestore.rules firestore.indexes.json export-rules.js .firebaserc firebase.json test_auth_check.json prod_auth_check.json current-test-rules.txt
           echo "✅ Successfully completed Firebase rules and indexes sync"
 
       - name: Cleanup S3 Artifacts
