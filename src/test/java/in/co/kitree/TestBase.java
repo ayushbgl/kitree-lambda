@@ -48,6 +48,22 @@ public abstract class TestBase {
         // Get Firestore and Auth instances
         db = FirestoreClient.getFirestore();
         auth = FirebaseAuth.getInstance();
+
+        // Create service account in emulator
+        try {
+            UserRecord.CreateRequest request = new UserRecord.CreateRequest()
+                .setUid("dummy")
+                .setEmail("dummy@kitree-emulator.iam.gserviceaccount.com")
+                .setDisplayName("Test Service Account")
+                .setEmailVerified(true);
+            
+            auth.createUser(request);
+        } catch (FirebaseAuthException e) {
+            // Ignore if user already exists
+            if (!e.getMessage().contains("already exists")) {
+                throw e;
+            }
+        }
     }
 
     @BeforeEach

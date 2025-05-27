@@ -10,6 +10,11 @@ services:
       - .:/workspace
     working_dir: /workspace
     command: firebase emulators:start --project kitree-emulator --only auth,firestore
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   test-runner:
     image: gradle:7.6.1-jdk17
@@ -21,5 +26,6 @@ services:
       - FIREBASE_AUTH_EMULATOR_HOST=firebase-emulator:9099
       - ENVIRONMENT=test
     depends_on:
-      - firebase-emulator
+      firebase-emulator:
+        condition: service_healthy
     command: ./gradlew test 
