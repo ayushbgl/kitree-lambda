@@ -43,6 +43,16 @@ java {
     }
 }
 
+// Skip tests when SAM is building, but allow them to run normally otherwise
+allprojects {
+    tasks.withType(Test) {
+        onlyIf {
+            System.getProperty("software.amazon.aws.lambdabuilders.scratch-dir") == null ||
+            System.getenv("GRADLE_SAM_EXECUTE_TEST") != null
+        }
+    }
+}
+
 test {
     useJUnitPlatform()
     testLogging {
