@@ -1,7 +1,5 @@
 package in.co.kitree;
 
-import com.amazonaws.services.lambda.AWSLambdaClientBuilder;
-import com.amazonaws.services.lambda.invoke.LambdaInvokerFactory;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
@@ -21,6 +19,10 @@ import com.razorpay.RazorpayException;
 import in.co.kitree.pojos.*;
 import in.co.kitree.services.*;
 import in.co.kitree.services.Razorpay.ErrorCode;
+import software.amazon.awssdk.services.lambda.LambdaClient;
+import software.amazon.awssdk.services.lambda.model.InvokeRequest;
+import software.amazon.awssdk.services.lambda.model.InvokeResponse;
+import software.amazon.awssdk.core.SdkBytes;
 
 import org.json.JSONObject;
 
@@ -106,11 +108,28 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     protected PythonLambdaService createPythonLambdaService() {
-        return LambdaInvokerFactory.builder()
-            .lambdaClient(AWSLambdaClientBuilder.standard()
-                .withRegion("us-east-1")
-                .build())
-            .build(PythonLambdaService.class);
+        LambdaClient lambdaClient = LambdaClient.builder()
+            .region(software.amazon.awssdk.regions.Region.US_EAST_1)
+            .build();
+            
+        return new PythonLambdaService() {
+            @Override
+            public PythonLambdaResponseBody invokePythonLambda(PythonLambdaEventRequest request) {
+                try {
+                    String payload = gson.toJson(request);
+                    InvokeRequest invokeRequest = InvokeRequest.builder()
+                        .functionName("kitree-python-lambda")
+                        .payload(SdkBytes.fromUtf8String(payload))
+                        .build();
+                        
+                    InvokeResponse response = lambdaClient.invoke(invokeRequest);
+                    String responsePayload = response.payload().asUtf8String();
+                    return gson.fromJson(responsePayload, PythonLambdaResponseBody.class);
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to invoke Python Lambda", e);
+                }
+            }
+        };
     }
 
     public String handleRequest(RequestEvent event, Context context) {
