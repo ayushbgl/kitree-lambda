@@ -118,7 +118,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 try {
                     String payload = gson.toJson(request);
                     InvokeRequest invokeRequest = InvokeRequest.builder()
-                        .functionName("kitree-python-lambda")
+                        .functionName("certgen")
                         .payload(SdkBytes.fromUtf8String(payload))
                         .build();
                         
