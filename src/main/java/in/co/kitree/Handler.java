@@ -109,7 +109,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     protected PythonLambdaService createPythonLambdaService() {
         LambdaClient lambdaClient = LambdaClient.builder()
-            .region(software.amazon.awssdk.regions.Region.US_EAST_1)
+            .region(software.amazon.awssdk.regions.Region.AP_SOUTH_1)
             .build();
             
         return new PythonLambdaService() {
