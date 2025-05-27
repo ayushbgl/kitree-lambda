@@ -45,13 +45,31 @@ jobs:
           cp secrets/kitree-lambda/serviceAccountKeyTest.json src/test/resources/test-service-account.json
       - name: Start Firebase Emulators
         run: |
+          # Create emulator configuration
+          cat > firebase.json << EOF
+          {
+            "emulators": {
+              "auth": {
+                "host": "0.0.0.0",
+                "port": 9099
+              },
+              "firestore": {
+                "host": "0.0.0.0",
+                "port": 8080
+              }
+            }
+          }
+          EOF
+          
           # Start Firestore emulator
           docker run -d --name firestore-emulator -p 8080:8080 \
+            -v $(pwd)/firebase.json:/firebase.json \
             --entrypoint "gcloud" gcr.io/google.com/cloudsdktool/cloud-sdk:latest \
             beta emulators firestore start --host-port=0.0.0.0:8080
           
           # Start Auth emulator
           docker run -d --name auth-emulator -p 9099:9099 \
+            -v $(pwd)/firebase.json:/firebase.json \
             --entrypoint "gcloud" gcr.io/google.com/cloudsdktool/cloud-sdk:latest \
             beta emulators auth start --host-port=0.0.0.0:9099
           
@@ -83,12 +101,16 @@ jobs:
           # Additional verification for Auth emulator
           echo "Verifying Auth emulator..."
           for i in {1..5}; do
-            if curl -s http://localhost:9099/emulator/v1/projects/kitree-test/accounts > /dev/null; then
+            if curl -s -X POST http://localhost:9099/identitytoolkit/v3/relyingparty/signupNewUser \
+              -H "Content-Type: application/json" \
+              -d '{"email":"test@example.com","password":"password123"}' > /dev/null; then
               echo "Auth emulator is responding"
               break
             fi
             if [ $i -eq 5 ]; then
               echo "Auth emulator failed to respond"
+              echo "Auth emulator logs:"
+              docker logs auth-emulator
               exit 1
             fi
             echo "Waiting for Auth emulator to respond... (attempt $i/5)"
@@ -104,6 +126,8 @@ jobs:
             fi
             if [ $i -eq 5 ]; then
               echo "Firestore emulator failed to respond"
+              echo "Firestore emulator logs:"
+              docker logs firestore-emulator
               exit 1
             fi
             echo "Waiting for Firestore emulator to respond... (attempt $i/5)"
@@ -148,13 +172,31 @@ jobs:
           cp secrets/kitree-lambda/serviceAccountKeyTest.json src/test/resources/test-service-account.json
       - name: Start Firebase Emulators
         run: |
+          # Create emulator configuration
+          cat > firebase.json << EOF
+          {
+            "emulators": {
+              "auth": {
+                "host": "0.0.0.0",
+                "port": 9099
+              },
+              "firestore": {
+                "host": "0.0.0.0",
+                "port": 8080
+              }
+            }
+          }
+          EOF
+          
           # Start Firestore emulator
           docker run -d --name firestore-emulator -p 8080:8080 \
+            -v $(pwd)/firebase.json:/firebase.json \
             --entrypoint "gcloud" gcr.io/google.com/cloudsdktool/cloud-sdk:latest \
             beta emulators firestore start --host-port=0.0.0.0:8080
           
           # Start Auth emulator
           docker run -d --name auth-emulator -p 9099:9099 \
+            -v $(pwd)/firebase.json:/firebase.json \
             --entrypoint "gcloud" gcr.io/google.com/cloudsdktool/cloud-sdk:latest \
             beta emulators auth start --host-port=0.0.0.0:9099
           
@@ -186,12 +228,16 @@ jobs:
           # Additional verification for Auth emulator
           echo "Verifying Auth emulator..."
           for i in {1..5}; do
-            if curl -s http://localhost:9099/emulator/v1/projects/kitree-test/accounts > /dev/null; then
+            if curl -s -X POST http://localhost:9099/identitytoolkit/v3/relyingparty/signupNewUser \
+              -H "Content-Type: application/json" \
+              -d '{"email":"test@example.com","password":"password123"}' > /dev/null; then
               echo "Auth emulator is responding"
               break
             fi
             if [ $i -eq 5 ]; then
               echo "Auth emulator failed to respond"
+              echo "Auth emulator logs:"
+              docker logs auth-emulator
               exit 1
             fi
             echo "Waiting for Auth emulator to respond... (attempt $i/5)"
@@ -207,6 +253,8 @@ jobs:
             fi
             if [ $i -eq 5 ]; then
               echo "Firestore emulator failed to respond"
+              echo "Firestore emulator logs:"
+              docker logs firestore-emulator
               exit 1
             fi
             echo "Waiting for Firestore emulator to respond... (attempt $i/5)"
