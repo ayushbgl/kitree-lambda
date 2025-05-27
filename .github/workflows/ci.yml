@@ -17,16 +17,11 @@ jobs:
           java-version: '17'
           distribution: 'zulu'
       - name: Run Unit Tests
-        run: ./gradlew test --tests '*UnitTest*' --info
-      - name: Upload Test Reports
-        uses: actions/upload-artifact@v3
-        if: always()
-        with:
-          name: unit-test-reports
-          path: |
-            build/reports/tests/test
-            build/test-results/test
-          retention-days: 7
+        run: |
+          echo "=== Running Unit Tests ==="
+          ./gradlew test --tests '*UnitTest*' --info --console=plain
+          echo "=== Unit Test Summary ==="
+          cat build/reports/tests/test/classes/*.html | grep -A 5 "Test Summary" || true
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -166,16 +161,11 @@ jobs:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           FIREBASE_AUTH_EMULATOR_HOST: localhost:9099
           FIREBASE_PROJECT_ID: kitree-test
-        run: ./gradlew test --tests '*IntegrationTest*' --info
-      - name: Upload Test Reports
-        uses: actions/upload-artifact@v3
-        if: always()
-        with:
-          name: integration-test-reports
-          path: |
-            build/reports/tests/test
-            build/test-results/test
-          retention-days: 7
+        run: |
+          echo "=== Running Integration Tests ==="
+          ./gradlew test --tests '*IntegrationTest*' --info --console=plain
+          echo "=== Integration Test Summary ==="
+          cat build/reports/tests/test/classes/*.html | grep -A 5 "Test Summary" || true
 
   e2e-tests:
     runs-on: ubuntu-latest
@@ -315,13 +305,8 @@ jobs:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           FIREBASE_AUTH_EMULATOR_HOST: localhost:9099
           FIREBASE_PROJECT_ID: kitree-test
-        run: ./gradlew test --tests '*EndToEndTest*' --info
-      - name: Upload Test Reports
-        uses: actions/upload-artifact@v3
-        if: always()
-        with:
-          name: e2e-test-reports
-          path: |
-            build/reports/tests/test
-            build/test-results/test
-          retention-days: 7 
+        run: |
+          echo "=== Running End-to-End Tests ==="
+          ./gradlew test --tests '*EndToEndTest*' --info --console=plain
+          echo "=== End-to-End Test Summary ==="
+          cat build/reports/tests/test/classes/*.html | grep -A 5 "Test Summary" || true 
