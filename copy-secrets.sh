@@ -7,5 +7,6 @@ mkdir -p src/main/resources
 cp ../kitree-secrets/kitree-lambda/secrets.json src/main/resources/
 cp ../kitree-secrets/kitree-lambda/serviceAccountKey.json src/main/resources/
 cp ../kitree-secrets/kitree-lambda/serviceAccountKeyTest.json src/main/resources/
+cp ../kitree-secrets/kitree-lambda/serviceAccountKeyTest.json src/test/resources/test-service-account.json
 
 echo "Secret files have been copied to src/main/resources/" 
