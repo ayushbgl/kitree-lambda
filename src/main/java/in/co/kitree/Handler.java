@@ -126,6 +126,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     String responsePayload = response.payload().asUtf8String();
                     return gson.fromJson(responsePayload, PythonLambdaResponseBody.class);
                 } catch (Exception e) {
+                    logger.log(String.format("Failed to invoke Python Lambda. Exception type: %s, Message: %s", e.getClass().getName(), e.getMessage()));
                     throw new RuntimeException("Failed to invoke Python Lambda", e);
                 }
             }
