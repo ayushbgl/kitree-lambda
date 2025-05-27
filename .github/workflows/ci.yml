@@ -48,8 +48,22 @@ jobs:
         run: |
           curl -sL https://firebase.tools | bash
           export PATH="$PATH:$HOME/.local/bin"
+      - name: Cache Firebase Emulators
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}
       - name: Start Firebase Emulators
         run: |
+          # Create Firebase configuration
+          cat > .firebaserc << EOF
+          {
+            "projects": {
+              "default": "kitree-test"
+            }
+          }
+          EOF
+          
           # Create emulator configuration
           cat > firebase.json << EOF
           {
@@ -62,12 +76,18 @@ jobs:
                 "host": "0.0.0.0",
                 "port": 8080
               }
+            },
+            "firestore": {
+              "rules": "firestore.rules"
             }
           }
           EOF
           
+          # Create empty rules file
+          echo "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }" > firestore.rules
+          
           # Start emulators using Firebase CLI
-          firebase emulators:start --only auth,firestore &
+          firebase emulators:start --project kitree-test --only auth,firestore &
           
           # Function to check if a service is ready
           wait_for_service() {
@@ -168,8 +188,22 @@ jobs:
         run: |
           curl -sL https://firebase.tools | bash
           export PATH="$PATH:$HOME/.local/bin"
+      - name: Cache Firebase Emulators
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}
       - name: Start Firebase Emulators
         run: |
+          # Create Firebase configuration
+          cat > .firebaserc << EOF
+          {
+            "projects": {
+              "default": "kitree-test"
+            }
+          }
+          EOF
+          
           # Create emulator configuration
           cat > firebase.json << EOF
           {
@@ -182,12 +216,18 @@ jobs:
                 "host": "0.0.0.0",
                 "port": 8080
               }
+            },
+            "firestore": {
+              "rules": "firestore.rules"
             }
           }
           EOF
           
+          # Create empty rules file
+          echo "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }" > firestore.rules
+          
           # Start emulators using Firebase CLI
-          firebase emulators:start --only auth,firestore &
+          firebase emulators:start --project kitree-test --only auth,firestore &
           
           # Function to check if a service is ready
           wait_for_service() {
