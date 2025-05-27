@@ -38,6 +38,18 @@ test {
         events "passed", "skipped", "failed"
         showStandardStreams = true
     }
+    
+    // Ensure test resources are included
+    testClassesDirs = files(sourceSets.test.output.classesDirs)
+    classpath = sourceSets.test.runtimeClasspath
+    
+    // Copy test resources to the test classpath
+    doFirst {
+        copy {
+            from sourceSets.test.resources.srcDirs
+            into sourceSets.test.output.resourcesDir
+        }
+    }
 }
 
 jar {
