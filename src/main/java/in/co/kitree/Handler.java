@@ -72,8 +72,21 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         } catch (Exception e) {
             System.out.println("Error initializing Handler: " + e.getMessage());
             if (isTest()) {
-                // In test environment, we can continue without some services
-                this.db = FirestoreClient.getFirestore();
+                // In test environment, try to initialize Firebase again with test configuration
+                try {
+                    if (FirebaseApp.getApps().isEmpty()) {
+                        FirebaseOptions options = FirebaseOptions.builder()
+                            .setCredentials(GoogleCredentials.fromStream(
+                                getClass().getResourceAsStream("/serviceAccountKeyTest.json")))
+                            .build();
+                        FirebaseApp.initializeApp(options);
+                    }
+                    this.db = FirestoreClient.getFirestore();
+                } catch (Exception firebaseEx) {
+                    System.out.println("Failed to initialize Firebase in test environment: " + firebaseEx.getMessage());
+                    throw new RuntimeException("Failed to initialize Firebase in test environment", firebaseEx);
+                }
+                
                 try {
                     this.razorpay = new Razorpay(true);
                 } catch (RazorpayException ex) {

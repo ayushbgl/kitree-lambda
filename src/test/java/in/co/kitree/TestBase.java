@@ -19,21 +19,16 @@ import java.util.concurrent.ExecutionException;
 public abstract class TestBase {
     protected static Firestore db;
     protected static FirebaseAuth auth;
+    protected static final int FIRESTORE_PORT = 8080;
+    protected static final int AUTH_PORT = 9099;
+    protected static final String FIRESTORE_EMULATOR_HOST = System.getenv("CI") != null ? "localhost:" + FIRESTORE_PORT : "127.0.0.1:" + FIRESTORE_PORT;
+    protected static final String AUTH_EMULATOR_HOST = System.getenv("CI") != null ? "localhost:" + AUTH_PORT : "127.0.0.1:" + AUTH_PORT;
 
     @BeforeAll
-    public static void setupFirebase() throws IOException, FirebaseAuthException {
+    public static void setupFirebase() throws IOException {
         // Set environment variables for emulators
-        String firestoreHost = System.getenv("FIRESTORE_EMULATOR_HOST");
-        String authHost = System.getenv("FIREBASE_AUTH_EMULATOR_HOST");
-        
-        if (firestoreHost == null || authHost == null) {
-            throw new IllegalStateException(
-                "Emulator hosts not set. Please ensure FIRESTORE_EMULATOR_HOST and FIREBASE_AUTH_EMULATOR_HOST are set."
-            );
-        }
-
-        System.setProperty("FIRESTORE_EMULATOR_HOST", firestoreHost);
-        System.setProperty("FIREBASE_AUTH_EMULATOR_HOST", authHost);
+        System.setProperty("FIRESTORE_EMULATOR_HOST", FIRESTORE_EMULATOR_HOST);
+        System.setProperty("FIREBASE_AUTH_EMULATOR_HOST", AUTH_EMULATOR_HOST);
         System.setProperty("FIREBASE_AUTH_EMULATOR_SKIP_CREDENTIALS_VALIDATION", "true");
 
         // Load the service account file
@@ -54,22 +49,6 @@ public abstract class TestBase {
         // Get Firestore and Auth instances
         db = FirestoreClient.getFirestore();
         auth = FirebaseAuth.getInstance();
-
-        // Create service account in emulator
-        try {
-            UserRecord.CreateRequest request = new UserRecord.CreateRequest()
-                .setUid("dummy")
-                .setEmail("dummy@kitree-emulator.iam.gserviceaccount.com")
-                .setDisplayName("Test Service Account")
-                .setEmailVerified(true);
-            
-            auth.createUser(request);
-        } catch (FirebaseAuthException e) {
-            // Ignore if user already exists
-            if (!e.getMessage().contains("already exists")) {
-                throw e;
-            }
-        }
     }
 
     @BeforeEach

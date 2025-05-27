@@ -24,7 +24,6 @@ env:
   FIREBASE_TEST_DIR: firebase-test
   FIREBASE_PROD_DIR: firebase-prod
   LAMBDA_RESOURCE_NAME: JavaFunction
-  SAM_CLI_TELEMETRY:0
 
 jobs:
   deploy:
