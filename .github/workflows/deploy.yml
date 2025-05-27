@@ -79,7 +79,7 @@ jobs:
         if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
         run: |
           chmod +x ./gradlew
-          ./gradlew clean build -x test
+          ./gradlew clean build -x test -x testClasses
 
       - name: Install AWS SAM CLI
         if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
