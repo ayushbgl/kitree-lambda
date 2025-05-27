@@ -17,11 +17,23 @@ jobs:
           java-version: '17'
           distribution: 'zulu'
       - name: Run Unit Tests
+        id: unit-tests
+        run: ./gradlew test --tests '*UnitTest*' --info --console=plain
+      - name: Show Unit Test Summary
+        if: always()
         run: |
-          echo "=== Running Unit Tests ==="
-          ./gradlew test --tests '*UnitTest*' --info --console=plain
           echo "=== Unit Test Summary ==="
-          cat build/reports/tests/test/classes/*.html | grep -A 5 "Test Summary" || true
+          echo "Test Results Directory: build/reports/tests/test"
+          echo "----------------------------------------"
+          if [ -d "build/reports/tests/test" ]; then
+            echo "Test Classes:"
+            ls -l build/reports/tests/test/classes/
+            echo "----------------------------------------"
+            echo "Test Results:"
+            find build/reports/tests/test/classes/ -name "*.html" -exec grep -A 5 "Test Summary" {} \;
+          else
+            echo "No test results found"
+          fi
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -157,15 +169,27 @@ jobs:
           echo "Emulator logs:"
           firebase emulators:export logs
       - name: Run Integration Tests
+        id: integration-tests
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           FIREBASE_AUTH_EMULATOR_HOST: localhost:9099
           FIREBASE_PROJECT_ID: kitree-test
+        run: ./gradlew test --tests '*IntegrationTest*' --info --console=plain
+      - name: Show Integration Test Summary
+        if: always()
         run: |
-          echo "=== Running Integration Tests ==="
-          ./gradlew test --tests '*IntegrationTest*' --info --console=plain
           echo "=== Integration Test Summary ==="
-          cat build/reports/tests/test/classes/*.html | grep -A 5 "Test Summary" || true
+          echo "Test Results Directory: build/reports/tests/test"
+          echo "----------------------------------------"
+          if [ -d "build/reports/tests/test" ]; then
+            echo "Test Classes:"
+            ls -l build/reports/tests/test/classes/
+            echo "----------------------------------------"
+            echo "Test Results:"
+            find build/reports/tests/test/classes/ -name "*.html" -exec grep -A 5 "Test Summary" {} \;
+          else
+            echo "No test results found"
+          fi
 
   e2e-tests:
     runs-on: ubuntu-latest
@@ -301,12 +325,24 @@ jobs:
           echo "Emulator logs:"
           firebase emulators:export logs
       - name: Run End-to-End Tests
+        id: e2e-tests
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           FIREBASE_AUTH_EMULATOR_HOST: localhost:9099
           FIREBASE_PROJECT_ID: kitree-test
+        run: ./gradlew test --tests '*EndToEndTest*' --info --console=plain
+      - name: Show End-to-End Test Summary
+        if: always()
         run: |
-          echo "=== Running End-to-End Tests ==="
-          ./gradlew test --tests '*EndToEndTest*' --info --console=plain
           echo "=== End-to-End Test Summary ==="
-          cat build/reports/tests/test/classes/*.html | grep -A 5 "Test Summary" || true 
+          echo "Test Results Directory: build/reports/tests/test"
+          echo "----------------------------------------"
+          if [ -d "build/reports/tests/test" ]; then
+            echo "Test Classes:"
+            ls -l build/reports/tests/test/classes/
+            echo "----------------------------------------"
+            echo "Test Results:"
+            find build/reports/tests/test/classes/ -name "*.html" -exec grep -A 5 "Test Summary" {} \;
+          else
+            echo "No test results found"
+          fi 
