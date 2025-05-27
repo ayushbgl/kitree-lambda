@@ -2,8 +2,9 @@ package in.co.kitree.pojos;
 
 import java.sql.Timestamp;
 import java.util.List;
+import lombok.Data;
 
-
+@Data
 public class Coupon {
 
     public enum CouponType {
@@ -11,15 +12,6 @@ public class Coupon {
     }
 
     private String code;
-
-    public CouponType getType() {
-        return type;
-    }
-
-    public void setType(CouponType type) {
-        this.type = type;
-    }
-
     private CouponType type;
     private double discount;
     private Timestamp startDate;
@@ -31,8 +23,13 @@ public class Coupon {
     private Long maxClaimsPerUser;
     private Double maxDiscountAmount;
     private Long claimsMadeSoFar;
-
     private List<String> userIdsAllowed;
+    private Integer value;
+    private Integer minAmount;
+    private Integer maxDiscount;
+    private String expertId;
+    private Integer maxUsage;
+    private Long expiresAt;
 
     public Coupon() {
     }
@@ -44,7 +41,6 @@ public class Coupon {
     public void setCode(String code) {
         this.code = code;
     }
-
 
     public double getDiscount() {
         return discount;
@@ -132,6 +128,34 @@ public class Coupon {
 
     public void setUserIdsAllowed(List<String> userIdsAllowed) {
         this.userIdsAllowed = userIdsAllowed;
+    }
+
+    public Integer getValue() {
+        return value;
+    }
+
+    public void setValue(Integer value) {
+        this.value = value;
+    }
+
+    public Integer getMinAmount() {
+        return minAmount;
+    }
+
+    public void setMinAmount(Integer minAmount) {
+        this.minAmount = minAmount;
+    }
+
+    public Integer getMaxDiscount() {
+        return maxDiscount;
+    }
+
+    public void setMaxDiscount(Integer maxDiscount) {
+        this.maxDiscount = maxDiscount;
+    }
+
+    public String getExpertId() {
+        return expertId;
     }
 
     @Override

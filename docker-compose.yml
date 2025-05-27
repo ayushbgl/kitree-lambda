@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  firebase-emulator:
+    image: andreysenov/firebase-tools
+    ports:
+      - "4000:4000"  # Emulator UI
+      - "8080:8080"  # Firestore
+      - "9099:9099"  # Auth
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: firebase emulators:start --project demo 

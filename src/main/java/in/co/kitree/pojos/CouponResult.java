@@ -49,4 +49,18 @@ public class CouponResult {
     public void setNewAmount(double newAmount) {
         this.newAmount = newAmount;
     }
+
+    // --- Compatibility methods for new tests ---
+    public int getDiscountAmount() {
+        return (int) discount;
+    }
+    public int getFinalAmount() {
+        return (int) newAmount;
+    }
+    public String getError() {
+        return message;
+    }
+    public void setError(String error) {
+        this.message = error;
+    }
 }

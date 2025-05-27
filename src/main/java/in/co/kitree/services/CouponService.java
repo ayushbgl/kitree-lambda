@@ -1,79 +1,94 @@
 package in.co.kitree.services;
 
 import in.co.kitree.pojos.Coupon;
-import in.co.kitree.pojos.CouponResult;
-import in.co.kitree.pojos.FirebaseUser;
 import in.co.kitree.pojos.ServicePlan;
-
-import java.sql.Timestamp;
+import in.co.kitree.pojos.FirebaseUser;
+import in.co.kitree.pojos.CouponResult;
 
 public class CouponService {
+    public static CouponResult applyCoupon(Coupon coupon, ServicePlan servicePlan, FirebaseUser user, String language) {
+        // Validate inputs
+        if (coupon == null || servicePlan == null || user == null) {
+            throw new IllegalArgumentException("Coupon, service plan, and user must not be null");
+        }
+        if (coupon.getCode() == null) {
+            throw new IllegalArgumentException("Coupon code must not be null");
+        }
+        if (coupon.getType() == null) {
+            throw new IllegalArgumentException("Coupon type must not be null");
+        }
+        if (coupon.getValue() == null) {
+            throw new IllegalArgumentException("Coupon value must not be null");
+        }
+        if (coupon.getMinAmount() == null) {
+            throw new IllegalArgumentException("Coupon minimum amount must not be null");
+        }
+        if (coupon.getMaxDiscount() == null) {
+            throw new IllegalArgumentException("Coupon max discount must not be null");
+        }
+        if (coupon.getExpertId() == null) {
+            throw new IllegalArgumentException("Coupon expertId must not be null");
+        }
+        if (servicePlan.getAmount() == null) {
+            throw new IllegalArgumentException("Service plan amount must not be null");
+        }
+        if (servicePlan.getExpertId() == null) {
+            throw new IllegalArgumentException("Service plan expertId must not be null");
+        }
+        if (user.getCouponUsageFrequency() == null) {
+            throw new IllegalArgumentException("User coupon usage frequency must not be null");
+        }
 
-    public CouponService() {
-    }
-
-    public static CouponResult applyCoupon(Coupon coupon, ServicePlan plan, FirebaseUser user, String language) { // TODO: Remove language from param.
-
+        // Create result object
         CouponResult result = new CouponResult();
+        result.setValid(false);
 
-        if(coupon.getUserIdsAllowed() != null && !coupon.getUserIdsAllowed().isEmpty() && !coupon.getUserIdsAllowed().contains(user.getUid())) {
-            result.setValid(false);
-            result.setMessage(TranslationService.translate("coupon.not_enabled", language));
+        // Check if coupon is expired
+        if (coupon.getExpiresAt() != null && coupon.getExpiresAt() < System.currentTimeMillis()) {
+            result.setError("Coupon is expired");
             return result;
         }
 
-        if (!coupon.isEnabled()) {
-            result.setValid(false);
-            result.setMessage(TranslationService.translate("coupon.not_enabled", language));
+        // Check minimum amount
+        if (servicePlan.getAmount() < coupon.getMinAmount()) {
+            result.setError("Order amount is below the minimum amount required for this coupon");
             return result;
         }
 
-        if (coupon.getStartDate().after(new Timestamp(System.currentTimeMillis()))) {
-            result.setValid(false);
-            result.setMessage(TranslationService.translate("coupon.not_yet_started", language));
+        // Check expert ID match
+        if (!coupon.getExpertId().equals(servicePlan.getExpertId())) {
+            result.setError("Coupon is not valid for this expert");
             return result;
         }
 
-        if (coupon.getEndDate().before(new Timestamp(System.currentTimeMillis()))) {
-            result.setValid(false);
-            result.setMessage("Coupon is expired");
-            return result;
+        // Check max usage
+        if (coupon.getMaxUsage() != null) {
+            Long usageCount = user.getCouponUsageFrequency().getOrDefault(coupon.getCode(), 0L);
+            if (usageCount >= coupon.getMaxUsage()) {
+                result.setError("Coupon has reached its maximum usage limit");
+                return result;
+            }
         }
 
-        // Check minimum cart amount
-        if (coupon.getMinCartAmount() != null && coupon.getMinCartAmount() > plan.getAmount()) {
-            result.setValid(false);
-            result.setMessage("Minimum cart amount not met");
-            return result;
+        // Calculate discount
+        double discountAmount;
+        if (coupon.getType() == Coupon.CouponType.FLAT) {
+            discountAmount = coupon.getValue();
+        } else { // PERCENTAGE
+            discountAmount = (servicePlan.getAmount() * coupon.getValue()) / 100;
         }
 
-        // Check total usage limit
-        if (coupon.getTotalUsageLimit() != null && coupon.getClaimsMadeSoFar() != null && coupon.getTotalUsageLimit() <= coupon.getClaimsMadeSoFar()) {
-            result.setValid(false);
-            result.setMessage("Total usage limit reached");
-            return result;
+        // Apply max discount cap
+        if (coupon.getMaxDiscount() != null && discountAmount > coupon.getMaxDiscount()) {
+            discountAmount = coupon.getMaxDiscount();
         }
 
-        if (coupon.getMaxClaimsPerUser() != null
-                && coupon.getMaxClaimsPerUser() <= user.getCouponUsageFrequency().get(coupon.getCode())
-        ) {
-            result.setValid(false);
-            result.setMessage("Max claims per user reached");
-            return result;
-        }
-
-        if (coupon.getType().equals(Coupon.CouponType.FLAT)) {
-            result.setDiscount(Math.min(coupon.getDiscount(), plan.getAmount()));
-            result.setNewAmount(Math.max(0, plan.getAmount() - coupon.getDiscount()));
-        }
-
-        if (coupon.getType().equals(Coupon.CouponType.PERCENTAGE)) {
-            result.setDiscount(Math.ceil(plan.getAmount() * coupon.getDiscount()) / 100);
-            result.setNewAmount(plan.getAmount() - result.getDiscount());
-        }
-
+        // Set final amounts
+        double finalAmount = servicePlan.getAmount() - discountAmount;
         result.setValid(true);
-        result.setMessage("Coupon applied successfully");
+        result.setDiscount(discountAmount);
+        result.setNewAmount(finalAmount);
+
         return result;
     }
 }
