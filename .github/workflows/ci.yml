@@ -28,11 +28,21 @@ jobs:
         options: --privileged
     steps:
       - uses: actions/checkout@v3
+      - name: Checkout secrets repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.repository_owner }}/kitree-secrets
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          path: secrets
       - name: Set up JDK 17
         uses: actions/setup-java@v3
         with:
           java-version: '17'
           distribution: 'zulu'
+      - name: Copy service account key
+        run: |
+          mkdir -p src/test/resources
+          cp secrets/kitree-lambda/serviceAccountKeyTest.json src/test/resources/test-service-account.json
       - name: Start Firebase Emulator (background)
         run: |
           docker run -d --name firebase-emulator -p 8080:8080 -p 9099:9099 \
@@ -49,11 +59,21 @@ jobs:
     needs: integration-tests
     steps:
       - uses: actions/checkout@v3
+      - name: Checkout secrets repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.repository_owner }}/kitree-secrets
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          path: secrets
       - name: Set up JDK 17
         uses: actions/setup-java@v3
         with:
           java-version: '17'
           distribution: 'zulu'
+      - name: Copy service account key
+        run: |
+          mkdir -p src/test/resources
+          cp secrets/kitree-lambda/serviceAccountKeyTest.json src/test/resources/test-service-account.json
       - name: Start Firebase Emulator (background)
         run: |
           docker run -d --name firebase-emulator -p 8080:8080 -p 9099:9099 \
