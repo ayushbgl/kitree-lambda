@@ -24,6 +24,7 @@ env:
   FIREBASE_TEST_DIR: firebase-test
   FIREBASE_PROD_DIR: firebase-prod
   LAMBDA_RESOURCE_NAME: JavaFunction
+  SAM_CLI_TELEMETRY:0
 
 jobs:
   deploy:
@@ -417,7 +418,7 @@ jobs:
         if: always() && github.event.inputs.environment != 'only-sync-rules'
         run: |
           if [ -f ".aws-sam/build/packaged.yaml" ]; then
-            S3_URI=$(grep -A 1 "CodeUri:" .aws-sam/build/packaged.yaml | grep "s3://" | tr -d ' ')
+            S3_URI=$(grep -A 1 "CodeUri:" .aws-sam/build/packaged.yaml | grep "s3://" | sed 's/^[[:space:]]*//')
             if [ ! -z "$S3_URI" ]; then
               echo "🧹 Cleaning up S3 artifact: $S3_URI"
               aws s3 rm "$S3_URI" || echo "❌ Failed to delete S3 artifact"
