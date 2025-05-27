@@ -13,6 +13,10 @@ on:
           - both
           - only-sync-rules
 
+permissions:
+  contents: read
+  id-token: write
+
 env:
   DEPLOYMENT_BUCKET: kitree-backend
   FIREBASE_PROJECT_ID_TEST: kitree-test
@@ -26,10 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout main repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Checkout secrets repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/kitree-secrets
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
