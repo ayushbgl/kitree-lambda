@@ -37,6 +37,12 @@ dependencies {
     testAnnotationProcessor 'org.projectlombok:lombok:1.18.32'
 }
 
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
 test {
     useJUnitPlatform()
     testLogging {
@@ -44,14 +50,14 @@ test {
         showStandardStreams = true
     }
     
-    // Ensure test resources are included
-    testClassesDirs = files(sourceSets.test.output.classesDirs)
+    // Use the new test configuration API
+    testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
     
-    // Copy test resources to the test classpath
+    // Copy test resources using the new API
     doFirst {
         copy {
-            from sourceSets.test.resources.srcDirs
+            from sourceSets.test.resources
             into sourceSets.test.output.resourcesDir
         }
     }
