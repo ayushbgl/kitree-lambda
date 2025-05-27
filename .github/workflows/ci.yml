@@ -1,13 +1,24 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_unit_tests:
+        description: 'Run Unit Tests'
+        type: boolean
+        default: true
+      run_integration_tests:
+        description: 'Run Integration Tests'
+        type: boolean
+        default: true
+      run_e2e_tests:
+        description: 'Run End-to-End Tests'
+        type: boolean
+        default: true
 
 jobs:
   unit-tests:
+    if: ${{ github.event.inputs.run_unit_tests != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -30,12 +41,34 @@ jobs:
             ls -l build/reports/tests/test/classes/
             echo "----------------------------------------"
             echo "Test Results:"
-            find build/reports/tests/test/classes/ -name "*.html" -exec grep -A 5 "Test Summary" {} \;
+            for file in build/reports/tests/test/classes/*.html; do
+              if [ -f "$file" ]; then
+                echo "----------------------------------------"
+                echo "File: $(basename "$file")"
+                echo "----------------------------------------"
+                # Extract test class name
+                class_name=$(basename "$file" .html)
+                echo "Class: $class_name"
+                # Extract test summary
+                echo "Summary:"
+                grep -A 5 "Test Summary" "$file" || echo "No summary found"
+                # Extract test results
+                echo "Results:"
+                grep -A 10 "Test Results" "$file" || echo "No results found"
+                # Extract failures if any
+                if grep -q "Failures" "$file"; then
+                  echo "Failures:"
+                  grep -A 20 "Failures" "$file"
+                fi
+                echo ""
+              fi
+            done
           else
             echo "No test results found"
           fi
 
   integration-tests:
+    if: ${{ github.event.inputs.run_integration_tests != 'false' }}
     runs-on: ubuntu-latest
     needs: unit-tests
     services:
@@ -186,12 +219,34 @@ jobs:
             ls -l build/reports/tests/test/classes/
             echo "----------------------------------------"
             echo "Test Results:"
-            find build/reports/tests/test/classes/ -name "*.html" -exec grep -A 5 "Test Summary" {} \;
+            for file in build/reports/tests/test/classes/*.html; do
+              if [ -f "$file" ]; then
+                echo "----------------------------------------"
+                echo "File: $(basename "$file")"
+                echo "----------------------------------------"
+                # Extract test class name
+                class_name=$(basename "$file" .html)
+                echo "Class: $class_name"
+                # Extract test summary
+                echo "Summary:"
+                grep -A 5 "Test Summary" "$file" || echo "No summary found"
+                # Extract test results
+                echo "Results:"
+                grep -A 10 "Test Results" "$file" || echo "No results found"
+                # Extract failures if any
+                if grep -q "Failures" "$file"; then
+                  echo "Failures:"
+                  grep -A 20 "Failures" "$file"
+                fi
+                echo ""
+              fi
+            done
           else
             echo "No test results found"
           fi
 
   e2e-tests:
+    if: ${{ github.event.inputs.run_e2e_tests != 'false' }}
     runs-on: ubuntu-latest
     needs: integration-tests
     services:
@@ -342,7 +397,28 @@ jobs:
             ls -l build/reports/tests/test/classes/
             echo "----------------------------------------"
             echo "Test Results:"
-            find build/reports/tests/test/classes/ -name "*.html" -exec grep -A 5 "Test Summary" {} \;
+            for file in build/reports/tests/test/classes/*.html; do
+              if [ -f "$file" ]; then
+                echo "----------------------------------------"
+                echo "File: $(basename "$file")"
+                echo "----------------------------------------"
+                # Extract test class name
+                class_name=$(basename "$file" .html)
+                echo "Class: $class_name"
+                # Extract test summary
+                echo "Summary:"
+                grep -A 5 "Test Summary" "$file" || echo "No summary found"
+                # Extract test results
+                echo "Results:"
+                grep -A 10 "Test Results" "$file" || echo "No results found"
+                # Extract failures if any
+                if grep -q "Failures" "$file"; then
+                  echo "Failures:"
+                  grep -A 20 "Failures" "$file"
+                fi
+                echo ""
+              fi
+            done
           else
             echo "No test results found"
           fi 
