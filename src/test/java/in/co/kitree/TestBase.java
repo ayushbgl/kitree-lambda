@@ -29,6 +29,7 @@ public abstract class TestBase {
         // Set environment variables for emulators
         System.setProperty("FIRESTORE_EMULATOR_HOST", FIRESTORE_EMULATOR_HOST);
         System.setProperty("FIREBASE_AUTH_EMULATOR_HOST", AUTH_EMULATOR_HOST);
+        System.setProperty("FIREBASE_AUTH_EMULATOR_SKIP_CREDENTIALS_VALIDATION", "true");
 
         // Load the service account file
         GoogleCredentials credentials = GoogleCredentials.fromStream(
