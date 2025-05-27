@@ -107,7 +107,7 @@ jobs:
           cat > .firebaserc << EOF
           {
             "projects": {
-              "default": "kitree-test"
+              "default": "kitree-emulator"
             }
           }
           EOF
@@ -135,7 +135,7 @@ jobs:
           echo "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }" > firestore.rules
           
           # Start emulators using Firebase CLI
-          firebase emulators:start --project kitree-test --only auth,firestore &
+          firebase emulators:start --project kitree-emulator --only auth,firestore &
           
           # Function to check if a service is ready
           wait_for_service() {
@@ -184,7 +184,7 @@ jobs:
           # Additional verification for Firestore emulator
           echo "Verifying Firestore emulator..."
           for i in {1..5}; do
-            if curl -s http://localhost:8080/emulator/v1/projects/kitree-test/databases/\(default\)/documents > /dev/null; then
+            if curl -s http://localhost:8080/emulator/v1/projects/kitree-emulator/databases/\(default\)/documents > /dev/null; then
               echo "Firestore emulator is responding"
               break
             fi
@@ -206,7 +206,7 @@ jobs:
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           FIREBASE_AUTH_EMULATOR_HOST: localhost:9099
-          FIREBASE_PROJECT_ID: kitree-test
+          FIREBASE_PROJECT_ID: kitree-emulator
         run: ./gradlew test --tests '*IntegrationTest*' --info --console=plain
       - name: Show Integration Test Summary
         if: always()
@@ -285,7 +285,7 @@ jobs:
           cat > .firebaserc << EOF
           {
             "projects": {
-              "default": "kitree-test"
+              "default": "kitree-emulator"
             }
           }
           EOF
@@ -313,7 +313,7 @@ jobs:
           echo "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }" > firestore.rules
           
           # Start emulators using Firebase CLI
-          firebase emulators:start --project kitree-test --only auth,firestore &
+          firebase emulators:start --project kitree-emulator --only auth,firestore &
           
           # Function to check if a service is ready
           wait_for_service() {
@@ -362,7 +362,7 @@ jobs:
           # Additional verification for Firestore emulator
           echo "Verifying Firestore emulator..."
           for i in {1..5}; do
-            if curl -s http://localhost:8080/emulator/v1/projects/kitree-test/databases/\(default\)/documents > /dev/null; then
+            if curl -s http://localhost:8080/emulator/v1/projects/kitree-emulator/databases/\(default\)/documents > /dev/null; then
               echo "Firestore emulator is responding"
               break
             fi
@@ -384,7 +384,7 @@ jobs:
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           FIREBASE_AUTH_EMULATOR_HOST: localhost:9099
-          FIREBASE_PROJECT_ID: kitree-test
+          FIREBASE_PROJECT_ID: kitree-emulator
         run: ./gradlew test --tests '*EndToEndTest*' --info --console=plain
       - name: Show End-to-End Test Summary
         if: always()

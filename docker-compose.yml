@@ -9,4 +9,17 @@ services:
     volumes:
       - .:/workspace
     working_dir: /workspace
-    command: firebase emulators:start --project demo 
+    command: firebase emulators:start --project kitree-emulator --only auth,firestore
+
+  test-runner:
+    image: gradle:7.6.1-jdk17
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    environment:
+      - FIRESTORE_EMULATOR_HOST=firebase-emulator:8080
+      - FIREBASE_AUTH_EMULATOR_HOST=firebase-emulator:9099
+      - ENVIRONMENT=test
+    depends_on:
+      - firebase-emulator
+    command: ./gradlew test 

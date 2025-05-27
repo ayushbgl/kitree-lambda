@@ -51,20 +51,42 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     public Handler() {
         try {
-            FileInputStream serviceAccount;
-            if (!isTest()) {
-                serviceAccount = new FileInputStream("serviceAccountKey.json");
-            } else {
-                serviceAccount = new FileInputStream("serviceAccountKeyTest.json");
+            if (FirebaseApp.getApps().isEmpty()) {
+                if (!isTest()) {
+                    FirebaseOptions options = FirebaseOptions.builder()
+                        .setCredentials(GoogleCredentials.fromStream(
+                            getClass().getResourceAsStream("/serviceAccountKey.json")))
+                        .build();
+                    FirebaseApp.initializeApp(options);
+                } else {
+                    FirebaseOptions options = FirebaseOptions.builder()
+                        .setCredentials(GoogleCredentials.fromStream(
+                            getClass().getResourceAsStream("/serviceAccountKeyTest.json")))
+                        .build();
+                    FirebaseApp.initializeApp(options);
+                }
             }
-            FirebaseOptions options = FirebaseOptions.builder().setCredentials(GoogleCredentials.fromStream(serviceAccount)).build();
-            FirebaseApp.initializeApp(options);
             this.db = FirestoreClient.getFirestore();
             this.razorpay = new Razorpay(isTest());
-//            this.stripeService = new StripeService(isTest());
             pythonLambdaService = LambdaInvokerFactory.builder().lambdaClient(AWSLambdaClientBuilder.defaultClient()).build(PythonLambdaService.class);
         } catch (Exception e) {
-            System.out.println("Error here" + e);
+            System.out.println("Error initializing Handler: " + e.getMessage());
+            if (isTest()) {
+                // In test environment, we can continue without some services
+                this.db = FirestoreClient.getFirestore();
+                try {
+                    this.razorpay = new Razorpay(true);
+                } catch (RazorpayException ex) {
+                    System.out.println("Warning: Could not initialize Razorpay in test environment: " + ex.getMessage());
+                }
+                try {
+                    pythonLambdaService = LambdaInvokerFactory.builder().lambdaClient(AWSLambdaClientBuilder.defaultClient()).build(PythonLambdaService.class);
+                } catch (Exception ex) {
+                    System.out.println("Warning: Could not initialize pythonLambdaService in test environment: " + ex.getMessage());
+                }
+            } else {
+                throw new RuntimeException("Failed to initialize Handler", e);
+            }
         }
     }
 
@@ -1212,7 +1234,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     private boolean isTest() {
-        return "test".equals(System.getenv().get("ENVIRONMENT"));
+        return "test".equals(System.getProperty("ENVIRONMENT"));
     }
 
     private boolean isAdmin(String userId) throws FirebaseAuthException {

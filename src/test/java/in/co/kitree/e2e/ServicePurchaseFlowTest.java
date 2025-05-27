@@ -1,17 +1,12 @@
 package in.co.kitree.e2e;
 
-import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.firestore.Firestore;
-import com.google.firebase.FirebaseApp;
-import com.google.firebase.FirebaseOptions;
-import com.google.firebase.cloud.FirestoreClient;
+import in.co.kitree.TestBase;
 import in.co.kitree.pojos.*;
 import in.co.kitree.services.CouponService;
-import in.co.kitree.services.UserService;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.TestInstance;
 
-import java.io.ByteArrayInputStream;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -19,41 +14,10 @@ import java.util.concurrent.ExecutionException;
 import static org.junit.jupiter.api.Assertions.*;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class ServicePurchaseFlowTest {
-
-    private static final String EMULATOR_HOST = "localhost";
-    private static final int FIRESTORE_PORT = 8080;
-    private static final int AUTH_PORT = 9099;
-    
+public class ServicePurchaseFlowTest extends TestBase {
     private FirebaseUser testUser;
     private ServicePlan testServicePlan;
     private Coupon testCoupon;
-    private Firestore firestore;
-
-    @BeforeAll
-    void setUpFirebase() throws java.io.IOException {
-        // Set environment variables for emulator
-        System.setProperty("FIRESTORE_EMULATOR_HOST", EMULATOR_HOST + ":" + FIRESTORE_PORT);
-        System.setProperty("FIREBASE_AUTH_EMULATOR_HOST", EMULATOR_HOST + ":" + AUTH_PORT);
-        
-        // Initialize Firebase with test service account
-        FirebaseOptions options = FirebaseOptions.builder()
-            .setCredentials(GoogleCredentials.fromStream(
-                getClass().getResourceAsStream("/test-service-account.json")))
-            .setProjectId("kitree-test")
-            .build();
-            
-        FirebaseApp.initializeApp(options);
-        
-        firestore = FirestoreClient.getFirestore();
-    }
-
-    @AfterAll
-    void tearDown() {
-        try {
-            FirebaseApp.getInstance().delete();
-        } catch (Exception ignored) {}
-    }
 
     @BeforeEach
     void setUp() throws ExecutionException, InterruptedException {
@@ -65,7 +29,7 @@ public class ServicePurchaseFlowTest {
         testUser.setCouponUsageFrequency(new HashMap<>());
 
         // Save user to Firestore emulator
-        firestore.collection("users").document(testUser.getUid()).set(testUser).get();
+        db.collection("users").document(testUser.getUid()).set(testUser).get();
 
         // Create test service plan
         testServicePlan = new ServicePlan();
@@ -76,7 +40,7 @@ public class ServicePurchaseFlowTest {
         testServicePlan.setDescription("Test Service Description");
 
         // Save service plan to Firestore emulator
-        firestore.collection("servicePlans").document(testServicePlan.getId()).set(testServicePlan).get();
+        db.collection("servicePlans").document(testServicePlan.getId()).set(testServicePlan).get();
 
         // Create test coupon
         testCoupon = new Coupon();
@@ -88,20 +52,20 @@ public class ServicePurchaseFlowTest {
         testCoupon.setExpertId("test-expert-id");
 
         // Save coupon to Firestore emulator
-        firestore.collection("coupons").document(testCoupon.getCode()).set(testCoupon).get();
+        db.collection("coupons").document(testCoupon.getCode()).set(testCoupon).get();
     }
 
     @AfterEach
     void cleanup() throws ExecutionException, InterruptedException {
         // Clean up test data
         if (testUser != null) {
-            firestore.collection("users").document(testUser.getUid()).delete().get();
+            db.collection("users").document(testUser.getUid()).delete().get();
         }
         if (testServicePlan != null) {
-            firestore.collection("servicePlans").document(testServicePlan.getId()).delete().get();
+            db.collection("servicePlans").document(testServicePlan.getId()).delete().get();
         }
         if (testCoupon != null) {
-            firestore.collection("coupons").document(testCoupon.getCode()).delete().get();
+            db.collection("coupons").document(testCoupon.getCode()).delete().get();
         }
     }
 
@@ -199,7 +163,7 @@ public class ServicePurchaseFlowTest {
         expiredCoupon.setMinAmount(500);
         expiredCoupon.setMaxDiscount(200);
         expiredCoupon.setExpertId("test-expert-id");
-        expiredCoupon.setExpiresAt(System.currentTimeMillis() - 1000); // Expired
+        expiredCoupon.setExpiresAt(System.currentTimeMillis() - 1000); // Expired 1 second ago
 
         // 2. Try to apply expired coupon
         CouponResult couponResult = CouponService.applyCoupon(expiredCoupon, testServicePlan, testUser, "en");
