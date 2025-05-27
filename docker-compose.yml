@@ -1,0 +1,28 @@
+services:
+  test-runner:
+    image: kitree-lambda-test-runner
+    build:
+      context: .
+      dockerfile: Dockerfile.combined
+    ports:
+      - "8080:8080"  # Firestore
+      - "9099:9099"  # Auth
+    volumes:
+      - ./src:/workspace/src
+      - ./build:/workspace/build
+      - ./gradle:/workspace/gradle
+      - ./gradlew:/workspace/gradlew
+      - ./build.gradle:/workspace/build.gradle
+      - ./settings.gradle:/workspace/settings.gradle
+      - ./secrets.json:/workspace/secrets.json
+      - ./firebase-data:/firebase-data
+    environment:
+      - ENVIRONMENT=test
+      - FIRESTORE_EMULATOR_HOST=localhost:8080
+      - FIREBASE_AUTH_EMULATOR_HOST=localhost:9099
+      # - AWS_REGION=us-east-1
+      # - AWS_ACCESS_KEY_ID=test
+      # - AWS_SECRET_ACCESS_KEY=test
+    # depends_on:
+    #   firebase-emulator:
+    #     condition: service_healthy 

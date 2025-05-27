@@ -12,28 +12,31 @@ public class CouponService {
     public CouponService() {
     }
 
-    public static CouponResult applyCoupon(Coupon coupon, ServicePlan plan, FirebaseUser user, String language) { // TODO: Remove language from param.
-
+    public static CouponResult applyCoupon(Coupon coupon, ServicePlan plan, FirebaseUser user, String language) {
         CouponResult result = new CouponResult();
 
+        // Check if user is in allowed list
         if(coupon.getUserIdsAllowed() != null && !coupon.getUserIdsAllowed().isEmpty() && !coupon.getUserIdsAllowed().contains(user.getUid())) {
             result.setValid(false);
             result.setMessage(TranslationService.translate("coupon.not_enabled", language));
             return result;
         }
 
+        // Check if coupon is enabled
         if (!coupon.isEnabled()) {
             result.setValid(false);
             result.setMessage(TranslationService.translate("coupon.not_enabled", language));
             return result;
         }
 
+        // Check start date
         if (coupon.getStartDate().after(new Timestamp(System.currentTimeMillis()))) {
             result.setValid(false);
             result.setMessage(TranslationService.translate("coupon.not_yet_started", language));
             return result;
         }
 
+        // Check end date
         if (coupon.getEndDate().before(new Timestamp(System.currentTimeMillis()))) {
             result.setValid(false);
             result.setMessage("Coupon is expired");
@@ -54,6 +57,7 @@ public class CouponService {
             return result;
         }
 
+        // Check max claims per user
         if (coupon.getMaxClaimsPerUser() != null
                 && coupon.getMaxClaimsPerUser() <= user.getCouponUsageFrequency().get(coupon.getCode())
         ) {
@@ -62,6 +66,7 @@ public class CouponService {
             return result;
         }
 
+        // Calculate discount based on type
         if (coupon.getType().equals(Coupon.CouponType.FLAT)) {
             result.setDiscount(Math.min(coupon.getDiscount(), plan.getAmount()));
             result.setNewAmount(Math.max(0, plan.getAmount() - coupon.getDiscount()));

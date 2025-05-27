@@ -171,3 +171,15 @@ src/main/resources/secrets.json
 src/main/resources/serviceAccountKey.json
 src/main/resources/serviceAccountKeyTest.json
 src/test/resources/test-service-account.json
+
+# Firebase debug logs
+firebase-debug.log
+firestore-debug.log
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Firebase emulator data
+firebase-data/

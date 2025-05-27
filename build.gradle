@@ -19,17 +19,38 @@ dependencies {
     implementation 'com.cloudinary:cloudinary-http44:1.39.0'
     implementation 'com.stripe:stripe-java:27.1.1'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    implementation 'org.projectlombok:lombok:1.18.32'
+    annotationProcessor 'org.projectlombok:lombok:1.18.32'
 
     // Test dependencies
-    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.9.2'
-    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.9.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params:5.10.2'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
     testImplementation 'org.mockito:mockito-core:5.11.0'
     testImplementation 'org.mockito:mockito-junit-jupiter:5.11.0'
     testImplementation 'com.google.firebase:firebase-admin:9.4.1'
     testImplementation 'com.google.cloud:google-cloud-firestore:3.27.3'
-    testImplementation 'org.testcontainers:testcontainers:1.19.7'
-    testImplementation 'org.testcontainers:junit-jupiter:1.19.7'
-    testImplementation 'org.testcontainers:localstack:1.19.7'
+    testImplementation 'org.testcontainers:testcontainers:1.19.8'
+    testImplementation 'org.testcontainers:junit-jupiter:1.19.8'
+    testImplementation 'org.testcontainers:localstack:1.19.8'
+    testImplementation 'org.projectlombok:lombok:1.18.32'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.32'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+// Skip tests when SAM is building, but allow them to run normally otherwise
+allprojects {
+    tasks.withType(Test) {
+        onlyIf {
+            System.getProperty("software.amazon.aws.lambdabuilders.scratch-dir") == null ||
+            System.getenv("GRADLE_SAM_EXECUTE_TEST") != null
+        }
+    }
 }
 
 test {
@@ -39,14 +60,14 @@ test {
         showStandardStreams = true
     }
     
-    // Ensure test resources are included
-    testClassesDirs = files(sourceSets.test.output.classesDirs)
+    // Use the new test configuration API
+    testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
     
-    // Copy test resources to the test classpath
+    // Copy test resources using the new API
     doFirst {
         copy {
-            from sourceSets.test.resources.srcDirs
+            from sourceSets.test.resources
             into sourceSets.test.output.resourcesDir
         }
     }

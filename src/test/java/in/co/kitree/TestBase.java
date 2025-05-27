@@ -10,56 +10,36 @@ import com.google.firebase.auth.UserRecord;
 import com.google.firebase.auth.FirebaseAuthException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
-@Testcontainers
 public abstract class TestBase {
     protected static Firestore db;
     protected static FirebaseAuth auth;
     protected static final int FIRESTORE_PORT = 8080;
     protected static final int AUTH_PORT = 9099;
-    protected static final String FIRESTORE_EMULATOR_HOST = "localhost:" + FIRESTORE_PORT;
-    protected static final String AUTH_EMULATOR_HOST = "localhost:" + AUTH_PORT;
-
-    @Container
-    protected static final GenericContainer<?> firestoreEmulator = new GenericContainer<>(
-            DockerImageName.parse("gcr.io/google.com/cloudsdktool/cloud-sdk:latest"))
-            .withExposedPorts(FIRESTORE_PORT)
-            .withCommand("gcloud", "beta", "emulators", "firestore", "start", "--host-port=0.0.0.0:" + FIRESTORE_PORT);
-
-    @Container
-    protected static final GenericContainer<?> authEmulator = new GenericContainer<>(
-            DockerImageName.parse("gcr.io/google.com/cloudsdktool/cloud-sdk:latest"))
-            .withExposedPorts(AUTH_PORT)
-            .withCommand("gcloud", "beta", "emulators", "auth", "start", "--host-port=0.0.0.0:" + AUTH_PORT);
+    protected static final String FIRESTORE_EMULATOR_HOST = System.getenv("CI") != null ? "localhost:" + FIRESTORE_PORT : "127.0.0.1:" + FIRESTORE_PORT;
+    protected static final String AUTH_EMULATOR_HOST = System.getenv("CI") != null ? "localhost:" + AUTH_PORT : "127.0.0.1:" + AUTH_PORT;
 
     @BeforeAll
     public static void setupFirebase() throws IOException {
-        // Start the emulators
-        firestoreEmulator.start();
-        authEmulator.start();
-        
         // Set environment variables for emulators
         System.setProperty("FIRESTORE_EMULATOR_HOST", FIRESTORE_EMULATOR_HOST);
         System.setProperty("FIREBASE_AUTH_EMULATOR_HOST", AUTH_EMULATOR_HOST);
+        System.setProperty("FIREBASE_AUTH_EMULATOR_SKIP_CREDENTIALS_VALIDATION", "true");
 
         // Load the service account file
         GoogleCredentials credentials = GoogleCredentials.fromStream(
-            TestBase.class.getClassLoader().getResourceAsStream("test-service-account.json")
+            TestBase.class.getClassLoader().getResourceAsStream("serviceAccountKeyTest.json")
         );
 
         // Initialize Firebase with the service account
         FirebaseOptions options = FirebaseOptions.builder()
                 .setCredentials(credentials)
-                .setProjectId("kitree-test")
+                .setProjectId("kitree-emulator")
                 .build();
 
         if (FirebaseApp.getApps().isEmpty()) {
@@ -74,8 +54,25 @@ public abstract class TestBase {
     @BeforeEach
     public void clearFirestore() throws ExecutionException, InterruptedException {
         // Clear all collections before each test
-        // This is a placeholder - we'll implement the actual clearing logic
-        // when we have the collection structure from your Firebase rules
+        clearCollection("users");
+        clearCollection("servicePlans");
+        clearCollection("coupons");
+        clearCollection("orders");
+        
+        // Clear any test users from Auth
+        try {
+            auth.listUsers(null).iterateAll().forEach(user -> {
+                if (user.getUid().startsWith("test-")) {
+                    try {
+                        auth.deleteUser(user.getUid());
+                    } catch (FirebaseAuthException e) {
+                        System.err.println("Failed to delete test user: " + user.getUid());
+                    }
+                }
+            });
+        } catch (FirebaseAuthException e) {
+            System.err.println("Failed to list users for cleanup: " + e.getMessage());
+        }
     }
 
     protected Map<String, Object> createTestUser(String userId) {
