@@ -96,7 +96,10 @@ main() {
     kill $LOG_PID 2>/dev/null
 
     # Get the exit code from the test runner container
-    EXIT_CODE=$(docker-compose ps -q test-runner | xargs docker inspect -f '{{.State.ExitCode}}')
+    EXIT_CODE=$(docker wait kitree-lambda-test-runner-1)
+    if [ -z "$EXIT_CODE" ] || ! [[ "$EXIT_CODE" =~ ^[0-9]+$ ]]; then
+        EXIT_CODE=1
+    fi
 
     # Cleanup after tests
     cleanup

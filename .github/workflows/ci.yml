@@ -29,6 +29,9 @@ jobs:
           distribution: 'zulu'
       - name: Run Unit Tests
         id: unit-tests
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8080
+          FIREBASE_AUTH_EMULATOR_HOST: localhost:9099
         run: ./gradlew test --tests '*UnitTest*' --info --console=plain
       - name: Show Unit Test Summary
         if: always()
