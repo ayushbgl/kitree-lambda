@@ -161,7 +161,7 @@ public class ServicePurchaseFlowTest extends TestBase {
         // assertTrue(verifyResponse.contains("success"));
         
         // Verify Python Lambda service was called if needed
-        // verify(pythonLambdaService, atLeastOnce()).invokePythonLambda(any());
+        verify(pythonLambdaService, atLeastOnce()).invokePythonLambda(any());
     }
 
     @Test
