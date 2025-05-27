@@ -25,7 +25,7 @@ public abstract class TestBase {
     protected static final String AUTH_EMULATOR_HOST = System.getenv("CI") != null ? "localhost:" + AUTH_PORT : "127.0.0.1:" + AUTH_PORT;
 
     @BeforeAll
-    public static void setupFirebase() throws IOException {
+    public static void setupFirebase() throws IOException, FirebaseAuthException {
         // Set environment variables for emulators
         System.setProperty("FIRESTORE_EMULATOR_HOST", FIRESTORE_EMULATOR_HOST);
         System.setProperty("FIREBASE_AUTH_EMULATOR_HOST", AUTH_EMULATOR_HOST);
