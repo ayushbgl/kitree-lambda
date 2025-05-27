@@ -27,38 +27,25 @@ Our testing strategy follows a multi-layered approach to ensure code quality and
 ## Running Tests Locally
 
 ### Prerequisites
-1. Java 11 or higher
-2. Maven
-3. Firebase CLI
-4. Docker (for emulators)
+1. Java 17 or higher
+2. Gradle
+3. Docker (for Firebase emulators)
 
-### Setup Firebase Emulators
+### Setup and Running Tests
 ```bash
-# Install Firebase CLI if not already installed
-npm install -g firebase-tools
+# Start Firebase emulators using Docker
+docker-compose up -d
 
-# Login to Firebase
-firebase login
-
-# Initialize Firebase emulators
-firebase init emulators
-
-# Start emulators
-firebase emulators:start
-```
-
-### Running Tests
-```bash
 # Run all tests
-mvn test
+./gradlew test
 
 # Run specific test categories
-mvn test -Dtest=*UnitTest
-mvn test -Dtest=*IntegrationTest
-mvn test -Dtest=*E2ETest
+./gradlew test --tests "*UnitTest"
+./gradlew test --tests "*IntegrationTest"
+./gradlew test --tests "*E2ETest"
 
 # Run specific test class
-mvn test -Dtest=ServicePurchaseFlowTest
+./gradlew test --tests "ServicePurchaseFlowTest"
 ```
 
 ## CI/CD Pipeline
@@ -114,7 +101,7 @@ Our CI/CD pipeline runs on GitHub Actions and includes:
 ### Common Issues
 
 1. **Firebase Emulator Connection**
-   - Ensure emulators are running
+   - Ensure Docker containers are running (`docker-compose ps`)
    - Check emulator ports (default: Firestore 8080, Auth 9099)
    - Verify environment variables are set
 
