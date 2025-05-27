@@ -1,77 +1,118 @@
 #!/bin/bash
 
-# Function to check if a service is ready
-wait_for_service() {
-    local host=$1
-    local port=$2
-    local max_attempts=30
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to print status messages
+print_status() {
+    echo -e "${YELLOW}[STATUS]${NC} $1"
+}
+
+# Function to print success messages
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+# Function to print error messages
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Function to check if Docker is running
+check_docker() {
+    if ! docker info > /dev/null 2>&1; then
+        print_error "Docker is not running. Starting Docker..."
+        open -a Docker
+        # Wait for Docker to start
+        while ! docker info > /dev/null 2>&1; do
+            sleep 2
+        done
+        print_success "Docker started successfully"
+    else
+        print_success "Docker is running"
+    fi
+}
+
+# Function to cleanup Docker resources
+cleanup() {
+    print_status "Cleaning up Docker resources..."
+    docker-compose down -v
+    if [ $? -eq 0 ]; then
+        print_success "Docker resources cleaned up successfully"
+    else
+        print_error "Failed to cleanup Docker resources"
+        exit 1
+    fi
+}
+
+# Function to wait for test completion
+wait_for_test_completion() {
+    local container_name="kitree-lambda-test-runner-1"
+    local max_attempts=300  # 5 minutes timeout
     local attempt=1
-    
-    echo "Waiting for service at $host:$port..."
+
+    print_status "Waiting for test completion..."
     while [ $attempt -le $max_attempts ]; do
-        if nc -z $host $port; then
-            echo "Service at $host:$port is ready!"
+        if ! docker ps | grep -q $container_name; then
             return 0
         fi
-        echo "Attempt $attempt/$max_attempts: Service not ready yet..."
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
-    echo "Service at $host:$port failed to start after $max_attempts attempts"
+    print_error "Test runner did not complete within timeout"
     return 1
 }
 
-# Start Firebase emulators and test runner
-echo "Starting Firebase emulators and test runner..."
-docker-compose up -d firebase-emulator
+# Main execution
+main() {
+    # Check if Docker is running
+    check_docker
 
-# Wait for emulators to be ready
-echo "Waiting for emulators to be ready..."
-wait_for_service localhost 8080 || exit 1  # Firestore
-wait_for_service localhost 9099 || exit 1  # Auth
+    # Cleanup existing resources
+    cleanup
 
-# Additional verification for Auth emulator
-echo "Verifying Auth emulator..."
-for i in {1..5}; do
-    if curl -s -X POST http://localhost:9099/identitytoolkit/v3/relyingparty/signupNewUser \
-        -H "Content-Type: application/json" \
-        -d '{"email":"test@example.com","password":"password123"}' > /dev/null; then
-        echo "Auth emulator is responding"
-        break
-    fi
-    if [ $i -eq 5 ]; then
-        echo "Auth emulator failed to respond"
+    # Build and start containers in detached mode
+    print_status "Building and starting containers..."
+    docker-compose up --build -d
+    if [ $? -ne 0 ]; then
+        print_error "Failed to start containers"
+        cleanup
         exit 1
     fi
-    echo "Waiting for Auth emulator to respond... (attempt $i/5)"
-    sleep 2
-done
 
-# Additional verification for Firestore emulator
-echo "Verifying Firestore emulator..."
-for i in {1..5}; do
-    if curl -s http://localhost:8080/emulator/v1/projects/kitree-emulator/databases/\(default\)/documents > /dev/null; then
-        echo "Firestore emulator is responding"
-        break
+    # Follow logs of the test runner
+    print_status "Following test logs..."
+    docker-compose logs -f test-runner &
+    LOG_PID=$!
+
+    # Wait for test completion
+    wait_for_test_completion
+    TEST_RESULT=$?
+
+    # Kill the log following process
+    kill $LOG_PID 2>/dev/null
+
+    # Get the exit code from the test runner container
+    EXIT_CODE=$(docker-compose ps -q test-runner | xargs docker inspect -f '{{.State.ExitCode}}')
+
+    # Cleanup after tests
+    cleanup
+
+    # Check the exit code
+    if [ "$EXIT_CODE" -eq 0 ]; then
+        print_success "Tests completed successfully"
+        exit 0
+    else
+        print_error "Tests failed with exit code $EXIT_CODE"
+        exit $EXIT_CODE
     fi
-    if [ $i -eq 5 ]; then
-        echo "Firestore emulator failed to respond"
-        exit 1
-    fi
-    echo "Waiting for Firestore emulator to respond... (attempt $i/5)"
-    sleep 2
-done
+}
 
-# Run the tests in Docker
-echo "Running tests in Docker..."
-docker-compose up test-runner
+# Trap SIGINT (Ctrl+C) and cleanup
+trap cleanup SIGINT
 
-# Capture test result
-TEST_RESULT=$?
-
-# Stop emulators
-echo "Stopping emulators..."
-docker-compose down
-
-# Exit with test result
-exit $TEST_RESULT 
+# Run main function
+main 

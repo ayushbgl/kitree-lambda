@@ -5,6 +5,10 @@ import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.google.firebase.auth.FirebaseAuthException;
 import in.co.kitree.pojos.RequestBody;
 import in.co.kitree.pojos.RequestEvent;
+import in.co.kitree.pojos.RequestContext;
+import in.co.kitree.pojos.RequestContextAuthorizer;
+import in.co.kitree.pojos.RequestContextAuthorizerJwt;
+import in.co.kitree.pojos.RequestContextAuthorizerJwtClaims;
 import org.junit.jupiter.api.*;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -66,8 +70,8 @@ class HandlerTest extends TestBase {
 
     @Test
     void testMakeAdminRequest() throws Exception {
-        // Create a make_admin request
-        RequestEvent event = new RequestEvent();
+        // Create a make_admin request with proper JWT claims
+        RequestEvent event = createRequestEventWithUser(TEST_USER_ID);
         RequestBody requestBody = new RequestBody();
         requestBody.setFunction("make_admin");
         requestBody.setAdminSecret("C6DC17344FA8287F92C93B11CDF99");
@@ -83,8 +87,8 @@ class HandlerTest extends TestBase {
 
     @Test
     void testMakeAdminRequestInvalidSecret() {
-        // Create a make_admin request with invalid secret
-        RequestEvent event = new RequestEvent();
+        // Create a make_admin request with invalid secret and proper JWT claims
+        RequestEvent event = createRequestEventWithUser(TEST_USER_ID);
         RequestBody requestBody = new RequestBody();
         requestBody.setFunction("make_admin");
         requestBody.setAdminSecret("invalid-secret");
@@ -100,8 +104,8 @@ class HandlerTest extends TestBase {
 
     @Test
     void testRemoveAdminRequest() throws Exception {
-        // Create a remove_admin request
-        RequestEvent event = new RequestEvent();
+        // Create a remove_admin request with proper JWT claims
+        RequestEvent event = createRequestEventWithUser(TEST_USER_ID);
         RequestBody requestBody = new RequestBody();
         requestBody.setFunction("remove_admin");
         requestBody.setAdminSecret("C6DC17344FA8287F92C93B11CDF99");
@@ -117,8 +121,8 @@ class HandlerTest extends TestBase {
 
     @Test
     void testRemoveAdminRequestInvalidSecret() {
-        // Create a remove_admin request with invalid secret
-        RequestEvent event = new RequestEvent();
+        // Create a remove_admin request with invalid secret and proper JWT claims
+        RequestEvent event = createRequestEventWithUser(TEST_USER_ID);
         RequestBody requestBody = new RequestBody();
         requestBody.setFunction("remove_admin");
         requestBody.setAdminSecret("invalid-secret");
@@ -130,5 +134,19 @@ class HandlerTest extends TestBase {
 
         // Verify the response
         assertEquals("Not Authorized", response);
+    }
+
+    private RequestEvent createRequestEventWithUser(String userId) {
+        RequestEvent event = new RequestEvent();
+        RequestContext requestContext = new RequestContext();
+        RequestContextAuthorizer authorizer = new RequestContextAuthorizer();
+        RequestContextAuthorizerJwt jwt = new RequestContextAuthorizerJwt();
+        RequestContextAuthorizerJwtClaims claims = new RequestContextAuthorizerJwtClaims();
+        claims.setUser_id(userId);
+        jwt.setClaims(claims);
+        authorizer.setJwt(jwt);
+        requestContext.setAuthorizer(authorizer);
+        event.setRequestContext(requestContext);
+        return event;
     }
 } 

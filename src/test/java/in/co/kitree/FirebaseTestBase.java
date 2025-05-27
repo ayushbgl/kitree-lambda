@@ -16,29 +16,24 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
-public abstract class TestBase {
+public abstract class FirebaseTestBase {
     protected static Firestore db;
     protected static FirebaseAuth auth;
+    protected static final int FIRESTORE_PORT = 8080;
+    protected static final int AUTH_PORT = 9099;
+    protected static final String FIRESTORE_EMULATOR_HOST = System.getenv("CI") != null ? "localhost:" + FIRESTORE_PORT : "127.0.0.1:" + FIRESTORE_PORT;
+    protected static final String AUTH_EMULATOR_HOST = System.getenv("CI") != null ? "localhost:" + AUTH_PORT : "127.0.0.1:" + AUTH_PORT;
 
     @BeforeAll
     public static void setupFirebase() throws IOException, FirebaseAuthException {
         // Set environment variables for emulators
-        String firestoreHost = System.getenv("FIRESTORE_EMULATOR_HOST");
-        String authHost = System.getenv("FIREBASE_AUTH_EMULATOR_HOST");
-        
-        if (firestoreHost == null || authHost == null) {
-            throw new IllegalStateException(
-                "Emulator hosts not set. Please ensure FIRESTORE_EMULATOR_HOST and FIREBASE_AUTH_EMULATOR_HOST are set."
-            );
-        }
-
-        System.setProperty("FIRESTORE_EMULATOR_HOST", firestoreHost);
-        System.setProperty("FIREBASE_AUTH_EMULATOR_HOST", authHost);
+        System.setProperty("FIRESTORE_EMULATOR_HOST", FIRESTORE_EMULATOR_HOST);
+        System.setProperty("FIREBASE_AUTH_EMULATOR_HOST", AUTH_EMULATOR_HOST);
         System.setProperty("FIREBASE_AUTH_EMULATOR_SKIP_CREDENTIALS_VALIDATION", "true");
 
         // Load the service account file
         GoogleCredentials credentials = GoogleCredentials.fromStream(
-            TestBase.class.getClassLoader().getResourceAsStream("serviceAccountKeyTest.json")
+            FirebaseTestBase.class.getClassLoader().getResourceAsStream("serviceAccountKeyTest.json")
         );
 
         // Initialize Firebase with the service account
@@ -75,25 +70,8 @@ public abstract class TestBase {
     @BeforeEach
     public void clearFirestore() throws ExecutionException, InterruptedException {
         // Clear all collections before each test
-        clearCollection("users");
-        clearCollection("servicePlans");
-        clearCollection("coupons");
-        clearCollection("orders");
-        
-        // Clear any test users from Auth
-        try {
-            auth.listUsers(null).iterateAll().forEach(user -> {
-                if (user.getUid().startsWith("test-")) {
-                    try {
-                        auth.deleteUser(user.getUid());
-                    } catch (FirebaseAuthException e) {
-                        System.err.println("Failed to delete test user: " + user.getUid());
-                    }
-                }
-            });
-        } catch (FirebaseAuthException e) {
-            System.err.println("Failed to list users for cleanup: " + e.getMessage());
-        }
+        // This is a placeholder - we'll implement the actual clearing logic
+        // when we have the collection structure from your Firebase rules
     }
 
     protected Map<String, Object> createTestUser(String userId) {

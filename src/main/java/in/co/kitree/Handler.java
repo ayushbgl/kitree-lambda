@@ -47,7 +47,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private Razorpay razorpay;
     //    private StripeService stripeService;
     private static LambdaLogger logger;
-    PythonLambdaService pythonLambdaService;
+    protected PythonLambdaService pythonLambdaService;
 
     public Handler() {
         try {
@@ -68,7 +68,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
             this.db = FirestoreClient.getFirestore();
             this.razorpay = new Razorpay(isTest());
-            pythonLambdaService = LambdaInvokerFactory.builder().lambdaClient(AWSLambdaClientBuilder.defaultClient()).build(PythonLambdaService.class);
+            this.pythonLambdaService = createPythonLambdaService();
         } catch (Exception e) {
             System.out.println("Error initializing Handler: " + e.getMessage());
             if (isTest()) {
@@ -80,7 +80,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     System.out.println("Warning: Could not initialize Razorpay in test environment: " + ex.getMessage());
                 }
                 try {
-                    pythonLambdaService = LambdaInvokerFactory.builder().lambdaClient(AWSLambdaClientBuilder.defaultClient()).build(PythonLambdaService.class);
+                    // Set default region for testing
+                    System.setProperty("aws.region", "us-east-1");
+                    this.pythonLambdaService = createPythonLambdaService();
                 } catch (Exception ex) {
                     System.out.println("Warning: Could not initialize pythonLambdaService in test environment: " + ex.getMessage());
                 }
@@ -88,6 +90,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 throw new RuntimeException("Failed to initialize Handler", e);
             }
         }
+    }
+
+    protected PythonLambdaService createPythonLambdaService() {
+        return LambdaInvokerFactory.builder()
+            .lambdaClient(AWSLambdaClientBuilder.standard()
+                .withRegion("us-east-1")
+                .build())
+            .build(PythonLambdaService.class);
     }
 
     public String handleRequest(RequestEvent event, Context context) {
@@ -1234,7 +1244,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     private boolean isTest() {
-        return "test".equals(System.getProperty("ENVIRONMENT"));
+        return "test".equals(System.getenv("ENVIRONMENT"));
     }
 
     private boolean isAdmin(String userId) throws FirebaseAuthException {

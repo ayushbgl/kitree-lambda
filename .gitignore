@@ -180,3 +180,6 @@ firestore-debug.log
 .DS_Store
 .AppleDouble
 .LSOverride
+
+# Firebase emulator data
+firebase-data/

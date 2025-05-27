@@ -1,0 +1,33 @@
+FROM gradle:7.6.1-jdk17
+
+WORKDIR /workspace
+
+# Install Node.js, npm, and curl
+RUN apt-get update && \
+    apt-get install -y curl gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Firebase tools globally
+RUN npm install -g firebase-tools
+
+# Create directory for Firebase data
+RUN mkdir -p /firebase-data && chown gradle:gradle /firebase-data
+
+# Set environment variables
+ENV ENVIRONMENT=test
+ENV FIREBASE_AUTH_EMULATOR_HOST=localhost:9099
+ENV FIRESTORE_EMULATOR_HOST=localhost:8080
+
+# Create startup script
+COPY start.sh /workspace/start.sh
+RUN chmod +x /workspace/start.sh
+
+# Initialize Firebase project if not already initialized
+RUN if [ ! -f "firebase.json" ]; then \
+    echo '{"emulators":{"auth":{"port":9099},"firestore":{"port":8080}}}' > firebase.json; \
+    fi
+
+# Start both services
+CMD ["/workspace/start.sh"] 
