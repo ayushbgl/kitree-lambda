@@ -1331,7 +1331,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     private String getAstrologyDetails(String requestBody) throws Exception {
 
-        String API_URL = "https://kitree-python-server-103661141864.asia-south1.run.app/get_horoscope";
+        String API_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io/get_horoscope";
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(API_URL)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(requestBody)).build();
 
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
