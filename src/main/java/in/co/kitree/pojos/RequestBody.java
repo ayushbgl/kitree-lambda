@@ -55,6 +55,15 @@ public class RequestBody {
     private String userName;
     private String dob;
 
+    // Horoscope fields
+    private Integer horoscopeDate;
+    private Integer horoscopeMonth;
+    private Integer horoscopeYear;
+    private Integer horoscopeHour;
+    private Integer horoscopeMinute;
+    private Double horoscopeLatitude;
+    private Double horoscopeLongitude;
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -354,5 +363,61 @@ public class RequestBody {
 
     public void setDob(String dob) {
         this.dob = dob;
+    }
+
+    public Integer getHoroscopeDate() {
+        return horoscopeDate;
+    }
+
+    public void setHoroscopeDate(Integer horoscopeDate) {
+        this.horoscopeDate = horoscopeDate;
+    }
+
+    public Integer getHoroscopeMonth() {
+        return horoscopeMonth;
+    }
+
+    public void setHoroscopeMonth(Integer horoscopeMonth) {
+        this.horoscopeMonth = horoscopeMonth;
+    }
+
+    public Integer getHoroscopeYear() {
+        return horoscopeYear;
+    }
+
+    public void setHoroscopeYear(Integer horoscopeYear) {
+        this.horoscopeYear = horoscopeYear;
+    }
+
+    public Integer getHoroscopeHour() {
+        return horoscopeHour;
+    }
+
+    public void setHoroscopeHour(Integer horoscopeHour) {
+        this.horoscopeHour = horoscopeHour;
+    }
+
+    public Integer getHoroscopeMinute() {
+        return horoscopeMinute;
+    }
+
+    public void setHoroscopeMinute(Integer horoscopeMinute) {
+        this.horoscopeMinute = horoscopeMinute;
+    }
+
+    public Double getHoroscopeLatitude() {
+        return horoscopeLatitude;
+    }
+
+    public void setHoroscopeLatitude(Double horoscopeLatitude) {
+        this.horoscopeLatitude = horoscopeLatitude;
+    }
+
+    public Double getHoroscopeLongitude() {
+        return horoscopeLongitude;
+    }
+
+    public void setHoroscopeLongitude(Double horoscopeLongitude) {
+        this.horoscopeLongitude = horoscopeLongitude;
     }
 }

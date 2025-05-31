@@ -56,15 +56,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             if (FirebaseApp.getApps().isEmpty()) {
                 if (!isTest()) {
                     FirebaseOptions options = FirebaseOptions.builder()
-                        .setCredentials(GoogleCredentials.fromStream(
-                            getClass().getResourceAsStream("/serviceAccountKey.json")))
-                        .build();
+                            .setCredentials(GoogleCredentials.fromStream(
+                                    getClass().getResourceAsStream("/serviceAccountKey.json")))
+                            .build();
                     FirebaseApp.initializeApp(options);
                 } else {
                     FirebaseOptions options = FirebaseOptions.builder()
-                        .setCredentials(GoogleCredentials.fromStream(
-                            getClass().getResourceAsStream("/serviceAccountKeyTest.json")))
-                        .build();
+                            .setCredentials(GoogleCredentials.fromStream(
+                                    getClass().getResourceAsStream("/serviceAccountKeyTest.json")))
+                            .build();
                     FirebaseApp.initializeApp(options);
                 }
             }
@@ -78,9 +78,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 try {
                     if (FirebaseApp.getApps().isEmpty()) {
                         FirebaseOptions options = FirebaseOptions.builder()
-                            .setCredentials(GoogleCredentials.fromStream(
-                                getClass().getResourceAsStream("/serviceAccountKeyTest.json")))
-                            .build();
+                                .setCredentials(GoogleCredentials.fromStream(
+                                        getClass().getResourceAsStream("/serviceAccountKeyTest.json")))
+                                .build();
                         FirebaseApp.initializeApp(options);
                     }
                     this.db = FirestoreClient.getFirestore();
@@ -88,7 +88,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     System.out.println("Failed to initialize Firebase in test environment: " + firebaseEx.getMessage());
                     throw new RuntimeException("Failed to initialize Firebase in test environment", firebaseEx);
                 }
-                
+
                 try {
                     this.razorpay = new Razorpay(true);
                 } catch (RazorpayException ex) {
@@ -109,19 +109,19 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     protected PythonLambdaService createPythonLambdaService() {
         LambdaClient lambdaClient = LambdaClient.builder()
-            .region(software.amazon.awssdk.regions.Region.AP_SOUTH_1)
-            .build();
-            
+                .region(software.amazon.awssdk.regions.Region.AP_SOUTH_1)
+                .build();
+
         return new PythonLambdaService() {
             @Override
             public PythonLambdaResponseBody invokePythonLambda(PythonLambdaEventRequest request) {
                 try {
                     String payload = gson.toJson(request);
                     InvokeRequest invokeRequest = InvokeRequest.builder()
-                        .functionName("certgen")
-                        .payload(SdkBytes.fromUtf8String(payload))
-                        .build();
-                        
+                            .functionName("certgen")
+                            .payload(SdkBytes.fromUtf8String(payload))
+                            .build();
+
                     InvokeResponse response = lambdaClient.invoke(invokeRequest);
                     String responsePayload = response.payload().asUtf8String();
                     return gson.fromJson(responsePayload, PythonLambdaResponseBody.class);
@@ -820,26 +820,35 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
             if ("get_astrological_details".equals(requestBody.getFunction())) {
                 Map<String, Object> horoscopeApiRequestBody = new HashMap<>();
-                String orderId = requestBody.getOrderId();
-                String clientId = requestBody.getUserId();
 
-                if (orderId == null || orderId.isEmpty() || clientId == null || clientId.isEmpty()) {
-                    return gson.toJson(Map.of("success", false));
+//                TODO: Uncomment later once we integrate with call screen. AI agent: do not change directly, ask me first.
+                //                String orderId = requestBody.getOrderId();
+//                String clientId = requestBody.getUserId();
+
+//                if (orderId == null || orderId.isEmpty() || clientId == null || clientId.isEmpty()) {
+//                    return gson.toJson(Map.of("success", false));
+//                }
+//
+//                FirebaseOrder order = fetchOrder(clientId, orderId);
+//
+//                if (order == null || order.getProfileIds() == null || order.getProfileIds().isEmpty()) {
+//                    return gson.toJson(Map.of("success", false));
+//                }
+
+                // Validate required fields
+                if (requestBody.getHoroscopeDate() == null || requestBody.getHoroscopeMonth() == null ||
+                        requestBody.getHoroscopeYear() == null || requestBody.getHoroscopeHour() == null ||
+                        requestBody.getHoroscopeMinute() == null || requestBody.getHoroscopeLatitude() == null ||
+                        requestBody.getHoroscopeLongitude() == null) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Missing required horoscope details"));
                 }
-
-                FirebaseOrder order = fetchOrder(clientId, orderId);
-
-                if (order == null || order.getProfileIds() == null || order.getProfileIds().isEmpty()) {
-                    return gson.toJson(Map.of("success", false));
-                }
-
-                horoscopeApiRequestBody.put("date", 12);
-                horoscopeApiRequestBody.put("month", 1);
-                horoscopeApiRequestBody.put("year", 1993);
-                horoscopeApiRequestBody.put("hour", 10);
-                horoscopeApiRequestBody.put("minute", 15);
-                horoscopeApiRequestBody.put("latitude", 28.644800);
-                horoscopeApiRequestBody.put("longitude", 77.216721);
+                horoscopeApiRequestBody.put("date", requestBody.getHoroscopeDate());
+                horoscopeApiRequestBody.put("month", requestBody.getHoroscopeMonth());
+                horoscopeApiRequestBody.put("year", requestBody.getHoroscopeYear());
+                horoscopeApiRequestBody.put("hour", requestBody.getHoroscopeHour());
+                horoscopeApiRequestBody.put("minute", requestBody.getHoroscopeMinute());
+                horoscopeApiRequestBody.put("latitude", requestBody.getHoroscopeLatitude());
+                horoscopeApiRequestBody.put("longitude", requestBody.getHoroscopeLongitude());
                 horoscopeApiRequestBody.put("api_token", "D80FE645F582F9E0");
                 return getAstrologyDetails(gson.toJson(horoscopeApiRequestBody));
             }
