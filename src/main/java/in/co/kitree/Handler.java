@@ -96,7 +96,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 }
                 try {
                     // Set default region for testing
-                    System.setProperty("aws.region", "us-east-1");
+                    System.setProperty("aws.region", "ap-south-1");
                     this.pythonLambdaService = createPythonLambdaService();
                 } catch (Exception ex) {
                     System.out.println("Warning: Could not initialize pythonLambdaService in test environment: " + ex.getMessage());

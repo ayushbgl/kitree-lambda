@@ -20,9 +20,3 @@ services:
       - ENVIRONMENT=test
       - FIRESTORE_EMULATOR_HOST=localhost:8080
       - FIREBASE_AUTH_EMULATOR_HOST=localhost:9099
-      # - AWS_REGION=us-east-1
-      # - AWS_ACCESS_KEY_ID=test
-      # - AWS_SECRET_ACCESS_KEY=test
-    # depends_on:
-    #   firebase-emulator:
-    #     condition: service_healthy 
