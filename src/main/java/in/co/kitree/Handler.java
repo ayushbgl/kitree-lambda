@@ -852,6 +852,27 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 horoscopeApiRequestBody.put("api_token", "D80FE645F582F9E0");
                 return getAstrologyDetails(gson.toJson(horoscopeApiRequestBody));
             }
+
+            if ("get_dasha_details".equals(requestBody.getFunction())) {
+                Map<String, Object> dashaApiRequestBody = new HashMap<>();
+                // Validate required fields
+                if (requestBody.getDashaDate() == null || requestBody.getDashaMonth() == null ||
+                    requestBody.getDashaYear() == null || requestBody.getDashaHour() == null ||
+                    requestBody.getDashaMinute() == null || requestBody.getDashaLatitude() == null ||
+                    requestBody.getDashaLongitude() == null || requestBody.getDashaPrefix() == null) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Missing required dasha details"));
+                }
+                dashaApiRequestBody.put("date", requestBody.getDashaDate());
+                dashaApiRequestBody.put("month", requestBody.getDashaMonth());
+                dashaApiRequestBody.put("year", requestBody.getDashaYear());
+                dashaApiRequestBody.put("hour", requestBody.getDashaHour());
+                dashaApiRequestBody.put("minute", requestBody.getDashaMinute());
+                dashaApiRequestBody.put("latitude", requestBody.getDashaLatitude());
+                dashaApiRequestBody.put("longitude", requestBody.getDashaLongitude());
+                dashaApiRequestBody.put("prefix", requestBody.getDashaPrefix());
+                dashaApiRequestBody.put("api_token", "D80FE645F582F9E0");
+                return getDashaDetails(gson.toJson(dashaApiRequestBody));
+            }
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -1351,6 +1372,19 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return response;
         } else {
             throw new RuntimeException("API request failed with status code: " + httpResponse.statusCode());
+        }
+    }
+
+    private String getDashaDetails(String requestBody) throws Exception {
+        String API_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io/dasha";
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(API_URL)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(requestBody)).build();
+        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
+            String response = httpResponse.body();
+            System.out.println("Dasha API response: " + response);
+            return response;
+        } else {
+            throw new RuntimeException("Dasha API request failed with status code: " + httpResponse.statusCode());
         }
     }
 

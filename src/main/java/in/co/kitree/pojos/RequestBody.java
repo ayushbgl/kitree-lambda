@@ -64,6 +64,16 @@ public class RequestBody {
     private Double horoscopeLatitude;
     private Double horoscopeLongitude;
 
+    // Dasha fields
+    private Integer dashaDate;
+    private Integer dashaMonth;
+    private Integer dashaYear;
+    private Integer dashaHour;
+    private Integer dashaMinute;
+    private Double dashaLatitude;
+    private Double dashaLongitude;
+    private List<String> dashaPrefix;
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -419,5 +429,69 @@ public class RequestBody {
 
     public void setHoroscopeLongitude(Double horoscopeLongitude) {
         this.horoscopeLongitude = horoscopeLongitude;
+    }
+
+    public Integer getDashaDate() {
+        return dashaDate;
+    }
+
+    public void setDashaDate(Integer dashaDate) {
+        this.dashaDate = dashaDate;
+    }
+
+    public Integer getDashaMonth() {
+        return dashaMonth;
+    }
+
+    public void setDashaMonth(Integer dashaMonth) {
+        this.dashaMonth = dashaMonth;
+    }
+
+    public Integer getDashaYear() {
+        return dashaYear;
+    }
+
+    public void setDashaYear(Integer dashaYear) {
+        this.dashaYear = dashaYear;
+    }
+
+    public Integer getDashaHour() {
+        return dashaHour;
+    }
+
+    public void setDashaHour(Integer dashaHour) {
+        this.dashaHour = dashaHour;
+    }
+
+    public Integer getDashaMinute() {
+        return dashaMinute;
+    }
+
+    public void setDashaMinute(Integer dashaMinute) {
+        this.dashaMinute = dashaMinute;
+    }
+
+    public Double getDashaLatitude() {
+        return dashaLatitude;
+    }
+
+    public void setDashaLatitude(Double dashaLatitude) {
+        this.dashaLatitude = dashaLatitude;
+    }
+
+    public Double getDashaLongitude() {
+        return dashaLongitude;
+    }
+
+    public void setDashaLongitude(Double dashaLongitude) {
+        this.dashaLongitude = dashaLongitude;
+    }
+
+    public List<String> getDashaPrefix() {
+        return dashaPrefix;
+    }
+
+    public void setDashaPrefix(List<String> dashaPrefix) {
+        this.dashaPrefix = dashaPrefix;
     }
 }
