@@ -873,6 +873,27 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 dashaApiRequestBody.put("api_token", "D80FE645F582F9E0");
                 return getDashaDetails(gson.toJson(dashaApiRequestBody));
             }
+
+            if ("get_divisional_charts".equals(requestBody.getFunction())) {
+                Map<String, Object> divisionalChartsApiRequestBody = new HashMap<>();
+                // Validate required fields
+                if (requestBody.getHoroscopeDate() == null || requestBody.getHoroscopeMonth() == null ||
+                    requestBody.getHoroscopeYear() == null || requestBody.getHoroscopeHour() == null ||
+                    requestBody.getHoroscopeMinute() == null || requestBody.getHoroscopeLatitude() == null ||
+                    requestBody.getHoroscopeLongitude() == null || requestBody.getDivisionalChartNumbers() == null) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Missing required divisional chart details"));
+                }
+                divisionalChartsApiRequestBody.put("date", requestBody.getHoroscopeDate());
+                divisionalChartsApiRequestBody.put("month", requestBody.getHoroscopeMonth());
+                divisionalChartsApiRequestBody.put("year", requestBody.getHoroscopeYear());
+                divisionalChartsApiRequestBody.put("hour", requestBody.getHoroscopeHour());
+                divisionalChartsApiRequestBody.put("minute", requestBody.getHoroscopeMinute());
+                divisionalChartsApiRequestBody.put("latitude", requestBody.getHoroscopeLatitude());
+                divisionalChartsApiRequestBody.put("longitude", requestBody.getHoroscopeLongitude());
+                divisionalChartsApiRequestBody.put("divisional_chart_numbers", requestBody.getDivisionalChartNumbers());
+                divisionalChartsApiRequestBody.put("api_token", "D80FE645F582F9E0");
+                return getDivisionalCharts(gson.toJson(divisionalChartsApiRequestBody));
+            }
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -1385,6 +1406,23 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return response;
         } else {
             throw new RuntimeException("Dasha API request failed with status code: " + httpResponse.statusCode());
+        }
+    }
+
+    private String getDivisionalCharts(String requestBody) throws Exception {
+        String API_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io/divisional_charts";
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(API_URL))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .build();
+        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
+            String response = httpResponse.body();
+            System.out.println("Divisional Charts API response: " + response);
+            return response;
+        } else {
+            throw new RuntimeException("Divisional Charts API request failed with status code: " + httpResponse.statusCode());
         }
     }
 

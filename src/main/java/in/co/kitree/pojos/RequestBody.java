@@ -74,6 +74,9 @@ public class RequestBody {
     private Double dashaLongitude;
     private List<String> dashaPrefix;
 
+    // Divisional charts fields
+    private List<Integer> divisionalChartNumbers;
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -493,5 +496,13 @@ public class RequestBody {
 
     public void setDashaPrefix(List<String> dashaPrefix) {
         this.dashaPrefix = dashaPrefix;
+    }
+
+    public List<Integer> getDivisionalChartNumbers() {
+        return divisionalChartNumbers;
+    }
+
+    public void setDivisionalChartNumbers(List<Integer> divisionalChartNumbers) {
+        this.divisionalChartNumbers = divisionalChartNumbers;
     }
 }
