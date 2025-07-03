@@ -50,6 +50,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     //    private StripeService stripeService;
     private static LambdaLogger logger;
     protected PythonLambdaService pythonLambdaService;
+    private static final String PYTHON_SERVER_BASE_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io";
 
     public Handler() {
         try {
@@ -894,6 +895,26 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 divisionalChartsApiRequestBody.put("api_token", "D80FE645F582F9E0");
                 return getDivisionalCharts(gson.toJson(divisionalChartsApiRequestBody));
             }
+
+            if ("get_gochar_details".equals(requestBody.getFunction())) {
+                Map<String, Object> gocharApiRequestBody = new HashMap<>();
+                // Validate required fields
+                if (requestBody.getHoroscopeDate() == null || requestBody.getHoroscopeMonth() == null ||
+                    requestBody.getHoroscopeYear() == null || requestBody.getHoroscopeHour() == null ||
+                    requestBody.getHoroscopeMinute() == null || requestBody.getHoroscopeLatitude() == null ||
+                    requestBody.getHoroscopeLongitude() == null) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Missing required gochar details"));
+                }
+                gocharApiRequestBody.put("date", requestBody.getHoroscopeDate());
+                gocharApiRequestBody.put("month", requestBody.getHoroscopeMonth());
+                gocharApiRequestBody.put("year", requestBody.getHoroscopeYear());
+                gocharApiRequestBody.put("hour", requestBody.getHoroscopeHour());
+                gocharApiRequestBody.put("minute", requestBody.getHoroscopeMinute());
+                gocharApiRequestBody.put("latitude", requestBody.getHoroscopeLatitude());
+                gocharApiRequestBody.put("longitude", requestBody.getHoroscopeLongitude());
+                gocharApiRequestBody.put("api_token", "D80FE645F582F9E0");
+                return getGocharDetails(gson.toJson(gocharApiRequestBody));
+            }
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -1381,12 +1402,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     private String getAstrologyDetails(String requestBody) throws Exception {
-
-        String API_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io/get_horoscope";
+        String API_URL = PYTHON_SERVER_BASE_URL + "/get_horoscope";
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(API_URL)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(requestBody)).build();
-
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             System.out.println("Horoscope API response: " + response);
@@ -1397,7 +1415,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     private String getDashaDetails(String requestBody) throws Exception {
-        String API_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io/dasha";
+        String API_URL = PYTHON_SERVER_BASE_URL + "/dasha";
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(API_URL)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(requestBody)).build();
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
@@ -1410,7 +1428,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     private String getDivisionalCharts(String requestBody) throws Exception {
-        String API_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io/divisional_charts";
+        String API_URL = PYTHON_SERVER_BASE_URL + "/divisional_charts";
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(API_URL))
                 .header("Content-Type", "application/json")
@@ -1423,6 +1441,19 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return response;
         } else {
             throw new RuntimeException("Divisional Charts API request failed with status code: " + httpResponse.statusCode());
+        }
+    }
+
+    private String getGocharDetails(String requestBody) throws Exception {
+        String API_URL = PYTHON_SERVER_BASE_URL + "/gochar";
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(API_URL)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(requestBody)).build();
+        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
+            String response = httpResponse.body();
+            System.out.println("Gochar API response: " + response);
+            return response;
+        } else {
+            throw new RuntimeException("Gochar API request failed with status code: " + httpResponse.statusCode());
         }
     }
 
