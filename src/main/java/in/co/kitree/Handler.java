@@ -50,6 +50,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     //    private StripeService stripeService;
     private static LambdaLogger logger;
     protected PythonLambdaService pythonLambdaService;
+    private AstrologyService astrologyService;
     private static final String PYTHON_SERVER_BASE_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io";
 
     public Handler() {
@@ -72,6 +73,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             this.db = FirestoreClient.getFirestore();
             this.razorpay = new Razorpay(isTest());
             this.pythonLambdaService = createPythonLambdaService();
+            this.astrologyService = new AstrologyService();
         } catch (Exception e) {
             System.out.println("Error initializing Handler: " + e.getMessage());
             if (isTest()) {
@@ -101,6 +103,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     this.pythonLambdaService = createPythonLambdaService();
                 } catch (Exception ex) {
                     System.out.println("Warning: Could not initialize pythonLambdaService in test environment: " + ex.getMessage());
+                }
+                try {
+                    this.astrologyService = new AstrologyService();
+                } catch (Exception ex) {
+                    System.out.println("Warning: Could not initialize astrologyService in test environment: " + ex.getMessage());
                 }
             } else {
                 throw new RuntimeException("Failed to initialize Handler", e);
@@ -820,80 +827,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
 
             if ("get_astrological_details".equals(requestBody.getFunction())) {
-                Map<String, Object> horoscopeApiRequestBody = new HashMap<>();
-
-//                TODO: Uncomment later once we integrate with call screen. AI agent: do not change directly, ask me first.
-                //                String orderId = requestBody.getOrderId();
-//                String clientId = requestBody.getUserId();
-
-//                if (orderId == null || orderId.isEmpty() || clientId == null || clientId.isEmpty()) {
-//                    return gson.toJson(Map.of("success", false));
-//                }
-//
-//                FirebaseOrder order = fetchOrder(clientId, orderId);
-//
-//                if (order == null || order.getProfileIds() == null || order.getProfileIds().isEmpty()) {
-//                    return gson.toJson(Map.of("success", false));
-//                }
-
-                // Validate required fields
-                if (requestBody.getHoroscopeDate() == null || requestBody.getHoroscopeMonth() == null ||
-                        requestBody.getHoroscopeYear() == null || requestBody.getHoroscopeHour() == null ||
-                        requestBody.getHoroscopeMinute() == null || requestBody.getHoroscopeLatitude() == null ||
-                        requestBody.getHoroscopeLongitude() == null) {
-                    return gson.toJson(Map.of("success", false, "errorMessage", "Missing required horoscope details"));
-                }
-                horoscopeApiRequestBody.put("date", requestBody.getHoroscopeDate());
-                horoscopeApiRequestBody.put("month", requestBody.getHoroscopeMonth());
-                horoscopeApiRequestBody.put("year", requestBody.getHoroscopeYear());
-                horoscopeApiRequestBody.put("hour", requestBody.getHoroscopeHour());
-                horoscopeApiRequestBody.put("minute", requestBody.getHoroscopeMinute());
-                horoscopeApiRequestBody.put("latitude", requestBody.getHoroscopeLatitude());
-                horoscopeApiRequestBody.put("longitude", requestBody.getHoroscopeLongitude());
-                horoscopeApiRequestBody.put("api_token", "D80FE645F582F9E0");
-                return getAstrologyDetails(gson.toJson(horoscopeApiRequestBody));
+                return astrologyService.getAstrologicalDetails(requestBody);
             }
 
             if ("get_dasha_details".equals(requestBody.getFunction())) {
-                Map<String, Object> dashaApiRequestBody = new HashMap<>();
-                // Validate required fields
-                if (requestBody.getDashaDate() == null || requestBody.getDashaMonth() == null ||
-                    requestBody.getDashaYear() == null || requestBody.getDashaHour() == null ||
-                    requestBody.getDashaMinute() == null || requestBody.getDashaLatitude() == null ||
-                    requestBody.getDashaLongitude() == null || requestBody.getDashaPrefix() == null) {
-                    return gson.toJson(Map.of("success", false, "errorMessage", "Missing required dasha details"));
-                }
-                dashaApiRequestBody.put("date", requestBody.getDashaDate());
-                dashaApiRequestBody.put("month", requestBody.getDashaMonth());
-                dashaApiRequestBody.put("year", requestBody.getDashaYear());
-                dashaApiRequestBody.put("hour", requestBody.getDashaHour());
-                dashaApiRequestBody.put("minute", requestBody.getDashaMinute());
-                dashaApiRequestBody.put("latitude", requestBody.getDashaLatitude());
-                dashaApiRequestBody.put("longitude", requestBody.getDashaLongitude());
-                dashaApiRequestBody.put("prefix", requestBody.getDashaPrefix());
-                dashaApiRequestBody.put("api_token", "D80FE645F582F9E0");
-                return getDashaDetails(gson.toJson(dashaApiRequestBody));
+                return astrologyService.getDashaDetails(requestBody);
             }
 
             if ("get_divisional_charts".equals(requestBody.getFunction())) {
-                Map<String, Object> divisionalChartsApiRequestBody = new HashMap<>();
-                // Validate required fields
-                if (requestBody.getHoroscopeDate() == null || requestBody.getHoroscopeMonth() == null ||
-                    requestBody.getHoroscopeYear() == null || requestBody.getHoroscopeHour() == null ||
-                    requestBody.getHoroscopeMinute() == null || requestBody.getHoroscopeLatitude() == null ||
-                    requestBody.getHoroscopeLongitude() == null || requestBody.getDivisionalChartNumbers() == null) {
-                    return gson.toJson(Map.of("success", false, "errorMessage", "Missing required divisional chart details"));
-                }
-                divisionalChartsApiRequestBody.put("date", requestBody.getHoroscopeDate());
-                divisionalChartsApiRequestBody.put("month", requestBody.getHoroscopeMonth());
-                divisionalChartsApiRequestBody.put("year", requestBody.getHoroscopeYear());
-                divisionalChartsApiRequestBody.put("hour", requestBody.getHoroscopeHour());
-                divisionalChartsApiRequestBody.put("minute", requestBody.getHoroscopeMinute());
-                divisionalChartsApiRequestBody.put("latitude", requestBody.getHoroscopeLatitude());
-                divisionalChartsApiRequestBody.put("longitude", requestBody.getHoroscopeLongitude());
-                divisionalChartsApiRequestBody.put("divisional_chart_numbers", requestBody.getDivisionalChartNumbers());
-                divisionalChartsApiRequestBody.put("api_token", "D80FE645F582F9E0");
-                return getDivisionalCharts(gson.toJson(divisionalChartsApiRequestBody));
+                return astrologyService.getDivisionalCharts(requestBody);
             }
 
             if ("get_gochar_details".equals(requestBody.getFunction())) {
@@ -1400,49 +1342,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
 
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-
-    private String getAstrologyDetails(String requestBody) throws Exception {
-        String API_URL = PYTHON_SERVER_BASE_URL + "/get_horoscope";
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(API_URL)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(requestBody)).build();
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
-            String response = httpResponse.body();
-            System.out.println("Horoscope API response: " + response);
-            return response;
-        } else {
-            throw new RuntimeException("API request failed with status code: " + httpResponse.statusCode());
-        }
-    }
-
-    private String getDashaDetails(String requestBody) throws Exception {
-        String API_URL = PYTHON_SERVER_BASE_URL + "/dasha";
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(API_URL)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(requestBody)).build();
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
-            String response = httpResponse.body();
-            System.out.println("Dasha API response: " + response);
-            return response;
-        } else {
-            throw new RuntimeException("Dasha API request failed with status code: " + httpResponse.statusCode());
-        }
-    }
-
-    private String getDivisionalCharts(String requestBody) throws Exception {
-        String API_URL = PYTHON_SERVER_BASE_URL + "/divisional_charts";
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                .build();
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
-            String response = httpResponse.body();
-            System.out.println("Divisional Charts API response: " + response);
-            return response;
-        } else {
-            throw new RuntimeException("Divisional Charts API request failed with status code: " + httpResponse.statusCode());
-        }
-    }
 
     private String getGocharDetails(String requestBody) throws Exception {
         String API_URL = PYTHON_SERVER_BASE_URL + "/gochar";
