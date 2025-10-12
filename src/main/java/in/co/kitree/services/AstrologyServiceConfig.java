@@ -44,7 +44,6 @@ public class AstrologyServiceConfig {
     public static final String FREE_ASTROLOGY_API_D60_CHART_URL = FREE_ASTROLOGY_API_BASE_URL + "/d60-chart-info";
     
     // API Keys
-    public static final String ASTROLOGY_API_KEY_ENV_VAR = "ASTROLOGY_API_KEY";
     public static final String PYTHON_SERVER_API_TOKEN = "D80FE645F582F9E0";
     
     // Free Astrology API settings

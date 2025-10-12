@@ -95,7 +95,7 @@ Returns divisional chart calculations.
 
 ### Setup
 
-1. **API Key**: Set the `ASTROLOGY_API_KEY` environment variable with your API key
+1. **API Key**: Add `ASTROLOGY_API_KEY` to your `secrets.json` file with your API key
 2. **Configuration**: Change `ASTROLOGY_API_PROVIDER` to `FREE_ASTROLOGY_API_PROVIDER` in `AstrologyServiceConfig.java`
 
 ### API Details

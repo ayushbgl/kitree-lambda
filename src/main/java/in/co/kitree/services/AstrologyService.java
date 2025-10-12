@@ -2,6 +2,8 @@ package in.co.kitree.services;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import in.co.kitree.pojos.RequestBody;
 import in.co.kitree.pojos.ThirdPartyAstrologyRequest;
 import in.co.kitree.pojos.ThirdPartyAstrologyResponse;
@@ -11,6 +13,7 @@ import in.co.kitree.pojos.ThirdPartyDashaEntry;
 import in.co.kitree.pojos.FreeAstrologyDivisionalChartRequest;
 import in.co.kitree.pojos.FreeAstrologyDivisionalChartResponse;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -25,12 +28,23 @@ public class AstrologyService {
     
     private final HttpClient httpClient;
     private final Gson gson;
+    private String astrologyApiKey;
     
     public AstrologyService() {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(AstrologyServiceConfig.HTTP_TIMEOUT_SECONDS))
                 .build();
         this.gson = new GsonBuilder().create();
+        
+        // Read API key from secrets.json
+        try {
+            ObjectMapper objectMapper = new ObjectMapper();
+            JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
+            this.astrologyApiKey = rootNode.path("ASTROLOGY_API_KEY").asText();
+        } catch (IOException e) {
+            System.err.println("Error reading ASTROLOGY_API_KEY from secrets.json: " + e.getMessage());
+            this.astrologyApiKey = null;
+        }
     }
     
     /**
@@ -151,16 +165,15 @@ public class AstrologyService {
         
         String payload = gson.toJson(freeAstrologyApiRequest);
         
-        // Get API key from environment/secrets
-        String apiKey = System.getenv(AstrologyServiceConfig.ASTROLOGY_API_KEY_ENV_VAR);
-        if (apiKey == null || apiKey.isEmpty()) {
-            throw new RuntimeException("ASTROLOGY_API_KEY not found in environment variables");
+        // Get API key from secrets.json
+        if (this.astrologyApiKey == null || this.astrologyApiKey.isEmpty()) {
+            throw new RuntimeException("ASTROLOGY_API_KEY not found in secrets.json");
         }
         
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(AstrologyServiceConfig.FREE_ASTROLOGY_API_PLANETS_URL))
                 .header("Content-Type", "application/json")
-                .header("x-api-key", apiKey)
+                .header("x-api-key", this.astrologyApiKey)
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .build();
         
@@ -243,10 +256,9 @@ public class AstrologyService {
         
         String payload = gson.toJson(dashaRequest);
         
-        // Get API key from environment/secrets
-        String apiKey = System.getenv(AstrologyServiceConfig.ASTROLOGY_API_KEY_ENV_VAR);
-        if (apiKey == null || apiKey.isEmpty()) {
-            throw new RuntimeException("ASTROLOGY_API_KEY not found in environment variables");
+        // Get API key from secrets.json
+        if (this.astrologyApiKey == null || this.astrologyApiKey.isEmpty()) {
+            throw new RuntimeException("ASTROLOGY_API_KEY not found in secrets.json");
         }
         
         // Determine which endpoint to use based on dashaPrefix
@@ -262,7 +274,7 @@ public class AstrologyService {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(apiUrl))
                 .header("Content-Type", "application/json")
-                .header("x-api-key", apiKey)
+                .header("x-api-key", this.astrologyApiKey)
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .build();
         
@@ -399,17 +411,16 @@ public class AstrologyService {
         
         Map<String, Object> charts = new HashMap<>();
         
-        // Get API key from environment/secrets
-        String apiKey = System.getenv(AstrologyServiceConfig.ASTROLOGY_API_KEY_ENV_VAR);
-        if (apiKey == null || apiKey.isEmpty()) {
-            throw new RuntimeException("ASTROLOGY_API_KEY not found in environment variables");
+        // Get API key from secrets.json
+        if (this.astrologyApiKey == null || this.astrologyApiKey.isEmpty()) {
+            throw new RuntimeException("ASTROLOGY_API_KEY not found in secrets.json");
         }
         
         // Fetch each divisional chart individually
         for (Integer chartNumber : requestBody.getDivisionalChartNumbers()) {
             try {
                 String chartData = fetchSingleDivisionalChart(
-                    requestBody, chartNumber, timezone, config, apiKey
+                    requestBody, chartNumber, timezone, config, this.astrologyApiKey
                 );
                 charts.put("D" + chartNumber, chartData);
             } catch (Exception e) {
@@ -451,7 +462,7 @@ public class AstrologyService {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(apiUrl))
                 .header("Content-Type", "application/json")
-                .header("x-api-key", apiKey)
+                .header("x-api-key", this.astrologyApiKey)
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .build();
         
