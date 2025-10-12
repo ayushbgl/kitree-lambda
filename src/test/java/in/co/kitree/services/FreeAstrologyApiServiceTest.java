@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -183,6 +185,32 @@ public class FreeAstrologyApiServiceTest extends TestBase {
         assertEquals(200, jsonResponse.get("statusCode").getAsInt());
     }
     
+    private RequestBody createValidDashaRequestBody() {
+        RequestBody requestBody = new RequestBody();
+        requestBody.setDashaDate(15);
+        requestBody.setDashaMonth(8);
+        requestBody.setDashaYear(1990);
+        requestBody.setDashaHour(10);
+        requestBody.setDashaMinute(30);
+        requestBody.setDashaLatitude(28.6139); // Delhi
+        requestBody.setDashaLongitude(77.2090);
+        requestBody.setDashaPrefix(new ArrayList<>()); // Empty for Maha Dasas only
+        return requestBody;
+    }
+    
+    private RequestBody createValidDivisionalChartRequestBody() {
+        RequestBody requestBody = new RequestBody();
+        requestBody.setHoroscopeDate(15);
+        requestBody.setHoroscopeMonth(8);
+        requestBody.setHoroscopeYear(1990);
+        requestBody.setHoroscopeHour(10);
+        requestBody.setHoroscopeMinute(30);
+        requestBody.setHoroscopeLatitude(28.6139); // Delhi
+        requestBody.setHoroscopeLongitude(77.2090);
+        requestBody.setDivisionalChartNumbers(Arrays.asList(2, 9, 10)); // D2, D9, D10
+        return requestBody;
+    }
+    
     private RequestBody createValidHoroscopeRequestBody() {
         RequestBody requestBody = new RequestBody();
         requestBody.setHoroscopeDate(15);
@@ -259,6 +287,9 @@ public class FreeAstrologyApiServiceTest extends TestBase {
                     }
                 }
             ]
+        }
+        """;
+    }
     @Test
     public void testFreeAstrologyApiDivisionalChartRequestPayloadCreation() {
         // Test the creation of Free Astrology API divisional chart request payload
