@@ -195,33 +195,79 @@ public class AstrologyService {
      */
     private String transformThirdPartyResponseToExpectedFormat(String thirdPartyResponse) {
         try {
-            // Parse the third-party response
-            ThirdPartyAstrologyResponse response = gson.fromJson(thirdPartyResponse, ThirdPartyAstrologyResponse.class);
+            // Parse the third-party response as a generic Map to handle the complex structure
+            Map<String, Object> responseMap = gson.fromJson(thirdPartyResponse, Map.class);
             
-            // Extract planet data from the output array (second element contains named planets)
-            ThirdPartyPlanetData[] output = response.getOutput();
-            if (output == null || output.length < 2) {
-                throw new RuntimeException("Invalid response format from third-party API");
+            // Extract the output array
+            Object outputObj = responseMap.get("output");
+            if (!(outputObj instanceof java.util.List)) {
+                throw new RuntimeException("Invalid response format: output is not an array");
             }
             
-            // The second element contains the named planet data
+            @SuppressWarnings("unchecked")
+            java.util.List<Object> outputList = (java.util.List<Object>) outputObj;
+            
+            if (outputList.size() < 2) {
+                throw new RuntimeException("Invalid response format: output array has less than 2 elements");
+            }
+            
+            // The second element (index 1) contains the named planet data
+            Object namedPlanetsObj = outputList.get(1);
+            if (!(namedPlanetsObj instanceof Map)) {
+                throw new RuntimeException("Invalid response format: second output element is not a map");
+            }
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> namedPlanets = (Map<String, Object>) namedPlanetsObj;
+            
             Map<String, Object> transformedResponse = new HashMap<>();
             
             // Transform each planet data
-            for (ThirdPartyPlanetData planet : output) {
-                if (planet != null && planet.getName() != null) {
-                    Map<String, Object> planetData = new HashMap<>();
-                    planetData.put("sign", planet.getCurrentSign());
-                    planetData.put("is_retrograde", "true".equals(planet.getIsRetro()));
-                    planetData.put("longitude", planet.getNormDegree());
+            for (Map.Entry<String, Object> entry : namedPlanets.entrySet()) {
+                String planetName = entry.getKey();
+                Object planetDataObj = entry.getValue();
+                
+                if (planetDataObj instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> planetData = (Map<String, Object>) planetDataObj;
                     
-                    transformedResponse.put(planet.getName().toLowerCase(), planetData);
+                    // Skip non-planet entries like "ayanamsa" and "debug"
+                    if ("ayanamsa".equals(planetName) || "debug".equals(planetName)) {
+                        continue;
+                    }
+                    
+                    Map<String, Object> transformedPlanetData = new HashMap<>();
+                    
+                    // Extract sign (current_sign)
+                    Object signObj = planetData.get("current_sign");
+                    if (signObj instanceof Number) {
+                        transformedPlanetData.put("sign", ((Number) signObj).intValue());
+                    }
+                    
+                    // Extract retrograde status (isRetro)
+                    Object retroObj = planetData.get("isRetro");
+                    if (retroObj instanceof String) {
+                        transformedPlanetData.put("is_retrograde", "true".equals(retroObj));
+                    }
+                    
+                    // Extract longitude (normDegree)
+                    Object longitudeObj = planetData.get("normDegree");
+                    if (longitudeObj instanceof Number) {
+                        transformedPlanetData.put("longitude", ((Number) longitudeObj).doubleValue());
+                    }
+                    
+                    // Map planet names to expected keys
+                    String planetKey = mapPlanetNameToKey(planetName);
+                    if (planetKey != null && !transformedPlanetData.isEmpty()) {
+                        transformedResponse.put(planetKey, transformedPlanetData);
+                    }
                 }
             }
             
             return gson.toJson(transformedResponse);
         } catch (Exception e) {
             System.err.println("Error transforming third-party response: " + e.getMessage());
+            e.printStackTrace();
             throw new RuntimeException("Failed to transform third-party API response", e);
         }
     }
@@ -537,6 +583,9 @@ public class AstrologyService {
             case "saturn": return "saturn";
             case "rahu": return "rahu";
             case "ketu": return "ketu";
+            case "uranus": return "uranus";
+            case "neptune": return "neptune";
+            case "pluto": return "pluto";
             default: return null; // Skip unknown planets
         }
     }
