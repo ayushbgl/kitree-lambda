@@ -328,6 +328,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
                         response.put("subscription_id", subscriptionId);
                         response.put("payment_gateway", "RAZORPAY");
+                        response.put("razorpay_key", razorpay.getRazorpayKey());
                     } else {
                         String orderId = razorpay.createOrder(servicePlan.getAmount(), CustomerCipher.encryptCaesarCipher(userId));
 
@@ -337,6 +338,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
                         response.put("order_id", orderId);
                         response.put("payment_gateway", "RAZORPAY");
+                        response.put("razorpay_key", razorpay.getRazorpayKey());
                     }
                 } else {
 //                    Map<String, String> paymentIntent = stripeService.createPaymentIntent(servicePlan.getAmount(), servicePlan.getCurrency());

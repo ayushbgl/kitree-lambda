@@ -111,6 +111,15 @@ public class Razorpay {
         return razorpayClient.subscriptions.cancel(subscriptionId);
     }
 
+    /**
+     * Get the Razorpay key for the current environment (test or prod)
+     * This method returns only the public key, not the secret
+     * @return The Razorpay key for the current environment
+     */
+    public String getRazorpayKey() {
+        return this.isTest ? this.RAZORPAY_TEST_KEY : this.RAZORPAY_KEY;
+    }
+
     private long getAmountInPaise(double amountInINR) {
         return (long) (amountInINR * 100);
     }
