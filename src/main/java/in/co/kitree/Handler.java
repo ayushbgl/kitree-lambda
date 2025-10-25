@@ -770,7 +770,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 String rangeStart = requestBody.getRangeStart();
                 String rangeEnd = requestBody.getRangeEnd();
                 String userTimeZone = requestBody.getUserTimeZone();
-                FirebaseOrder order = fetchOrder(userId, requestBody.getOrderId());
+                String userIdFromRequest = requestBody.getUserId();
+                FirebaseOrder order = fetchOrder(userIdFromRequest, requestBody.getOrderId());
                 System.out.println("order: " + order);
                 // TODO: Check for date range, dont allow long date ranges for efficiency reasons.
                 if (order == null || order.getExpertId() == null || order.getExpertId().isEmpty() || rangeStart == null || rangeEnd == null || rangeStart.isEmpty() || rangeEnd.isEmpty()) { // TODO: Check if rangeEnd > rangeStart and the difference is maximum 1 month + 1 day (or 32 days).
@@ -778,6 +779,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 }
 
                 String expertId = order.getExpertId();
+                
+                // Check authorization: user must be the customer, expert, or admin
+                if (!userIdFromRequest.equals(userId) && !userId.equals(expertId) && !isAdmin(userId)) {
+                    return gson.toJson(Map.of("success", false, "error", "Not authorized."));
+                }
+                
                 DocumentReference docRef = this.db.collection("users").document(expertId).collection("public").document("store");
                 FieldMask mask = FieldMask.of("availability", "availabilityTimeZone");
                 ApiFuture<DocumentSnapshot> future = docRef.get(mask);
