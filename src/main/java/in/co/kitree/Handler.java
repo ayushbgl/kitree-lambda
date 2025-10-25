@@ -567,6 +567,32 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return this.gson.toJson(response);
             }
 
+            if ("end_call".equals(requestBody.getFunction())) {
+                String userIdFromRequest = requestBody.getUserId();
+                String orderId = requestBody.getOrderId();
+
+                if (userIdFromRequest == null || userIdFromRequest.isEmpty() || orderId == null || orderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Bad Data: Missing required fields."));
+                }
+
+                FirebaseOrder order = fetchOrder(userIdFromRequest, orderId);
+                if (order == null) {
+                    return gson.toJson(Map.of("success", false, "error", "Not authorized or order not found."));
+                }
+                String expertId = order.getExpertId();
+
+                if (!userIdFromRequest.equals(userId) && !userId.equals(expertId) && !isAdmin(userId)) {
+                    return gson.toJson(Map.of("success", false, "error", "Not authorized."));
+                }
+
+                // Update sessionCompletedAt timestamp
+                Timestamp currentTimestamp = new Timestamp(System.currentTimeMillis());
+                DocumentReference orderRef = this.db.collection("users").document(userIdFromRequest).collection("orders").document(orderId);
+                orderRef.update("sessionCompletedAt", currentTimestamp).get();
+
+                return gson.toJson(Map.of("success", true, "message", "Call ended successfully"));
+            }
+
             if ("generate_certificate".equals(requestBody.getFunction())) {
                 PythonLambdaEventRequest genCertEvent = new PythonLambdaEventRequest();
                 genCertEvent.setFunction("generate_certificate");
