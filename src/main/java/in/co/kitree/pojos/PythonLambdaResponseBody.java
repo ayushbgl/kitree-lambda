@@ -1,5 +1,8 @@
 package in.co.kitree.pojos;
 
+import java.util.List;
+import java.util.Map;
+
 public class PythonLambdaResponseBody {
     String certificate;
 
@@ -17,6 +20,16 @@ public class PythonLambdaResponseBody {
 
     String auraReportLink; // For aura report
 
+    List<Map<String, String>> courses; // For certificate courses
+
+
+    public List<Map<String, String>> getCourses() {
+        return courses;
+    }
+
+    public void setCourses(List<Map<String, String>> courses) {
+        this.courses = courses;
+    }
 
     public String getReportLink() {
         return reportLink;

@@ -569,6 +569,21 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return this.gson.toJson(response);
             }
 
+            if ("get_certificate_courses".equals(requestBody.getFunction())) {
+                PythonLambdaEventRequest getCoursesEvent = new PythonLambdaEventRequest();
+                getCoursesEvent.setFunction("get_certificate_courses");
+                getCoursesEvent.setLanguage(requestBody.getLanguage() == null ? "en" : requestBody.getLanguage());
+                
+                PythonLambdaResponseBody pythonResponse = pythonLambdaService.invokePythonLambda(getCoursesEvent);
+                
+                if (pythonResponse != null && pythonResponse.getCourses() != null) {
+                    return gson.toJson(Map.of("courses", pythonResponse.getCourses()));
+                } else {
+                    logger.log("ERROR: Failed to get courses from Python Lambda.");
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Failed to fetch courses."));
+                }
+            }
+
             if ("generate_certificate".equals(requestBody.getFunction())) {
                 PythonLambdaEventRequest genCertEvent = new PythonLambdaEventRequest();
                 genCertEvent.setFunction("generate_certificate");
