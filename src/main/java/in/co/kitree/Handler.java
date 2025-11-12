@@ -19,6 +19,7 @@ import com.razorpay.RazorpayException;
 import in.co.kitree.pojos.*;
 import in.co.kitree.services.*;
 import in.co.kitree.services.Razorpay.ErrorCode;
+import in.co.kitree.services.AuthenticationService;
 import software.amazon.awssdk.services.lambda.LambdaClient;
 import software.amazon.awssdk.services.lambda.model.InvokeRequest;
 import software.amazon.awssdk.services.lambda.model.InvokeResponse;
@@ -194,7 +195,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return "Done Successfully";
             }
 
-            String userId = event.getRequestContext().getAuthorizer().getJwt().getClaims().getUser_id();
+            // Extract and verify Firebase token from Authorization header
+            // Authentication is optional - some endpoints don't require it
+            String userId = extractUserIdFromToken(event, requestBody.getFunction());
+            
+            // For functions that require authentication, ensure userId is not null
+            if (userId == null && requiresAuthentication(requestBody.getFunction())) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Authentication required"));
+            }
 
             if ("generate_report".equals(requestBody.getFunction())) {
                 String language = requestBody.getLanguage() == null ? "en" : requestBody.getLanguage();
@@ -887,6 +895,49 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of("success", false));
         }
         return null;
+    }
+
+    /**
+     * Checks if a function requires authentication
+     * Currently, all functions require authentication
+     * 
+     * @param functionName The function name
+     * @return true (all functions require authentication)
+     */
+    private boolean requiresAuthentication(String functionName) {
+        // All functions require authentication
+        return true;
+    }
+
+    /**
+     * Extracts and verifies user ID from Firebase token in Authorization header
+     * All functions require authentication
+     * 
+     * @param event The Lambda request event
+     * @param functionName The function being called
+     * @return User ID if token is valid, null if token is missing or invalid
+     */
+    private String extractUserIdFromToken(RequestEvent event, String functionName) {
+        // Extract token from headers
+        String token = null;
+        if (event.getHeaders() != null) {
+            token = AuthenticationService.extractTokenFromHeaders(event.getHeaders());
+        }
+        
+        // If no token, return null (will be handled by caller)
+        if (token == null || token.isEmpty()) {
+            return null;
+        }
+        
+        // Verify token
+        try {
+            String userId = AuthenticationService.verifyTokenAndGetUserId(token);
+            return userId;
+        } catch (FirebaseAuthException e) {
+            System.err.println("Token verification failed: " + e.getMessage());
+            // Return null - caller will handle the error
+            return null;
+        }
     }
 
     private void addWebinarGiftDetails(String userId, String expertId, String webinarId, String orderId, String giftOrderId) {
