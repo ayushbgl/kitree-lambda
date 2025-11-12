@@ -22,8 +22,7 @@ Globals:
     MemorySize: 512
     LoggingConfig:
       LogFormat: JSON
-      LogGroup:
-        !Sub "/aws/lambda/${AWS::StackName}"
+      LogGroup: !Sub "/aws/lambda/java-lambda-${Environment}"
       ApplicationLogLevel: INFO
       SystemLogLevel: WARN
 
@@ -66,10 +65,11 @@ Resources:
             ApiId: !Ref ApiGateway
 
   # CloudWatch LogGroup for Lambda retention policy
+  # Using stack name pattern: java-lambda-test or java-lambda-prod
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${JavaFunction}"
+      LogGroupName: !Sub "/aws/lambda/java-lambda-${Environment}"
       RetentionInDays: !If [ IsProd, 7, 1 ]
 
 Conditions:

@@ -417,8 +417,9 @@ jobs:
         if: always() && github.event.inputs.environment != 'only-sync-rules'
         run: |
           if [ -f ".aws-sam/build/packaged.yaml" ]; then
-            S3_URI=$(grep -A 1 "CodeUri:" .aws-sam/build/packaged.yaml | grep "s3://" | sed 's/^[[:space:]]*//')
-            if [ ! -z "$S3_URI" ]; then
+            # Extract S3 URI - find line with s3:// and extract the full URI
+            S3_URI=$(grep "s3://" .aws-sam/build/packaged.yaml | grep -v "^#" | head -1 | grep -o 's3://[^[:space:]]*' | head -1)
+            if [ ! -z "$S3_URI" ] && [[ "$S3_URI" == s3://* ]]; then
               echo "🧹 Cleaning up S3 artifact: $S3_URI"
               aws s3 rm "$S3_URI" || echo "❌ Failed to delete S3 artifact"
             fi
