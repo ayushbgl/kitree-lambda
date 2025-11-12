@@ -9,12 +9,16 @@ public class AstrologyServiceConfig {
     // API Provider options
     public static final String PYTHON_SERVER_PROVIDER = "PYTHON_SERVER";
     public static final String FREE_ASTROLOGY_API_PROVIDER = "FREE_ASTROLOGY_API";
+    public static final String AWS_LAMBDA_PROVIDER = "AWS_LAMBDA";
     
     // Current API provider - change this to switch between providers
-    public static final String ASTROLOGY_API_PROVIDER = FREE_ASTROLOGY_API_PROVIDER;
+    public static final String ASTROLOGY_API_PROVIDER = AWS_LAMBDA_PROVIDER;
     
     // API URLs
     public static final String PYTHON_SERVER_BASE_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io";
+    
+    // AWS Lambda API URL (Python Server API deployed on Lambda)
+    public static final String AWS_LAMBDA_BASE_URL = "https://le3joedyfwtpah65iyxtgqenum0mmcpn.lambda-url.ap-south-1.on.aws";
     
     // Free Astrology API URLs
     public static final String FREE_ASTROLOGY_API_BASE_URL = "https://json.freeastrologyapi.com";
@@ -65,6 +69,13 @@ public class AstrologyServiceConfig {
      */
     public static boolean isPythonServerProviderSelected() {
         return PYTHON_SERVER_PROVIDER.equals(ASTROLOGY_API_PROVIDER);
+    }
+    
+    /**
+     * Check if AWS Lambda provider is currently selected
+     */
+    public static boolean isAwsLambdaProviderSelected() {
+        return AWS_LAMBDA_PROVIDER.equals(ASTROLOGY_API_PROVIDER);
     }
     
     /**

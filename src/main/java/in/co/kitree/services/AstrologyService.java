@@ -61,6 +61,8 @@ public class AstrologyService {
         
         if (AstrologyServiceConfig.isFreeAstrologyApiProviderSelected()) {
             return getAstrologicalDetailsFromFreeAstrologyApi(requestBody);
+        } else if (AstrologyServiceConfig.isAwsLambdaProviderSelected()) {
+            return getAstrologicalDetailsFromAwsLambda(requestBody);
         } else {
             return getAstrologicalDetailsFromPythonServer(requestBody);
         }
@@ -80,6 +82,8 @@ public class AstrologyService {
         
         if (AstrologyServiceConfig.isFreeAstrologyApiProviderSelected()) {
             return getDashaDetailsFromFreeAstrologyApi(requestBody);
+        } else if (AstrologyServiceConfig.isAwsLambdaProviderSelected()) {
+            return getDashaDetailsFromAwsLambda(requestBody);
         } else {
             return getDashaDetailsFromPythonServer(requestBody);
         }
@@ -99,6 +103,8 @@ public class AstrologyService {
         
         if (AstrologyServiceConfig.isFreeAstrologyApiProviderSelected()) {
             return getDivisionalChartsFromFreeAstrologyApi(requestBody);
+        } else if (AstrologyServiceConfig.isAwsLambdaProviderSelected()) {
+            return getDivisionalChartsFromAwsLambda(requestBody);
         } else {
             return getDivisionalChartsFromPythonServer(requestBody);
         }
@@ -132,6 +138,39 @@ public class AstrologyService {
             return response;
         } else {
             throw new RuntimeException("API request failed with status code: " + httpResponse.statusCode());
+        }
+    }
+    
+    /**
+     * Get astrological details from AWS Lambda (Python Server API deployed on Lambda)
+     */
+    private String getAstrologicalDetailsFromAwsLambda(RequestBody requestBody) throws Exception {
+        Map<String, Object> horoscopeApiRequestBody = new HashMap<>();
+        horoscopeApiRequestBody.put("date", requestBody.getHoroscopeDate());
+        horoscopeApiRequestBody.put("month", requestBody.getHoroscopeMonth());
+        horoscopeApiRequestBody.put("year", requestBody.getHoroscopeYear());
+        horoscopeApiRequestBody.put("hour", requestBody.getHoroscopeHour());
+        horoscopeApiRequestBody.put("minute", requestBody.getHoroscopeMinute());
+        horoscopeApiRequestBody.put("latitude", requestBody.getHoroscopeLatitude());
+        horoscopeApiRequestBody.put("longitude", requestBody.getHoroscopeLongitude());
+        horoscopeApiRequestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
+        
+        String API_URL = AstrologyServiceConfig.AWS_LAMBDA_BASE_URL + "/get_horoscope";
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(API_URL))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(horoscopeApiRequestBody)))
+                .build();
+        
+        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
+            String response = httpResponse.body();
+            System.out.println("AWS Lambda Horoscope API response: " + response);
+            // Lambda returns response in body field if it's a Lambda Function URL response
+            // Parse the response to extract the actual body if needed
+            return parseLambdaResponse(response);
+        } else {
+            throw new RuntimeException("AWS Lambda API request failed with status code: " + httpResponse.statusCode());
         }
     }
     
@@ -409,6 +448,38 @@ public class AstrologyService {
     }
     
     /**
+     * Get dasha details from AWS Lambda (Python Server API deployed on Lambda)
+     */
+    private String getDashaDetailsFromAwsLambda(RequestBody requestBody) throws Exception {
+        Map<String, Object> dashaApiRequestBody = new HashMap<>();
+        dashaApiRequestBody.put("date", requestBody.getDashaDate());
+        dashaApiRequestBody.put("month", requestBody.getDashaMonth());
+        dashaApiRequestBody.put("year", requestBody.getDashaYear());
+        dashaApiRequestBody.put("hour", requestBody.getDashaHour());
+        dashaApiRequestBody.put("minute", requestBody.getDashaMinute());
+        dashaApiRequestBody.put("latitude", requestBody.getDashaLatitude());
+        dashaApiRequestBody.put("longitude", requestBody.getDashaLongitude());
+        dashaApiRequestBody.put("prefix", requestBody.getDashaPrefix());
+        dashaApiRequestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
+        
+        String API_URL = AstrologyServiceConfig.AWS_LAMBDA_BASE_URL + "/dasha";
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(API_URL))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(dashaApiRequestBody)))
+                .build();
+        
+        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
+            String response = httpResponse.body();
+            System.out.println("AWS Lambda Dasha API response: " + response);
+            return parseLambdaResponse(response);
+        } else {
+            throw new RuntimeException("AWS Lambda Dasha API request failed with status code: " + httpResponse.statusCode());
+        }
+    }
+    
+    /**
      * Get divisional charts from Python server (existing implementation)
      */
     private String getDivisionalChartsFromPythonServer(RequestBody requestBody) throws Exception {
@@ -437,6 +508,38 @@ public class AstrologyService {
             return response;
         } else {
             throw new RuntimeException("Divisional Charts API request failed with status code: " + httpResponse.statusCode());
+        }
+    }
+    
+    /**
+     * Get divisional charts from AWS Lambda (Python Server API deployed on Lambda)
+     */
+    private String getDivisionalChartsFromAwsLambda(RequestBody requestBody) throws Exception {
+        Map<String, Object> divisionalChartsApiRequestBody = new HashMap<>();
+        divisionalChartsApiRequestBody.put("date", requestBody.getHoroscopeDate());
+        divisionalChartsApiRequestBody.put("month", requestBody.getHoroscopeMonth());
+        divisionalChartsApiRequestBody.put("year", requestBody.getHoroscopeYear());
+        divisionalChartsApiRequestBody.put("hour", requestBody.getHoroscopeHour());
+        divisionalChartsApiRequestBody.put("minute", requestBody.getHoroscopeMinute());
+        divisionalChartsApiRequestBody.put("latitude", requestBody.getHoroscopeLatitude());
+        divisionalChartsApiRequestBody.put("longitude", requestBody.getHoroscopeLongitude());
+        divisionalChartsApiRequestBody.put("divisional_chart_numbers", requestBody.getDivisionalChartNumbers());
+        divisionalChartsApiRequestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
+        
+        String API_URL = AstrologyServiceConfig.AWS_LAMBDA_BASE_URL + "/divisional_charts";
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(API_URL))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(divisionalChartsApiRequestBody)))
+                .build();
+        
+        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
+            String response = httpResponse.body();
+            System.out.println("AWS Lambda Divisional Charts API response: " + response);
+            return parseLambdaResponse(response);
+        } else {
+            throw new RuntimeException("AWS Lambda Divisional Charts API request failed with status code: " + httpResponse.statusCode());
         }
     }
     
@@ -587,6 +690,29 @@ public class AstrologyService {
             case "neptune": return "neptune";
             case "pluto": return "pluto";
             default: return null; // Skip unknown planets
+        }
+    }
+    
+    /**
+     * Parse Lambda Function URL response
+     * Lambda Function URLs automatically extract the body from the Lambda response format,
+     * so the response should already be the JSON we want. This method handles both cases.
+     */
+    private String parseLambdaResponse(String response) {
+        try {
+            // Try to parse as JSON to check if it's wrapped in Lambda response format
+            Map<String, Object> responseMap = gson.fromJson(response, Map.class);
+            
+            // If it has a "body" field, it's wrapped in Lambda response format
+            if (responseMap.containsKey("body") && responseMap.get("body") instanceof String) {
+                return (String) responseMap.get("body");
+            }
+            
+            // Otherwise, return as-is (Lambda Function URL already extracted the body)
+            return response;
+        } catch (Exception e) {
+            // If parsing fails, assume it's already the JSON we want
+            return response;
         }
     }
 }

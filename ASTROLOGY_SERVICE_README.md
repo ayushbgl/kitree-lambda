@@ -4,16 +4,20 @@
 
 The `AstrologyService` is a configurable service that provides astrological calculations by integrating with multiple API providers. It currently supports:
 
-1. **Python Server API** (existing implementation)
-2. **Free Astrology API** (new implementation)
+1. **Python Server API** (existing implementation - Azure Container Apps)
+2. **AWS Lambda API** (Python Server API deployed on AWS Lambda)
+3. **Free Astrology API** (external third-party service)
 
 ## Configuration
 
 The service uses `AstrologyServiceConfig` to manage configuration. To switch between API providers, modify the `ASTROLOGY_API_PROVIDER` constant in `AstrologyServiceConfig.java`:
 
 ```java
-// Use Python server (default)
+// Use Python server (Azure Container Apps)
 public static final String ASTROLOGY_API_PROVIDER = PYTHON_SERVER_PROVIDER;
+
+// Use AWS Lambda (Python Server API deployed on Lambda) - default
+public static final String ASTROLOGY_API_PROVIDER = AWS_LAMBDA_PROVIDER;
 
 // Use Free Astrology API
 public static final String ASTROLOGY_API_PROVIDER = FREE_ASTROLOGY_API_PROVIDER;
@@ -269,14 +273,20 @@ return astrologyService.getAstrologicalDetails(requestBody);
 
 ### Switching API Providers
 
-1. **For Python Server** (default):
+1. **For Python Server** (Azure Container Apps):
    ```java
    public static final String ASTROLOGY_API_PROVIDER = PYTHON_SERVER_PROVIDER;
    ```
 
-2. **For Third-Party API**:
+2. **For AWS Lambda** (Python Server API deployed on Lambda - recommended):
    ```java
-   public static final String ASTROLOGY_API_PROVIDER = THIRD_PARTY_PROVIDER;
+   public static final String ASTROLOGY_API_PROVIDER = AWS_LAMBDA_PROVIDER;
+   ```
+   The Lambda URL is configured in `AstrologyServiceConfig.AWS_LAMBDA_BASE_URL`.
+
+3. **For Free Astrology API** (Third-party service):
+   ```java
+   public static final String ASTROLOGY_API_PROVIDER = FREE_ASTROLOGY_API_PROVIDER;
    ```
 
 ## Future Enhancements
