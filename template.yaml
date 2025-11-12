@@ -36,7 +36,6 @@ Resources:
       DefaultRouteSettings:
         DetailedMetricsEnabled: true
         LoggingLevel: INFO
-        DataTraceEnabled: true
       AccessLogSettings:
         DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
         Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":$context.status,"protocol":"$context.protocol","responseLength":$context.responseLength,"error":{"message":"$context.error.message","messageString":"$context.error.messageString"},"authorizer":{"error":"$context.authorizer.error","integrationStatus":"$context.integrationStatus","integrationLatency":"$context.integrationLatency","status":"$context.status"},"identity":{"sourceIp":"$context.identity.sourceIp","userAgent":"$context.identity.userAgent"}}'
