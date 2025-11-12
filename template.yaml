@@ -22,8 +22,7 @@ Globals:
     MemorySize: 512
     LoggingConfig:
       LogFormat: JSON
-      LogGroup:
-        !Sub "/aws/lambda/${AWS::StackName}"
+      LogGroup: !Sub "/aws/lambda/java-lambda-${Environment}"
       ApplicationLogLevel: INFO
       SystemLogLevel: WARN
 
@@ -35,46 +34,6 @@ Resources:
       StageName: !Ref Environment
       DefaultRouteSettings:
         DetailedMetricsEnabled: true
-        LoggingLevel: INFO
-      AccessLogSettings:
-        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
-        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":$context.status,"protocol":"$context.protocol","responseLength":$context.responseLength,"error":{"message":"$context.error.message","messageString":"$context.error.messageString"},"authorizer":{"error":"$context.authorizer.error","integrationStatus":"$context.integrationStatus","integrationLatency":"$context.integrationLatency","status":"$context.status"},"identity":{"sourceIp":"$context.identity.sourceIp","userAgent":"$context.identity.userAgent"}}'
-      Auth:
-        Authorizers:
-          FirebaseAuth:
-            JwtConfiguration:
-              Issuer: !Sub "https://securetoken.google.com/${FirebaseProject}"
-              Audience:
-                - !Ref FirebaseProject
-            IdentitySource: "$request.header.Authorization"
-        DefaultAuthorizer: FirebaseAuth
-
-  # IAM Role for API Gateway to write logs
-  ApiGatewayLogRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: apigateway.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
-      Policies:
-        - PolicyName: ApiGatewayLogsPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource:
-                  - !GetAtt ApiGatewayLogGroup.Arn
-                  - !Sub "${ApiGatewayLogGroup.Arn}:*"
 
   # Lambda Function
   JavaFunction:
@@ -104,21 +63,13 @@ Resources:
             Path: /api
             Method: ANY
             ApiId: !Ref ApiGateway
-            Auth:
-              Authorizer: FirebaseAuth
 
   # CloudWatch LogGroup for Lambda retention policy
+  # Using stack name pattern: java-lambda-test or java-lambda-prod
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${JavaFunction}"
-      RetentionInDays: !If [ IsProd, 7, 1 ]
-
-  # CloudWatch LogGroup for API Gateway access logs
-  ApiGatewayLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/apigateway/${ApiGateway}"
+      LogGroupName: !Sub "/aws/lambda/java-lambda-${Environment}"
       RetentionInDays: !If [ IsProd, 7, 1 ]
 
 Conditions:
