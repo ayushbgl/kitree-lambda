@@ -17,16 +17,11 @@ Parameters:
 
   ApiDomainName:
     Type: String
-    Default: ""
-    Description: >
-      Optional custom domain for this API (for example,
-      api-test.kitree.co.in or api.kitree.co.in).
+    Description: Custom domain for this API (for example, api-test.kitree.co.in or api.kitree.co.in)
 
   CertificateArn:
     Type: String
-    Default: ""
-    Description: >
-      ACM certificate ARN for ApiDomainName (must be in the same region as the API).
+    Description: ACM certificate ARN for ApiDomainName (must be in the same region as the API)
 
 Globals:
   Function:
@@ -39,19 +34,17 @@ Globals:
       SystemLogLevel: WARN
 
 Resources:
-  # API Gateway
+  # API Gateway HTTP API
   ApiGateway:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: !Ref Environment
       DefaultRouteSettings:
         DetailedMetricsEnabled: true
-      Domain: !If
-        - HasCustomDomain
-        - DomainName: !Ref ApiDomainName
-          CertificateArn: !Ref CertificateArn
-          EndpointConfiguration: REGIONAL
-        - !Ref "AWS::NoValue"
+      Domain:
+        DomainName: !Ref ApiDomainName
+        CertificateArn: !Ref CertificateArn
+        EndpointConfiguration: REGIONAL
 
   # Lambda Function
   JavaFunction:
@@ -91,16 +84,11 @@ Resources:
 Conditions:
   IsProd: !Equals [ !Ref Environment, "prod" ]
 
-  HasCustomDomain: !And
-    - !Not [ !Equals [ !Ref ApiDomainName, "" ] ]
-    - !Not [ !Equals [ !Ref CertificateArn, "" ] ]
-
 Outputs:
   ApiEndpoint:
     Description: API Gateway default execute-api endpoint URL
     Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
 
   ApiCustomDomainUrl:
-    Condition: HasCustomDomain
     Description: Custom domain URL for this API
     Value: !Sub "https://${ApiDomainName}"
