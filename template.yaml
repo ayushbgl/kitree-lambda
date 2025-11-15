@@ -1,4 +1,3 @@
-# kitreelambda/template.yaml
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Java Lambda with Firebase Authentication via API Gateway
@@ -15,6 +14,19 @@ Parameters:
   FirebaseProject:
     Type: String
     Description: Firebase project ID for authentication
+
+  ApiDomainName:
+    Type: String
+    Default: ""
+    Description: >
+      Optional custom domain for this API (for example,
+      api-test.kitree.co.in or api.kitree.co.in).
+
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: >
+      ACM certificate ARN for ApiDomainName (must be in the same region as the API).
 
 Globals:
   Function:
@@ -34,6 +46,12 @@ Resources:
       StageName: !Ref Environment
       DefaultRouteSettings:
         DetailedMetricsEnabled: true
+      Domain: !If
+        - HasCustomDomain
+        - DomainName: !Ref ApiDomainName
+          CertificateArn: !Ref CertificateArn
+          EndpointConfiguration: REGIONAL
+        - !Ref "AWS::NoValue"
 
   # Lambda Function
   JavaFunction:
@@ -64,8 +82,6 @@ Resources:
             Method: ANY
             ApiId: !Ref ApiGateway
 
-  # CloudWatch LogGroup for Lambda retention policy
-  # Using stack name pattern: java-lambda-test or java-lambda-prod
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -75,7 +91,16 @@ Resources:
 Conditions:
   IsProd: !Equals [ !Ref Environment, "prod" ]
 
+  HasCustomDomain: !And
+    - !Not [ !Equals [ !Ref ApiDomainName, "" ] ]
+    - !Not [ !Equals [ !Ref CertificateArn, "" ] ]
+
 Outputs:
   ApiEndpoint:
-    Description: API Gateway endpoint URL
+    Description: API Gateway default execute-api endpoint URL
     Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+
+  ApiCustomDomainUrl:
+    Condition: HasCustomDomain
+    Description: Custom domain URL for this API
+    Value: !Sub "https://${ApiDomainName}"

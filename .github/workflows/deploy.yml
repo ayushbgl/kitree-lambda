@@ -24,6 +24,9 @@ env:
   FIREBASE_TEST_DIR: firebase-test
   FIREBASE_PROD_DIR: firebase-prod
   LAMBDA_RESOURCE_NAME: JavaFunction
+  API_DOMAIN_TEST: api-test.kitree.co.in
+  API_DOMAIN_PROD: api.kitree.co.in
+  API_CERTIFICATE_ARN: arn:aws:acm:ap-south-1:585768141144:certificate/538dd249-d0e5-4b9d-b06a-8063f3532846
 
 jobs:
   deploy:
@@ -51,6 +54,8 @@ jobs:
           java-version: '17'
         if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
 
+      # (Optional) You probably do not need gcloud for Firebase CLI,
+      # so consider deleting this step entirely.
       - name: Install Google Cloud SDK
         if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' || github.event.inputs.environment == 'only-sync-rules' }}
         run: |
@@ -74,6 +79,10 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
+          # Best practice: migrate to role-to-assume + OIDC when you’re ready.
+          # role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          # (see AWS/GitHub docs on OIDC)
+          # [web:56][web:57][web:58]
 
       - name: Install AWS SAM CLI
         if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
@@ -102,14 +111,16 @@ jobs:
             --template-file .aws-sam/build/template.yaml \
             --output-template-file .aws-sam/build/packaged.yaml \
             --s3-bucket ${{ env.DEPLOYMENT_BUCKET }}
-          
+
           sam deploy \
             --template-file .aws-sam/build/packaged.yaml \
             --stack-name java-lambda-test \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides \
-            Environment=test \
-            FirebaseProject=${{ env.FIREBASE_PROJECT_ID_TEST }} \
+              Environment=test \
+              FirebaseProject=${{ env.FIREBASE_PROJECT_ID_TEST }} \
+              ApiDomainName=${{ env.API_DOMAIN_TEST }} \
+              CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
             --no-fail-on-empty-changeset
 
       - name: Deploy Production Environment
@@ -134,14 +145,16 @@ jobs:
             --template-file .aws-sam/build/template.yaml \
             --output-template-file .aws-sam/build/packaged.yaml \
             --s3-bucket ${{ env.DEPLOYMENT_BUCKET }}
-          
+
           sam deploy \
             --template-file .aws-sam/build/packaged.yaml \
             --stack-name java-lambda-prod \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides \
-            Environment=prod \
-            FirebaseProject=${{ env.FIREBASE_PROJECT_ID_PROD }} \
+              Environment=prod \
+              FirebaseProject=${{ env.FIREBASE_PROJECT_ID_PROD }} \
+              ApiDomainName=${{ env.API_DOMAIN_PROD }} \
+              CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
             --no-fail-on-empty-changeset
 
       - name: Sync Firebase Rules and Indexes
