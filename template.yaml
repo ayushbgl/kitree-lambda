@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Java Lambda with Firebase Authentication via API Gateway
+Description: Java Lambda with Firebase Authentication via Lambda Function URL and CloudFront
 
 Parameters:
   Environment:
@@ -21,7 +21,7 @@ Parameters:
 
   CertificateArn:
     Type: String
-    Description: ACM certificate ARN for ApiDomainName (must be in the same region as the API)
+    Description: ACM certificate ARN for ApiDomainName (must be in us-east-1 for CloudFront)
 
 Globals:
   Function:
@@ -34,18 +34,6 @@ Globals:
       SystemLogLevel: WARN
 
 Resources:
-  # API Gateway HTTP API
-  ApiGateway:
-    Type: AWS::Serverless::HttpApi
-    Properties:
-      StageName: !Ref Environment
-      DefaultRouteSettings:
-        DetailedMetricsEnabled: true
-      Domain:
-        DomainName: !Ref ApiDomainName
-        CertificateArn: !Ref CertificateArn
-        EndpointConfiguration: REGIONAL
-
   # Lambda Function
   JavaFunction:
     Type: AWS::Serverless::Function
@@ -67,13 +55,55 @@ Resources:
       AutoPublishAlias: !Ref Environment
       DeploymentPreference:
         Type: !If [ IsProd, AllAtOnce, Canary10Percent5Minutes ]
-      Events:
-        ApiEvent:
-          Type: HttpApi
-          Properties:
-            Path: /api
-            Method: ANY
-            ApiId: !Ref ApiGateway
+      # New: Lambda Function URL (public, no IAM auth)
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - "*"
+          AllowMethods:
+            - "*"
+
+  # CloudFront distribution in front of the Lambda Function URL
+  ApiDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "CloudFront for java-lambda-${Environment}"
+        Aliases:
+          - !Ref ApiDomainName
+        DefaultRootObject: ""
+        DefaultCacheBehavior:
+          TargetOriginId: lambda-origin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+          OriginRequestPolicyId: 88a5eaf4-2fd4-4709-b370-b4c650ea3fcf # Managed-AllViewerExceptHostHeader
+        Origins:
+          - Id: lambda-origin
+            # Extract the domain part from the Lambda Function URL
+            DomainName: !Select [2, !Split ["/", !GetAtt JavaFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
 
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
@@ -86,9 +116,13 @@ Conditions:
 
 Outputs:
   ApiEndpoint:
-    Description: API Gateway default execute-api endpoint URL
-    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+    Description: Lambda Function URL endpoint
+    Value: !GetAtt JavaFunctionUrl.FunctionUrl
 
   ApiCustomDomainUrl:
-    Description: Custom domain URL for this API
+    Description: Custom domain URL for this API via CloudFront
     Value: !Sub "https://${ApiDomainName}"
+
+  CloudFrontDomainName:
+    Description: CloudFront distribution domain name
+    Value: !GetAtt ApiDistribution.DomainName

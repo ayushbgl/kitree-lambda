@@ -26,7 +26,7 @@ env:
   LAMBDA_RESOURCE_NAME: JavaFunction
   API_DOMAIN_TEST: api-test.kitree.co.in
   API_DOMAIN_PROD: api.kitree.co.in
-  API_CERTIFICATE_ARN: arn:aws:acm:ap-south-1:585768141144:certificate/538dd249-d0e5-4b9d-b06a-8063f3532846
+  API_CERTIFICATE_ARN: arn:aws:acm:us-east-1:585768141144:certificate/33d1035e-b43b-4ba2-8bb4-342cb185139b
 
 jobs:
   deploy:
@@ -123,6 +123,20 @@ jobs:
               CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
             --no-fail-on-empty-changeset
 
+          echo "📤 Fetching important TEST stack outputs..."
+          # Requires SAM CLI 1.88+ for 'sam list stack-outputs'
+          TEST_OUTPUTS=$(sam list stack-outputs --stack-name java-lambda-test --output json)
+
+          TEST_CF_DOMAIN=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue')
+          TEST_CUSTOM_DOMAIN=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiCustomDomainUrl") | .OutputValue')
+
+          echo "──────────── TEST ENVIRONMENT ────────────"
+          echo "CloudFrontDomainName: $TEST_CF_DOMAIN"
+          echo "ApiCustomDomainUrl : $TEST_CUSTOM_DOMAIN"
+          echo "👉 Add a CNAME/ALIAS in Netlify:"
+          echo "   ${API_DOMAIN_TEST} → $TEST_CF_DOMAIN"
+          echo "──────────────────────────────────────────"
+
       - name: Deploy Production Environment
         if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
         run: |
@@ -157,24 +171,33 @@ jobs:
               CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
             --no-fail-on-empty-changeset
 
+          echo "📤 Fetching important PROD stack outputs..."
+          PROD_OUTPUTS=$(sam list stack-outputs --stack-name java-lambda-prod --output json)
+
+          PROD_CF_DOMAIN=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue')
+          PROD_CUSTOM_DOMAIN=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiCustomDomainUrl") | .OutputValue')
+
+          echo "─────────── PRODUCTION ENVIRONMENT ───────────"
+          echo "CloudFrontDomainName: $PROD_CF_DOMAIN"
+          echo "ApiCustomDomainUrl : $PROD_CUSTOM_DOMAIN"
+          echo "👉 Add a CNAME/ALIAS in Netlify:"
+          echo "   ${API_DOMAIN_PROD} → $PROD_CF_DOMAIN"
+          echo "──────────────────────────────────────────────"
+
       - name: Sync Firebase Rules and Indexes
         if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' || github.event.inputs.environment == 'only-sync-rules' }}
         run: |
           echo "🔄 Starting Firebase Rules and Indexes sync..."
           echo "📋 Selected environment: ${{ github.event.inputs.environment }}"
           
-          # Install Firebase CLI and Admin SDK
-          echo "📦 Installing Firebase CLI and Admin SDK..."
           npm install -g firebase-tools
           npm install firebase-admin
           echo "✅ Packages installed successfully"
 
-          # Create service account files
           echo "🔑 Creating service account files..."
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
           
-          # Verify both credential files
           echo "🔍 Verifying credential files..."
           if [ -f "firebase-test-key.json" ]; then
             echo "✅ Test service account file created"
@@ -210,8 +233,6 @@ jobs:
             exit 1
           fi
 
-          # Create .firebaserc file for project aliases
-          echo "⚙️ Creating Firebase configuration..."
           cat > .firebaserc << 'EOF'
           {
             "projects": {
@@ -221,7 +242,6 @@ jobs:
           }
           EOF
 
-          # Create basic firebase.json configuration
           cat > firebase.json << 'EOF'
           {
             "firestore": {
@@ -232,11 +252,9 @@ jobs:
           EOF
           echo "✅ Firebase configuration files created"
 
-          # Export from test project
           echo "📤 Exporting from TEST project (${{ env.FIREBASE_PROJECT_ID_TEST }})..."
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
           
-          # Test Firebase CLI authentication
           echo "🔐 Testing Firebase CLI authentication with test project..."
           firebase projects:list --json > test_auth_check.json || {
             echo "❌ Failed to authenticate with Firebase CLI using test credentials"
@@ -371,11 +389,9 @@ jobs:
             exit 1
           fi
 
-          # Deploy to production project
           echo "📤 Deploying to PRODUCTION project (${{ env.FIREBASE_PROJECT_ID_PROD }})..."
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
           
-          # Test Firebase CLI authentication for prod
           echo "🔐 Testing Firebase CLI authentication with production project..."
           firebase projects:list --json > prod_auth_check.json || {
             echo "❌ Failed to authenticate with Firebase CLI using production credentials"
@@ -387,7 +403,6 @@ jobs:
           firebase use prod
           echo "✅ Switched to production project"
 
-          # Deploy rules to production with force flag to avoid confirmations
           if [ -f "firestore.rules" ]; then
             echo "📋 Deploying rules to production..."
             echo "📄 Rules file content preview:"
@@ -404,7 +419,6 @@ jobs:
             echo "⚠️ No rules file found to deploy"
           fi
 
-          # Deploy indexes to production with force flag to avoid confirmations
           if [ -f "firestore.indexes.json" ]; then
             echo "📋 Deploying indexes to production..."
             echo "📄 Indexes file content preview:"
@@ -421,7 +435,6 @@ jobs:
             echo "⚠️ No indexes file found to deploy"
           fi
 
-          # Cleanup
           echo "🧹 Cleaning up temporary files..."
           rm -f firebase-test-key.json firebase-prod-key.json firestore.rules firestore.indexes.json export-rules.js .firebaserc firebase.json test_auth_check.json prod_auth_check.json
           echo "✅ Successfully completed Firebase rules and indexes sync"
@@ -430,7 +443,6 @@ jobs:
         if: always() && github.event.inputs.environment != 'only-sync-rules'
         run: |
           if [ -f ".aws-sam/build/packaged.yaml" ]; then
-            # Extract S3 URI - find line with s3:// and extract the full URI
             S3_URI=$(grep "s3://" .aws-sam/build/packaged.yaml | grep -v "^#" | head -1 | grep -o 's3://[^[:space:]]*' | head -1)
             if [ ! -z "$S3_URI" ] && [[ "$S3_URI" == s3://* ]]; then
               echo "🧹 Cleaning up S3 artifact: $S3_URI"
