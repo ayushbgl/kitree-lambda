@@ -1425,9 +1425,33 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             System.out.println("Gochar API response: " + response);
-            return response;
+            // Parse Lambda response format to extract body field if wrapped
+            return parseLambdaResponse(response);
         } else {
             throw new RuntimeException("Gochar API request failed with status code: " + httpResponse.statusCode());
+        }
+    }
+
+    /**
+     * Parse Lambda Function URL response
+     * Lambda Function URLs automatically extract the body from the Lambda response format,
+     * so the response should already be the JSON we want. This method handles both cases.
+     */
+    private String parseLambdaResponse(String response) {
+        try {
+            // Try to parse as JSON to check if it's wrapped in Lambda response format
+            Map<String, Object> responseMap = gson.fromJson(response, Map.class);
+            
+            // If it has a "body" field, it's wrapped in Lambda response format
+            if (responseMap.containsKey("body") && responseMap.get("body") instanceof String) {
+                return (String) responseMap.get("body");
+            }
+            
+            // Otherwise, return as-is (Lambda Function URL already extracted the body)
+            return response;
+        } catch (Exception e) {
+            // If parsing fails, assume it's already the JSON we want
+            return response;
         }
     }
 
