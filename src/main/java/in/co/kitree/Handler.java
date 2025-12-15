@@ -52,7 +52,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private static LambdaLogger logger;
     protected PythonLambdaService pythonLambdaService;
     private AstrologyService astrologyService;
-    private static final String PYTHON_SERVER_BASE_URL = "https://kitree-python-server.salmonmoss-7e006d81.centralindia.azurecontainerapps.io";
 
     public Handler() {
         try {
@@ -1419,7 +1418,18 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     private String getGocharDetails(String requestBody) throws Exception {
-        String API_URL = PYTHON_SERVER_BASE_URL + "/gochar";
+        // Use the same provider configuration as other astrology endpoints
+        String baseUrl;
+        if (AstrologyServiceConfig.isAwsLambdaProviderSelected()) {
+            baseUrl = AstrologyServiceConfig.AWS_LAMBDA_BASE_URL;
+        } else if (AstrologyServiceConfig.isPythonServerProviderSelected()) {
+            baseUrl = AstrologyServiceConfig.PYTHON_SERVER_BASE_URL;
+        } else {
+            // Default to AWS Lambda if provider is not recognized
+            baseUrl = AstrologyServiceConfig.AWS_LAMBDA_BASE_URL;
+        }
+        
+        String API_URL = baseUrl + "/gochar";
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(API_URL)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(requestBody)).build();
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
