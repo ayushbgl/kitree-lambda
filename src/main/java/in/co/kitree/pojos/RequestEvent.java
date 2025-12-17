@@ -7,6 +7,7 @@ public class RequestEvent {
     private String source;
     private String body;
     private Map<String, String> headers;
+    private String detailType; // For EventBridge scheduled events
 
     public RequestEvent() {
     }
@@ -41,5 +42,13 @@ public class RequestEvent {
 
     public void setHeaders(Map<String, String> headers) {
         this.headers = headers;
+    }
+
+    public String getDetailType() {
+        return detailType;
+    }
+
+    public void setDetailType(String detailType) {
+        this.detailType = detailType;
     }
 }

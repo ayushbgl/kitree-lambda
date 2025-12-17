@@ -29,6 +29,12 @@ public class ServicePlan {
     private long duration;
     private String durationUnit;
 
+    // On-demand consultation rate fields
+    private Double onDemandRatePerMinuteAudio;
+    private Double onDemandRatePerMinuteVideo;
+    private Double onDemandRatePerMinuteChat;
+    private String onDemandCurrency; // Currency for on-demand rates (defaults to plan currency)
+
     public ServicePlan() {}
 
     // --- New getters/setters ---
@@ -78,6 +84,16 @@ public class ServicePlan {
     public void setDuration(long duration) { this.duration = duration; }
     public String getDurationUnit() { return durationUnit; }
     public void setDurationUnit(String durationUnit) { this.durationUnit = durationUnit; }
+
+    // On-demand consultation rate getters/setters
+    public Double getOnDemandRatePerMinuteAudio() { return onDemandRatePerMinuteAudio; }
+    public void setOnDemandRatePerMinuteAudio(Double onDemandRatePerMinuteAudio) { this.onDemandRatePerMinuteAudio = onDemandRatePerMinuteAudio; }
+    public Double getOnDemandRatePerMinuteVideo() { return onDemandRatePerMinuteVideo; }
+    public void setOnDemandRatePerMinuteVideo(Double onDemandRatePerMinuteVideo) { this.onDemandRatePerMinuteVideo = onDemandRatePerMinuteVideo; }
+    public Double getOnDemandRatePerMinuteChat() { return onDemandRatePerMinuteChat; }
+    public void setOnDemandRatePerMinuteChat(Double onDemandRatePerMinuteChat) { this.onDemandRatePerMinuteChat = onDemandRatePerMinuteChat; }
+    public String getOnDemandCurrency() { return onDemandCurrency; }
+    public void setOnDemandCurrency(String onDemandCurrency) { this.onDemandCurrency = onDemandCurrency; }
 
     @Override
     public String toString() {

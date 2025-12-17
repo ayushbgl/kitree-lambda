@@ -111,6 +111,28 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/java-lambda-${Environment}"
       RetentionInDays: !If [ IsProd, 7, 1 ]
 
+  # EventBridge Rule for auto-terminating stale on-demand consultations
+  AutoTerminateConsultationsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "auto-terminate-consultations-${Environment}"
+      Description: "Auto-terminate on-demand consultations that exceed max_allowed_duration"
+      ScheduleExpression: "rate(5 minutes)"
+      State: ENABLED
+      Targets:
+        - Id: JavaLambdaTarget
+          Arn: !GetAtt JavaFunction.Arn
+          Input: '{"source":"aws.events","detailType":"auto_terminate_consultations"}'
+
+  # Permission for EventBridge to invoke Lambda
+  AutoTerminateConsultationsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref JavaFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AutoTerminateConsultationsRule.Arn
+
 Conditions:
   IsProd: !Equals [ !Ref Environment, "prod" ]
 

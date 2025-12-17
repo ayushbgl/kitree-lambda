@@ -145,6 +145,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         logger = context.getLogger();
         try {
             if ("aws.events".equals(event.getSource())) {
+                // Check if this is a scheduled auto-terminate event
+                String detailType = event.getDetailType();
+                if ("auto_terminate_consultations".equals(detailType)) {
+                    logger.log("Running auto-terminate consultations cron job...\n");
+                    return handleAutoTerminateConsultations();
+                }
                 logger.log("warmed up\n");
                 return "Warmed up!";
             }
@@ -888,6 +894,47 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 gocharApiRequestBody.put("api_token", "D80FE645F582F9E0");
                 return getGocharDetails(gson.toJson(gocharApiRequestBody));
             }
+
+            // =====================================================================
+            // WALLET MANAGEMENT ENDPOINTS
+            // =====================================================================
+
+            if ("wallet_balance".equals(requestBody.getFunction())) {
+                return handleWalletBalance(userId, requestBody);
+            }
+
+            if ("create_wallet_recharge_order".equals(requestBody.getFunction())) {
+                return handleCreateWalletRechargeOrder(userId, requestBody);
+            }
+
+            if ("verify_wallet_recharge".equals(requestBody.getFunction())) {
+                return handleVerifyWalletRecharge(userId, requestBody);
+            }
+
+            // =====================================================================
+            // ON-DEMAND CONSULTATION ENDPOINTS
+            // =====================================================================
+
+            if ("on_demand_consultation_initiate".equals(requestBody.getFunction())) {
+                return handleOnDemandConsultationInitiate(userId, requestBody);
+            }
+
+            if ("on_demand_consultation_connect".equals(requestBody.getFunction())) {
+                return handleOnDemandConsultationConnect(userId, requestBody);
+            }
+
+            if ("on_demand_consultation_heartbeat".equals(requestBody.getFunction())) {
+                return handleOnDemandConsultationHeartbeat(userId, requestBody);
+            }
+
+            if ("update_consultation_max_duration".equals(requestBody.getFunction())) {
+                return handleUpdateConsultationMaxDuration(userId, requestBody);
+            }
+
+            if ("on_demand_consultation_end".equals(requestBody.getFunction())) {
+                return handleOnDemandConsultationEnd(userId, requestBody);
+            }
+
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -1465,6 +1512,155 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
     }
 
+    // =====================================================================
+    // AUTO-TERMINATE CONSULTATIONS CRON JOB
+    // =====================================================================
+
+    /**
+     * Auto-terminate consultations that have exceeded their max_allowed_duration.
+     * This method is called by AWS EventBridge on a schedule (e.g., every 5 minutes).
+     */
+    private String handleAutoTerminateConsultations() {
+        int terminatedCount = 0;
+        int errorCount = 0;
+        
+        try {
+            WalletService walletService = new WalletService(this.db);
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+            
+            // Query all CONNECTED on-demand consultations
+            // Using collectionGroup query to search across all users' orders
+            com.google.cloud.Timestamp now = com.google.cloud.Timestamp.now();
+            long nowMillis = now.toDate().getTime();
+            
+            Query query = this.db.collectionGroup("orders")
+                    .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                    .whereEqualTo("status", "CONNECTED");
+            
+            for (QueryDocumentSnapshot doc : query.get().get().getDocuments()) {
+                try {
+                    // Get consultation details
+                    String orderId = doc.getId();
+                    String userId = doc.getReference().getParent().getParent().getId();
+                    com.google.cloud.Timestamp startTime = doc.getTimestamp("start_time");
+                    Long maxAllowedDuration = doc.getLong("max_allowed_duration");
+                    
+                    if (startTime == null || maxAllowedDuration == null) {
+                        System.out.println("Skipping order " + orderId + " - missing start_time or max_allowed_duration");
+                        continue;
+                    }
+                    
+                    // Calculate elapsed time
+                    long startTimeMillis = startTime.toDate().getTime();
+                    long elapsedSeconds = (nowMillis - startTimeMillis) / 1000;
+                    
+                    // Add grace period of 60 seconds
+                    long gracePeriod = 60;
+                    
+                    if (elapsedSeconds >= (maxAllowedDuration + gracePeriod)) {
+                        System.out.println("Auto-terminating consultation: " + orderId + 
+                                " (elapsed: " + elapsedSeconds + "s, max: " + maxAllowedDuration + "s)");
+                        
+                        // End the consultation
+                        OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
+                        if (order != null && "CONNECTED".equals(order.getStatus())) {
+                            // Calculate final values
+                            Long durationSeconds = consultationService.calculateElapsedSeconds(order);
+                            Double cost = consultationService.calculateCost(durationSeconds, order.getExpertRatePerMinute());
+                            Double platformFeeAmount = consultationService.calculatePlatformFee(cost, order.getPlatformFeePercent());
+                            Double expertEarnings = cost - platformFeeAmount;
+                            
+                            String expertId = order.getExpertId();
+                            String currency = order.getCurrency();
+                            
+                            final Long finalDurationSeconds = durationSeconds;
+                            final Double finalCost = cost;
+                            final Double finalPlatformFeeAmount = platformFeeAmount;
+                            final Double finalExpertEarnings = expertEarnings;
+                            final String finalUserId = userId;
+                            final String finalOrderId = orderId;
+                            final String finalExpertId = expertId;
+                            final String finalCurrency = currency;
+                            
+                            this.db.runTransaction(transaction -> {
+                                // Deduct from user wallet
+                                walletService.updateWalletBalanceInTransaction(
+                                    transaction, finalUserId, finalCurrency, -finalCost
+                                );
+                                
+                                // Credit expert wallet
+                                walletService.updateWalletBalanceInTransaction(
+                                    transaction, finalExpertId, finalCurrency, finalExpertEarnings
+                                );
+                                
+                                // Create deduction transaction for user
+                                WalletTransaction deductionTransaction = new WalletTransaction();
+                                deductionTransaction.setType("CONSULTATION_DEDUCTION");
+                                deductionTransaction.setSource("PAYMENT");
+                                deductionTransaction.setAmount(-finalCost);
+                                deductionTransaction.setCurrency(finalCurrency);
+                                deductionTransaction.setOrderId(finalOrderId);
+                                deductionTransaction.setStatus("COMPLETED");
+                                deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+                                deductionTransaction.setDescription("On-demand consultation charge (auto-terminated)");
+                                
+                                walletService.createWalletTransactionInTransaction(transaction, finalUserId, deductionTransaction);
+                                
+                                // Create credit transaction for expert
+                                WalletTransaction creditTransaction = new WalletTransaction();
+                                creditTransaction.setType("CONSULTATION_DEDUCTION");
+                                creditTransaction.setSource("PAYMENT");
+                                creditTransaction.setAmount(finalExpertEarnings);
+                                creditTransaction.setCurrency(finalCurrency);
+                                creditTransaction.setOrderId(finalOrderId);
+                                creditTransaction.setStatus("COMPLETED");
+                                creditTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+                                creditTransaction.setDescription("On-demand consultation earning (auto-terminated)");
+                                
+                                walletService.createWalletTransactionInTransaction(transaction, finalExpertId, creditTransaction);
+                                
+                                // Update order
+                                consultationService.completeOrderInTransaction(
+                                    transaction, finalUserId, finalOrderId,
+                                    finalDurationSeconds, finalCost, finalPlatformFeeAmount, finalExpertEarnings
+                                );
+                                
+                                // Set expert status back to ONLINE if no other active consultations
+                                boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(finalExpertId, finalOrderId);
+                                if (!hasOtherActive) {
+                                    walletService.setExpertStatusInTransaction(transaction, finalExpertId, "ONLINE");
+                                }
+                                
+                                return null;
+                            }).get();
+                            
+                            terminatedCount++;
+                            System.out.println("Successfully auto-terminated consultation: " + orderId);
+                        }
+                    }
+                } catch (Exception e) {
+                    errorCount++;
+                    System.err.println("Error auto-terminating consultation " + doc.getId() + ": " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error in handleAutoTerminateConsultations: " + e.getMessage());
+            e.printStackTrace();
+            return gson.toJson(Map.of(
+                "success", false,
+                "errorMessage", e.getMessage()
+            ));
+        }
+        
+        System.out.println("Auto-terminate job completed. Terminated: " + terminatedCount + ", Errors: " + errorCount);
+        return gson.toJson(Map.of(
+            "success", true,
+            "terminatedCount", terminatedCount,
+            "errorCount", errorCount
+        ));
+    }
+
     public class HandlerException extends Exception {
         ErrorCode errorCode;
 
@@ -1472,5 +1668,570 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             super();
             this.errorCode = errorCode;
         }
+    }
+
+    // =====================================================================
+    // WALLET MANAGEMENT HANDLER METHODS
+    // =====================================================================
+
+    /**
+     * Get wallet balance for a user.
+     * Returns all currency balances or a specific currency if provided.
+     */
+    private String handleWalletBalance(String userId, RequestBody requestBody) throws ExecutionException, InterruptedException {
+        WalletService walletService = new WalletService(this.db);
+        String currency = requestBody.getCurrency();
+        
+        if (currency != null && !currency.isEmpty()) {
+            // Return specific currency balance
+            Double balance = walletService.getWalletBalance(userId, currency);
+            return gson.toJson(Map.of(
+                "success", true,
+                "balance", balance,
+                "currency", currency
+            ));
+        } else {
+            // Return all currency balances
+            Map<String, Double> balances = walletService.getWalletBalances(userId);
+            String defaultCurrency = walletService.getUserDefaultCurrency(userId);
+            return gson.toJson(Map.of(
+                "success", true,
+                "balances", balances,
+                "defaultCurrency", defaultCurrency
+            ));
+        }
+    }
+
+    /**
+     * Create a Razorpay order for wallet recharge.
+     * Step 1 of the two-step recharge process.
+     */
+    private String handleCreateWalletRechargeOrder(String userId, RequestBody requestBody) throws Exception {
+        Double amount = requestBody.getAmount();
+        if (amount == null || amount <= 0) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Invalid amount"));
+        }
+        
+        // Minimum recharge amount (e.g., 100 INR)
+        if (amount < 100) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Minimum recharge amount is ₹100"));
+        }
+        
+        WalletService walletService = new WalletService(this.db);
+        String currency = requestBody.getCurrency();
+        if (currency == null || currency.isEmpty()) {
+            currency = walletService.getUserDefaultCurrency(userId);
+        }
+        
+        // Create Razorpay order
+        String razorpayOrderId = razorpay.createOrder(amount, CustomerCipher.encryptCaesarCipher(userId));
+        
+        // Store recharge order details for verification
+        Map<String, Object> rechargeOrderDetails = new HashMap<>();
+        rechargeOrderDetails.put("userId", userId);
+        rechargeOrderDetails.put("amount", amount);
+        rechargeOrderDetails.put("currency", currency);
+        rechargeOrderDetails.put("razorpay_order_id", razorpayOrderId);
+        rechargeOrderDetails.put("status", "PENDING");
+        rechargeOrderDetails.put("created_at", com.google.cloud.Timestamp.now());
+        
+        this.db.collection("users").document(userId).collection("wallet_recharge_orders")
+                .document(razorpayOrderId).set(rechargeOrderDetails).get();
+        
+        return gson.toJson(Map.of(
+            "success", true,
+            "order_id", razorpayOrderId,
+            "razorpay_key", razorpay.getRazorpayKey(),
+            "amount", amount,
+            "currency", currency
+        ));
+    }
+
+    /**
+     * Verify Razorpay payment and update wallet balance.
+     * Step 2 of the two-step recharge process.
+     */
+    private String handleVerifyWalletRecharge(String userId, RequestBody requestBody) throws Exception {
+        String razorpayOrderId = requestBody.getRazorpayOrderId();
+        String razorpayPaymentId = requestBody.getRazorpayPaymentId();
+        String razorpaySignature = requestBody.getRazorpaySignature();
+        
+        if (razorpayOrderId == null || razorpayPaymentId == null || razorpaySignature == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Missing payment details"));
+        }
+        
+        // Verify payment signature
+        if (!razorpay.verifyPayment(razorpayOrderId, razorpayPaymentId, razorpaySignature)) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed"));
+        }
+        
+        WalletService walletService = new WalletService(this.db);
+        
+        // Check if payment already processed
+        if (walletService.isPaymentAlreadyProcessed(userId, razorpayPaymentId)) {
+            Double currentBalance = walletService.getWalletBalance(userId, "INR");
+            return gson.toJson(Map.of(
+                "success", true,
+                "newBalance", currentBalance,
+                "currency", "INR",
+                "message", "Payment already processed"
+            ));
+        }
+        
+        // Fetch recharge order details
+        DocumentSnapshot rechargeOrderDoc = this.db.collection("users").document(userId)
+                .collection("wallet_recharge_orders").document(razorpayOrderId).get().get();
+        
+        if (!rechargeOrderDoc.exists()) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Recharge order not found"));
+        }
+        
+        Double amount = rechargeOrderDoc.getDouble("amount");
+        String currency = rechargeOrderDoc.getString("currency");
+        if (currency == null) currency = "INR";
+        
+        final String finalCurrency = currency;
+        final Double finalAmount = amount;
+        
+        // Use transaction to update balance and create transaction record
+        Double[] newBalanceHolder = new Double[1];
+        this.db.runTransaction(transaction -> {
+            // Update wallet balance
+            newBalanceHolder[0] = walletService.updateWalletBalanceInTransaction(transaction, userId, finalCurrency, finalAmount);
+            
+            // Create wallet transaction record
+            WalletTransaction walletTransaction = new WalletTransaction();
+            walletTransaction.setType("RECHARGE");
+            walletTransaction.setSource("PAYMENT");
+            walletTransaction.setAmount(finalAmount);
+            walletTransaction.setCurrency(finalCurrency);
+            walletTransaction.setPaymentId(razorpayPaymentId);
+            walletTransaction.setStatus("COMPLETED");
+            walletTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+            walletTransaction.setDescription("Wallet recharge via Razorpay");
+            
+            walletService.createWalletTransactionInTransaction(transaction, userId, walletTransaction);
+            
+            return null;
+        }).get();
+        
+        // Update recharge order status
+        this.db.collection("users").document(userId).collection("wallet_recharge_orders")
+                .document(razorpayOrderId).update("status", "COMPLETED", "payment_id", razorpayPaymentId).get();
+        
+        return gson.toJson(Map.of(
+            "success", true,
+            "newBalance", newBalanceHolder[0],
+            "currency", currency
+        ));
+    }
+
+    // =====================================================================
+    // ON-DEMAND CONSULTATION HANDLER METHODS
+    // =====================================================================
+
+    /**
+     * Initiate an on-demand consultation.
+     * Checks expert status, wallet balance, and creates the consultation order.
+     */
+    private String handleOnDemandConsultationInitiate(String userId, RequestBody requestBody) throws Exception {
+        String expertId = requestBody.getExpertId();
+        String consultationType = requestBody.getConsultationType();
+        String category = requestBody.getCategory();
+        String planId = requestBody.getPlanId();
+        
+        if (expertId == null || consultationType == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Missing required fields"));
+        }
+        
+        // Validate consultation type
+        if (!Arrays.asList("audio", "video", "chat").contains(consultationType.toLowerCase())) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Invalid consultation type"));
+        }
+        
+        WalletService walletService = new WalletService(this.db);
+        OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+        
+        // Check expert status
+        String expertStatus = walletService.getExpertStatus(expertId);
+        if (!"ONLINE".equals(expertStatus)) {
+            return gson.toJson(Map.of(
+                "success", false,
+                "errorCode", "EXPERT_NOT_AVAILABLE",
+                "errorMessage", "Expert is " + expertStatus.toLowerCase()
+            ));
+        }
+        
+        // Determine rate from plan
+        Double rate = null;
+        String currency = "INR";
+        
+        if (planId != null && !planId.isEmpty()) {
+            ServicePlan plan = getPlanDetails(planId, expertId);
+            if (plan != null) {
+                rate = consultationService.getOnDemandRate(plan, consultationType);
+                currency = consultationService.getOnDemandCurrency(plan);
+            }
+        }
+        
+        if (rate == null || rate <= 0) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "On-demand rate not configured for this expert"));
+        }
+        
+        // Get platform fee config
+        PlatformFeeConfig feeConfig = walletService.getPlatformFeeConfig(expertId);
+        Double platformFeePercent = feeConfig.getFeePercent("ON_DEMAND_CONSULTATION", category);
+        
+        // Check wallet balance
+        Double walletBalance = walletService.getWalletBalance(userId, currency);
+        Double minimumRequired = rate * 3; // 3 minutes minimum
+        
+        if (walletBalance < minimumRequired) {
+            return gson.toJson(Map.of(
+                "success", false,
+                "errorCode", "LOW_BALANCE",
+                "requiredAmount", minimumRequired,
+                "currentBalance", walletBalance,
+                "currency", currency
+            ));
+        }
+        
+        // Calculate max allowed duration
+        Long maxAllowedDuration = (long) ((walletBalance / rate) * 60); // in seconds
+        
+        // Get user and expert names
+        FirebaseUser user = UserService.getUserDetails(this.db, userId);
+        FirebaseUser expert = UserService.getUserDetails(this.db, expertId);
+        
+        final Double finalRate = rate;
+        final String finalCurrency = currency;
+        final Double finalPlatformFeePercent = platformFeePercent;
+        final Long finalMaxAllowedDuration = maxAllowedDuration;
+        
+        // Create order and lock expert status in a transaction
+        String[] orderIdHolder = new String[1];
+        try {
+            this.db.runTransaction(transaction -> {
+                // Double-check expert status
+                DocumentReference storeRef = db.collection("users").document(expertId)
+                        .collection("public").document("store");
+                DocumentSnapshot storeDoc = transaction.get(storeRef).get();
+                String currentStatus = storeDoc.getString("expert_status");
+                
+                if (!"ONLINE".equals(currentStatus)) {
+                    throw new RuntimeException("Expert is no longer available");
+                }
+                
+                // Lock expert status to BUSY
+                walletService.setExpertStatusInTransaction(transaction, expertId, "BUSY");
+                
+                // Create order
+                OnDemandConsultationOrder order = new OnDemandConsultationOrder();
+                order.setUserId(userId);
+                order.setUserName(user != null ? user.getName() : null);
+                order.setExpertId(expertId);
+                order.setExpertName(expert != null ? expert.getName() : null);
+                order.setPlanId(planId);
+                order.setConsultationType(consultationType.toLowerCase());
+                order.setCategory(category);
+                order.setExpertRatePerMinute(finalRate);
+                order.setCurrency(finalCurrency);
+                order.setPlatformFeePercent(finalPlatformFeePercent);
+                order.setMaxAllowedDuration(finalMaxAllowedDuration);
+                order.setStatus("INITIATED");
+                
+                orderIdHolder[0] = consultationService.createOrderInTransaction(transaction, order);
+                
+                return null;
+            }).get();
+        } catch (Exception e) {
+            if (e.getMessage() != null && e.getMessage().contains("Expert is no longer available")) {
+                return gson.toJson(Map.of(
+                    "success", false,
+                    "errorCode", "EXPERT_NOT_AVAILABLE",
+                    "errorMessage", "Expert is no longer available"
+                ));
+            }
+            throw e;
+        }
+        
+        String orderId = orderIdHolder[0];
+        
+        // Create GetStream call for audio/video consultations
+        String streamUserToken = null;
+        String streamCallCid = null;
+        
+        if ("audio".equals(consultationType) || "video".equals(consultationType)) {
+            // Get GetStream token
+            PythonLambdaEventRequest getStreamTokenEvent = new PythonLambdaEventRequest();
+            getStreamTokenEvent.setFunction("get_stream_user_token");
+            getStreamTokenEvent.setUserId(userId);
+            getStreamTokenEvent.setUserName(user != null ? user.getName() : userId);
+            getStreamTokenEvent.setTest(isTest());
+            
+            streamUserToken = pythonLambdaService.invokePythonLambda(getStreamTokenEvent).getStreamUserToken();
+            
+            // Create GetStream call
+            PythonLambdaEventRequest createCallEvent = new PythonLambdaEventRequest();
+            createCallEvent.setFunction("create_call");
+            createCallEvent.setType("CONSULTATION");
+            createCallEvent.setUserId(userId);
+            createCallEvent.setUserName(user != null ? user.getName() : null);
+            createCallEvent.setExpertId(expertId);
+            createCallEvent.setExpertName(expert != null ? expert.getName() : null);
+            createCallEvent.setOrderId(orderId);
+            createCallEvent.setVideo("video".equals(consultationType));
+            createCallEvent.setTest(isTest());
+            
+            pythonLambdaService.invokePythonLambda(createCallEvent);
+            
+            streamCallCid = "consultation_" + consultationType + ":" + orderId;
+            
+            // Update order with stream call CID
+            consultationService.updateStreamCallCid(userId, orderId, streamCallCid);
+        }
+        
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("orderId", orderId);
+        response.put("maxDuration", maxAllowedDuration);
+        response.put("rate", rate);
+        response.put("currency", currency);
+        response.put("platformFeePercent", platformFeePercent);
+        
+        if (streamUserToken != null) {
+            response.put("streamUserToken", streamUserToken);
+        }
+        if (streamCallCid != null) {
+            response.put("callCid", streamCallCid);
+        }
+        
+        return gson.toJson(response);
+    }
+
+    /**
+     * Connect an on-demand consultation (called when the call actually starts).
+     */
+    private String handleOnDemandConsultationConnect(String userId, RequestBody requestBody) throws Exception {
+        String orderId = requestBody.getOrderId();
+        
+        if (orderId == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
+        }
+        
+        WalletService walletService = new WalletService(this.db);
+        OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+        
+        OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
+        
+        if (order == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
+        }
+        
+        if (!"INITIATED".equals(order.getStatus())) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order is not in INITIATED status"));
+        }
+        
+        consultationService.connectOrder(userId, orderId);
+        
+        return gson.toJson(Map.of("success", true));
+    }
+
+    /**
+     * Heartbeat for an active on-demand consultation.
+     * Returns CONTINUE or TERMINATE based on remaining time.
+     */
+    private String handleOnDemandConsultationHeartbeat(String userId, RequestBody requestBody) throws Exception {
+        String orderId = requestBody.getOrderId();
+        
+        if (orderId == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
+        }
+        
+        WalletService walletService = new WalletService(this.db);
+        OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+        
+        OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
+        
+        if (order == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
+        }
+        
+        if (!"CONNECTED".equals(order.getStatus())) {
+            return gson.toJson(Map.of(
+                "status", "TERMINATE",
+                "reason", "NOT_CONNECTED"
+            ));
+        }
+        
+        Long remainingSeconds = consultationService.calculateRemainingSeconds(order);
+        
+        if (remainingSeconds <= 0) {
+            return gson.toJson(Map.of(
+                "status", "TERMINATE",
+                "reason", "LOW_BALANCE"
+            ));
+        }
+        
+        return gson.toJson(Map.of(
+            "status", "CONTINUE",
+            "remainingSeconds", remainingSeconds
+        ));
+    }
+
+    /**
+     * Update max duration for an active consultation (mid-consultation recharge).
+     */
+    private String handleUpdateConsultationMaxDuration(String userId, RequestBody requestBody) throws Exception {
+        String orderId = requestBody.getOrderId();
+        Double additionalAmount = requestBody.getAdditionalAmount();
+        
+        if (orderId == null || additionalAmount == null || additionalAmount <= 0) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Invalid request parameters"));
+        }
+        
+        WalletService walletService = new WalletService(this.db);
+        OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+        
+        OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
+        
+        if (order == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
+        }
+        
+        if (!"CONNECTED".equals(order.getStatus())) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Consultation is not active"));
+        }
+        
+        // Calculate additional duration
+        Double rate = order.getExpertRatePerMinute();
+        Long additionalDuration = (long) ((additionalAmount / rate) * 60); // in seconds
+        
+        // Update max duration
+        Long currentMaxDuration = order.getMaxAllowedDuration();
+        Long newMaxDuration = currentMaxDuration + additionalDuration;
+        
+        this.db.runTransaction(transaction -> {
+            consultationService.updateMaxDurationInTransaction(transaction, userId, orderId, newMaxDuration);
+            return null;
+        }).get();
+        
+        return gson.toJson(Map.of(
+            "success", true,
+            "newMaxDuration", newMaxDuration,
+            "additionalDuration", additionalDuration
+        ));
+    }
+
+    /**
+     * End an on-demand consultation.
+     * Calculates cost, deducts from wallet, and credits expert.
+     */
+    private String handleOnDemandConsultationEnd(String userId, RequestBody requestBody) throws Exception {
+        String orderId = requestBody.getOrderId();
+        
+        if (orderId == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
+        }
+        
+        WalletService walletService = new WalletService(this.db);
+        OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+        
+        OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
+        
+        if (order == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
+        }
+        
+        // Allow ending if CONNECTED or already TERMINATED
+        if (!Arrays.asList("CONNECTED", "TERMINATED").contains(order.getStatus())) {
+            if ("COMPLETED".equals(order.getStatus())) {
+                // Already completed, return existing data
+                return gson.toJson(Map.of(
+                    "success", true,
+                    "cost", order.getCost(),
+                    "duration", order.getDurationSeconds(),
+                    "currency", order.getCurrency(),
+                    "message", "Consultation already completed"
+                ));
+            }
+            return gson.toJson(Map.of("success", false, "errorMessage", "Consultation is not active"));
+        }
+        
+        // Calculate duration and cost
+        Long durationSeconds = consultationService.calculateElapsedSeconds(order);
+        Double cost = consultationService.calculateCost(durationSeconds, order.getExpertRatePerMinute());
+        Double platformFeeAmount = consultationService.calculatePlatformFee(cost, order.getPlatformFeePercent());
+        Double expertEarnings = cost - platformFeeAmount;
+        
+        String expertId = order.getExpertId();
+        String currency = order.getCurrency();
+        
+        final Long finalDurationSeconds = durationSeconds;
+        final Double finalCost = cost;
+        final Double finalPlatformFeeAmount = platformFeeAmount;
+        final Double finalExpertEarnings = expertEarnings;
+        
+        Double[] remainingBalanceHolder = new Double[1];
+        
+        this.db.runTransaction(transaction -> {
+            // Deduct from user wallet
+            remainingBalanceHolder[0] = walletService.updateWalletBalanceInTransaction(
+                transaction, userId, currency, -finalCost
+            );
+            
+            // Credit expert wallet
+            walletService.updateWalletBalanceInTransaction(
+                transaction, expertId, currency, finalExpertEarnings
+            );
+            
+            // Create deduction transaction for user
+            WalletTransaction deductionTransaction = new WalletTransaction();
+            deductionTransaction.setType("CONSULTATION_DEDUCTION");
+            deductionTransaction.setSource("PAYMENT");
+            deductionTransaction.setAmount(-finalCost);
+            deductionTransaction.setCurrency(currency);
+            deductionTransaction.setOrderId(orderId);
+            deductionTransaction.setStatus("COMPLETED");
+            deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+            deductionTransaction.setDescription("On-demand consultation charge");
+            
+            walletService.createWalletTransactionInTransaction(transaction, userId, deductionTransaction);
+            
+            // Create credit transaction for expert
+            WalletTransaction creditTransaction = new WalletTransaction();
+            creditTransaction.setType("CONSULTATION_DEDUCTION");
+            creditTransaction.setSource("PAYMENT");
+            creditTransaction.setAmount(finalExpertEarnings);
+            creditTransaction.setCurrency(currency);
+            creditTransaction.setOrderId(orderId);
+            creditTransaction.setStatus("COMPLETED");
+            creditTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+            creditTransaction.setDescription("On-demand consultation earning");
+            
+            walletService.createWalletTransactionInTransaction(transaction, expertId, creditTransaction);
+            
+            // Update order
+            consultationService.completeOrderInTransaction(
+                transaction, userId, orderId,
+                finalDurationSeconds, finalCost, finalPlatformFeeAmount, finalExpertEarnings
+            );
+            
+            // Check if expert has other active consultations
+            boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+            if (!hasOtherActive) {
+                walletService.setExpertStatusInTransaction(transaction, expertId, "ONLINE");
+            }
+            
+            return null;
+        }).get();
+        
+        return gson.toJson(Map.of(
+            "success", true,
+            "cost", cost,
+            "duration", durationSeconds,
+            "currency", currency,
+            "remainingBalance", remainingBalanceHolder[0]
+        ));
     }
 }

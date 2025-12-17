@@ -77,6 +77,11 @@ public class RequestBody {
     // Divisional charts fields
     private List<Integer> divisionalChartNumbers;
 
+    // Wallet and On-Demand Consultation fields
+    private String currency; // Currency for wallet operations (e.g., "INR", "USD")
+    private String consultationType; // "audio", "video", or "chat" for on-demand consultations
+    private Double additionalAmount; // For mid-consultation recharge to extend duration
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -504,5 +509,30 @@ public class RequestBody {
 
     public void setDivisionalChartNumbers(List<Integer> divisionalChartNumbers) {
         this.divisionalChartNumbers = divisionalChartNumbers;
+    }
+
+    // Wallet and On-Demand Consultation getters/setters
+    public String getCurrency() {
+        return currency;
+    }
+
+    public void setCurrency(String currency) {
+        this.currency = currency;
+    }
+
+    public String getConsultationType() {
+        return consultationType;
+    }
+
+    public void setConsultationType(String consultationType) {
+        this.consultationType = consultationType;
+    }
+
+    public Double getAdditionalAmount() {
+        return additionalAmount;
+    }
+
+    public void setAdditionalAmount(Double additionalAmount) {
+        this.additionalAmount = additionalAmount;
     }
 }

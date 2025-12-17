@@ -32,14 +32,12 @@ service cloud.firestore {
       allow write: if false;
   	}
     
-    match /{path=**}/orders/{orderId} {
-    	allow read: if request.auth != null && (request.auth.token.admin == true || (request.auth.uid == resource.data.expertId));
-      allow update: if request.auth != null && request.auth.uid == resource.data.expertId && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'statusUpdateTime', 'profileId', 'sessionStartedAt', 'moves', 'sessionCompletedAt', 'cardsDrawn', 'remedies']));
-      allow delete: if false;
-    }
-    
     match /users/{userId} {
-      allow read, update: if (request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true));
+      // User can read all their data except wallet_balances update (backend only)
+      allow read: if (request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true));
+      // User can update their data BUT NOT wallet_balances (backend-only field)
+      allow update: if (request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true)) 
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['wallet_balances']);
       allow create: if request.auth != null && request.auth.uid == userId;
       allow delete: if false;
       
@@ -50,10 +48,27 @@ service cloud.firestore {
         allow delete: if false;
       }
       
+      // Wallet transactions - user can read their own, backend writes only
+      match /wallet_transactions/{transactionId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if false; // Only backend can write
+      }
+      
+      // Wallet recharge orders - user can read their own, backend writes only
+      match /wallet_recharge_orders/{orderId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if false; // Only backend can write
+      }
+      
       match /orders/{orderId} {
       	allow read: if request.auth != null && request.auth.uid == userId;
-        allow write: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true || request.auth.uid == resource.data.expertId) && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['profileId']));
-         allow delete: if false;
+        // Allow profile ID updates for all order types
+        // For ON_DEMAND_CONSULTATION orders, only backend can modify (handled by checking type)
+        allow write: if request.auth != null 
+          && (request.auth.uid == userId || request.auth.token.admin == true || request.auth.uid == resource.data.expertId) 
+          && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['profileId']))
+          && resource.data.type != 'ON_DEMAND_CONSULTATION';
+        allow delete: if false;
       }
       
       match /addresses/{addressId} {
@@ -72,18 +87,35 @@ service cloud.firestore {
       match /public/{document=**} {
       // Remove coupons from public?
         allow read: if true;
+        // Allow updates to expert_status by the expert themselves
         allow write: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
       }
       
-      match /private {
-      	allow read: if false;
-        allow write: if false;
+      // Private subcollection - restricted access
+      match /private/{document=**} {
+        // Platform fee config - expert and admin can read
+        allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+        // Only admin can write platform fee config
+        allow write: if request.auth != null && request.auth.token.admin == true;
       }
       
       match /plans/{document=**} {
       	allow read: if true;
         allow write: if request.auth != null && request.auth.uid == userId;
       }
+    }
+    
+    // Allow experts to read ON_DEMAND_CONSULTATION orders where they are the expert
+    match /{path=**}/orders/{orderId} {
+      allow read: if request.auth != null && (
+        request.auth.token.admin == true || 
+        request.auth.uid == resource.data.expertId ||
+        (resource.data.type == 'ON_DEMAND_CONSULTATION' && request.auth.uid == resource.data.userId)
+      );
+      allow update: if request.auth != null && request.auth.uid == resource.data.expertId 
+        && resource.data.type != 'ON_DEMAND_CONSULTATION'
+        && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'statusUpdateTime', 'profileId', 'sessionStartedAt', 'moves', 'sessionCompletedAt', 'cardsDrawn', 'remedies']));
+      allow delete: if false;
     }
   }
 }
