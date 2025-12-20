@@ -2248,6 +2248,10 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         final Double finalPlatformFeeAmount = platformFeeAmount;
         final Double finalExpertEarnings = expertEarnings;
         
+        // Check for other active consultations BEFORE transaction (to avoid race condition)
+        boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+        final boolean finalHasOtherActive = hasOtherActive;
+        
         Double[] remainingBalanceHolder = new Double[1];
         
         this.db.runTransaction(transaction -> {
@@ -2293,14 +2297,13 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 finalDurationSeconds, finalCost, finalPlatformFeeAmount, finalExpertEarnings
             );
             
+            // Set expert status back to ONLINE if no other active consultations
+            if (!finalHasOtherActive) {
+                walletService.setExpertStatusInTransaction(transaction, expertId, "ONLINE");
+            }
+            
             return null;
         }).get();
-        
-        // Check if expert has other active consultations AFTER transaction (to avoid race condition)
-        boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
-        if (!hasOtherActive) {
-            walletService.setExpertStatus(expertId, "ONLINE");
-        }
         
         return gson.toJson(Map.of(
             "success", true,
