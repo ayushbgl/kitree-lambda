@@ -192,12 +192,34 @@ public class OnDemandConsultationService {
 
     /**
      * Complete an on-demand consultation order within a transaction.
+     * Reads the order inside the transaction to ensure optimistic concurrency control.
+     * Throws an exception if the order is not in CONNECTED status to prevent double-charging.
      */
     public void completeOrderInTransaction(Transaction transaction, String userId, String orderId,
                                            Long durationSeconds, Double cost, Double platformFeeAmount,
-                                           Double expertEarnings) {
+                                           Double expertEarnings) throws ExecutionException, InterruptedException {
         DocumentReference orderRef = db.collection("users").document(userId)
                 .collection("orders").document(orderId);
+        
+        // Read the order inside the transaction to enable optimistic concurrency control
+        DocumentSnapshot orderDoc = transaction.get(orderRef).get();
+        
+        if (!orderDoc.exists()) {
+            throw new IllegalStateException("Order not found: " + orderId);
+        }
+        
+        // Verify it's an on-demand consultation order
+        String type = orderDoc.getString("type");
+        if (!"ON_DEMAND_CONSULTATION".equals(type)) {
+            throw new IllegalStateException("Order is not an on-demand consultation: " + orderId);
+        }
+        
+        // Check status inside transaction - only proceed if still CONNECTED
+        // This prevents double-charging when concurrent requests try to complete the same order
+        String currentStatus = orderDoc.getString("status");
+        if (!"CONNECTED".equals(currentStatus)) {
+            throw new IllegalStateException("Order is not in CONNECTED status (current: " + currentStatus + "): " + orderId);
+        }
         
         Map<String, Object> updates = new HashMap<>();
         updates.put("status", "COMPLETED");
@@ -297,6 +319,56 @@ public class OnDemandConsultationService {
                 return true;
             }
         }
+        return false;
+    }
+
+    /**
+     * Check if there are any other connected consultations for an expert within a transaction.
+     * This method queries for connected consultation order IDs first, then reads those specific
+     * documents within the transaction to verify they're still CONNECTED atomically.
+     * This prevents race conditions where consultations could connect/disconnect between the check
+     * and the transaction commit.
+     * 
+     * @param transaction The Firestore transaction
+     * @param expertId The expert ID
+     * @param excludeOrderId The order ID to exclude from the check
+     * @return true if there are other connected consultations, false otherwise
+     */
+    public boolean hasOtherConnectedConsultationsInTransaction(Transaction transaction, String expertId, String excludeOrderId)
+            throws ExecutionException, InterruptedException {
+        // Query for connected consultation order IDs before the transaction
+        // (Firestore transactions don't support collection queries)
+        Query query = db.collectionGroup("orders")
+                .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                .whereEqualTo("expertId", expertId)
+                .whereEqualTo("status", "CONNECTED");
+        
+        java.util.List<QueryDocumentSnapshot> docs = query.get().get().getDocuments();
+        
+        // Within the transaction, read each document to verify it's still CONNECTED
+        // This ensures atomicity - we check status at the same time we update expert status
+        for (QueryDocumentSnapshot doc : docs) {
+            String orderId = doc.getId();
+            if (orderId.equals(excludeOrderId)) {
+                continue;
+            }
+            
+            // Get the document reference to read within transaction
+            String userId = doc.getString("userId");
+            if (userId == null) {
+                continue;
+            }
+            
+            DocumentReference orderRef = db.collection("users").document(userId)
+                    .collection("orders").document(orderId);
+            
+            // Read within transaction to get current status atomically
+            DocumentSnapshot orderDoc = transaction.get(orderRef).get();
+            if (orderDoc.exists() && "CONNECTED".equals(orderDoc.getString("status"))) {
+                return true;
+            }
+        }
+        
         return false;
     }
 

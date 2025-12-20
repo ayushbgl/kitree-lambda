@@ -1585,10 +1585,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                             final String finalExpertId = expertId;
                             final String finalCurrency = currency;
                             
-                            // Check for other active consultations BEFORE transaction (to avoid race condition)
-                            boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(finalExpertId, finalOrderId);
-                            final boolean finalHasOtherActive = hasOtherActive;
-                            
                             this.db.runTransaction(transaction -> {
                                 // Deduct from user wallet
                                 walletService.updateWalletBalanceInTransaction(
@@ -1632,8 +1628,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                                     finalDurationSeconds, finalCost, finalPlatformFeeAmount, finalExpertEarnings
                                 );
                                 
+                                // Check for other active consultations WITHIN transaction to avoid race condition
+                                // This ensures we check status atomically with the expert status update
+                                boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
+                                    transaction, finalExpertId, finalOrderId
+                                );
+                                
                                 // Set expert status back to ONLINE if no other active consultations
-                                if (!finalHasOtherActive) {
+                                if (!hasOtherActive) {
                                     walletService.setExpertStatusInTransaction(transaction, finalExpertId, "ONLINE");
                                 }
                                 
@@ -1794,6 +1796,10 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
         
         Double amount = rechargeOrderDoc.getDouble("amount");
+        if (amount == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Invalid recharge order: amount field is missing"));
+        }
+        
         String currency = rechargeOrderDoc.getString("currency");
         if (currency == null) currency = WalletService.getDefaultCurrency();
         
@@ -2005,13 +2011,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 logger.log("GetStream call creation failed for order " + orderId + ": " + e.getMessage());
                 
                 try {
-                    // Check for other active consultations BEFORE transaction (to avoid race condition)
-                    boolean hasOtherConsultations = consultationService.hasOtherConnectedConsultations(expertId, orderId);
-                    final boolean finalHasOtherConsultations = hasOtherConsultations;
-                    
                     this.db.runTransaction(transaction -> {
+                        // Check for other active consultations WITHIN transaction to avoid race condition
+                        // This ensures we check status atomically with the expert status update
+                        boolean hasOtherConsultations = consultationService.hasOtherConnectedConsultationsInTransaction(
+                            transaction, expertId, orderId
+                        );
+                        
                         // Revert expert status to ONLINE if no other active consultations
-                        if (!finalHasOtherConsultations) {
+                        if (!hasOtherConsultations) {
                             walletService.setExpertStatusInTransaction(transaction, expertId, "ONLINE");
                         }
                         
@@ -2148,7 +2156,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         Double rate = order.getExpertRatePerMinute();
         String currency = order.getCurrency();
         
-        // Verify wallet balance and recalculate max_duration based on actual balance
+        // Verify wallet balance and recalculate max_duration based on actual balance + additional amount
         Long[] newMaxDurationHolder = new Long[1];
         Long[] additionalDurationHolder = new Long[1];
         
@@ -2157,8 +2165,24 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 // Fetch current wallet balance in transaction
                 Double currentBalance = walletService.getWalletBalance(userId, currency);
                 
-                // Calculate max duration based on actual balance: (balance / rate) * 60
-                Long maxDurationFromBalance = (long) ((currentBalance / rate) * 60); // in seconds
+                // Add the additional amount to the wallet balance (mid-consultation recharge)
+                Double newBalance = walletService.updateWalletBalanceInTransaction(transaction, userId, currency, additionalAmount);
+                
+                // Create wallet transaction record for the recharge
+                WalletTransaction walletTransaction = new WalletTransaction();
+                walletTransaction.setType("RECHARGE");
+                walletTransaction.setSource("MID_CONSULTATION");
+                walletTransaction.setAmount(additionalAmount);
+                walletTransaction.setCurrency(currency);
+                walletTransaction.setOrderId(orderId);
+                walletTransaction.setStatus("COMPLETED");
+                walletTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+                walletTransaction.setDescription("Mid-consultation wallet recharge");
+                
+                walletService.createWalletTransactionInTransaction(transaction, userId, walletTransaction);
+                
+                // Calculate max duration based on new balance (including additional amount): (balance / rate) * 60
+                Long maxDurationFromBalance = (long) ((newBalance / rate) * 60); // in seconds
                 
                 // Calculate elapsed time
                 Long elapsedSeconds = consultationService.calculateElapsedSeconds(order);
@@ -2248,10 +2272,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         final Double finalPlatformFeeAmount = platformFeeAmount;
         final Double finalExpertEarnings = expertEarnings;
         
-        // Check for other active consultations BEFORE transaction (to avoid race condition)
-        boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
-        final boolean finalHasOtherActive = hasOtherActive;
-        
         Double[] remainingBalanceHolder = new Double[1];
         
         this.db.runTransaction(transaction -> {
@@ -2297,8 +2317,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 finalDurationSeconds, finalCost, finalPlatformFeeAmount, finalExpertEarnings
             );
             
+            // Check for other active consultations WITHIN transaction to avoid race condition
+            // This ensures we check status atomically with the expert status update
+            boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
+                transaction, expertId, orderId
+            );
+            
             // Set expert status back to ONLINE if no other active consultations
-            if (!finalHasOtherActive) {
+            if (!hasOtherActive) {
                 walletService.setExpertStatusInTransaction(transaction, expertId, "ONLINE");
             }
             
