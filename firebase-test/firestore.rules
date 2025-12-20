@@ -48,9 +48,9 @@ service cloud.firestore {
         allow delete: if false;
       }
       
-      // Wallet transactions - user can read their own, backend writes only
+      // Wallet transactions - user and admin can read, backend writes only
       match /wallet_transactions/{transactionId} {
-        allow read: if request.auth != null && request.auth.uid == userId;
+        allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
         allow write: if false; // Only backend can write
       }
       
@@ -91,11 +91,17 @@ service cloud.firestore {
         allow write: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
       }
       
+      // Platform fee config - separate document (expert and admin can read, admin can write)
+      match /platform_fee_config/{document=**} {
+        allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+        allow write: if request.auth != null && request.auth.token.admin == true;
+      }
+      
       // Private subcollection - restricted access
       match /private/{document=**} {
-        // Platform fee config - expert and admin can read
+        // Expert and admin can read
         allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
-        // Only admin can write platform fee config
+        // Only admin can write
         allow write: if request.auth != null && request.auth.token.admin == true;
       }
       
@@ -105,7 +111,7 @@ service cloud.firestore {
       }
     }
     
-    // Allow experts to read ON_DEMAND_CONSULTATION orders where they are the expert
+    // Allow experts to read orders across all users (collection group query)
     match /{path=**}/orders/{orderId} {
       allow read: if request.auth != null && (
         request.auth.token.admin == true || 

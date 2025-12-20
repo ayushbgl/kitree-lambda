@@ -13,7 +13,8 @@ import java.util.concurrent.ExecutionException;
  * Service for handling wallet operations including balance management and transactions.
  */
 public class WalletService {
-
+    private static final String DEFAULT_CURRENCY = "INR";
+    
     private final Firestore db;
 
     public WalletService(Firestore db) {
@@ -66,9 +67,13 @@ public class WalletService {
         DocumentSnapshot userDoc = db.collection("users").document(userId).get().get();
         if (userDoc.exists() && userDoc.contains("default_currency")) {
             String currency = userDoc.getString("default_currency");
-            return currency != null ? currency : "INR";
+            return currency != null ? currency : DEFAULT_CURRENCY;
         }
-        return "INR";
+        return DEFAULT_CURRENCY;
+    }
+    
+    public static String getDefaultCurrency() {
+        return DEFAULT_CURRENCY;
     }
 
     /**
@@ -245,22 +250,28 @@ public class WalletService {
      * @return The platform fee configuration (defaults to 10% if not found)
      */
     public PlatformFeeConfig getPlatformFeeConfig(String expertId) throws ExecutionException, InterruptedException {
-        // Try to get from private collection first
+        // Try to get from separate document: users/{expertId}/platform_fee_config
+        DocumentSnapshot feeConfigDoc = db.collection("users").document(expertId)
+                .collection("platform_fee_config").document("config").get().get();
+        
+        if (feeConfigDoc.exists()) {
+            return docToPlatformFeeConfig(feeConfigDoc);
+        }
+        
+        // Fallback: Try to get from top-level field in users/{expertId}
+        DocumentSnapshot userDoc = db.collection("users").document(expertId).get().get();
+        if (userDoc.exists() && userDoc.contains("platform_fee_config")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> configMap = (Map<String, Object>) userDoc.get("platform_fee_config");
+            return mapToPlatformFeeConfig(configMap);
+        }
+        
+        // Legacy: Try to get from private collection (for backward compatibility)
         DocumentSnapshot privateDoc = db.collection("users").document(expertId)
                 .collection("private").document("platform_fee_config").get().get();
         
         if (privateDoc.exists()) {
             return docToPlatformFeeConfig(privateDoc);
-        }
-        
-        // Try to get from public store
-        DocumentSnapshot storeDoc = db.collection("users").document(expertId)
-                .collection("public").document("store").get().get();
-        
-        if (storeDoc.exists() && storeDoc.contains("platform_fee_config")) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> configMap = (Map<String, Object>) storeDoc.get("platform_fee_config");
-            return mapToPlatformFeeConfig(configMap);
         }
         
         // Return default config

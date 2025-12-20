@@ -51,10 +51,10 @@ public class OnDemandConsultationService {
      * Get the currency for on-demand consultations from a plan.
      *
      * @param plan The service plan
-     * @return The currency code (defaults to plan currency or "INR")
+     * @return The currency code (defaults to plan currency or WalletService.DEFAULT_CURRENCY)
      */
     public String getOnDemandCurrency(ServicePlan plan) {
-        if (plan == null) return "INR";
+        if (plan == null) return WalletService.getDefaultCurrency();
         
         String currency = plan.getOnDemandCurrency();
         if (currency != null && !currency.isEmpty()) {
@@ -62,7 +62,7 @@ public class OnDemandConsultationService {
         }
         
         currency = plan.getCurrency();
-        return currency != null && !currency.isEmpty() ? currency : "INR";
+        return currency != null && !currency.isEmpty() ? currency : WalletService.getDefaultCurrency();
     }
 
     /**
@@ -218,6 +218,16 @@ public class OnDemandConsultationService {
         DocumentReference orderRef = db.collection("users").document(userId)
                 .collection("orders").document(orderId);
         orderRef.update("stream_call_cid", streamCallCid).get();
+    }
+
+    /**
+     * Mark an order as FAILED within a transaction.
+     */
+    public void markOrderAsFailedInTransaction(Transaction transaction, String userId, String orderId)
+            throws ExecutionException, InterruptedException {
+        DocumentReference orderRef = db.collection("users").document(userId)
+                .collection("orders").document(orderId);
+        transaction.update(orderRef, "status", "FAILED");
     }
 
     /**

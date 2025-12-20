@@ -8,6 +8,8 @@ import java.util.Map;
  * Stored in users/{expertId}/private/platform_fee_config or users/{expertId}/public/store
  */
 public class PlatformFeeConfig {
+    private static final Double DEFAULT_FEE_PERCENT = 10.0;
+    
     // Default platform fee percentage (e.g., 10.0 for 10%)
     private Double defaultFeePercent;
     
@@ -24,7 +26,7 @@ public class PlatformFeeConfig {
     private Timestamp effectiveUntil;
 
     public PlatformFeeConfig() {
-        this.defaultFeePercent = 10.0; // Default 10%
+        this.defaultFeePercent = DEFAULT_FEE_PERCENT; // Default 10%
     }
 
     /**
@@ -47,7 +49,7 @@ public class PlatformFeeConfig {
         }
         
         // Return default fee
-        return defaultFeePercent != null ? defaultFeePercent : 10.0;
+        return defaultFeePercent != null ? defaultFeePercent : DEFAULT_FEE_PERCENT;
     }
 
     // Getters and Setters

@@ -5,9 +5,13 @@ import com.google.cloud.Timestamp;
 /**
  * POJO representing a wallet transaction record.
  * Stored in users/{userId}/wallet_transactions/{transactionId}
+ * 
+ * Note: TransactionType enum is available for type safety, but this class uses String
+ * for backward compatibility and Firestore storage.
  */
 public class WalletTransaction {
-    // Transaction type: RECHARGE, CONSULTATION_DEDUCTION, REFUND, CASHBACK, REFERRAL_BONUS
+    // Transaction type: RECHARGE, CONSULTATION_DEDUCTION, ORDER_EARNING, REFUND, CASHBACK, REFERRAL_BONUS
+    // See TransactionType enum for valid values
     private String type;
     
     // Source of funds: PAYMENT, CASHBACK, REFERRAL, COUPON, REFUND

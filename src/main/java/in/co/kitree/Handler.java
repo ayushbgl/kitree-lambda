@@ -45,6 +45,11 @@ import static com.google.cloud.firestore.AggregateField.sum;
 //public class Handler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
 //public class Handler implements RequestHandler<Object, Object> {
 public class Handler implements RequestHandler<RequestEvent, Object> {
+    // Constants
+    private static final int AUTO_TERMINATE_GRACE_PERIOD_SECONDS = 60;
+    private static final double MIN_WALLET_RECHARGE_AMOUNT = 100.0;
+    private static final int MIN_CONSULTATION_MINUTES = 3;
+    
     Gson gson = (new GsonBuilder()).setPrettyPrinting().create();
     private Firestore db;
     private Razorpay razorpay;
@@ -1546,7 +1551,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     Long maxAllowedDuration = doc.getLong("max_allowed_duration");
                     
                     if (startTime == null || maxAllowedDuration == null) {
-                        System.out.println("Skipping order " + orderId + " - missing start_time or max_allowed_duration");
+                        logger.log("Skipping order " + orderId + " - missing start_time or max_allowed_duration");
                         continue;
                     }
                     
@@ -1554,11 +1559,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     long startTimeMillis = startTime.toDate().getTime();
                     long elapsedSeconds = (nowMillis - startTimeMillis) / 1000;
                     
-                    // Add grace period of 60 seconds
-                    long gracePeriod = 60;
-                    
-                    if (elapsedSeconds >= (maxAllowedDuration + gracePeriod)) {
-                        System.out.println("Auto-terminating consultation: " + orderId + 
+                    // Add grace period
+                    if (elapsedSeconds >= (maxAllowedDuration + AUTO_TERMINATE_GRACE_PERIOD_SECONDS)) {
+                        logger.log("Auto-terminating consultation: " + orderId + 
                                 " (elapsed: " + elapsedSeconds + "s, max: " + maxAllowedDuration + "s)");
                         
                         // End the consultation
@@ -1581,6 +1584,10 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                             final String finalOrderId = orderId;
                             final String finalExpertId = expertId;
                             final String finalCurrency = currency;
+                            
+                            // Check for other active consultations BEFORE transaction (to avoid race condition)
+                            boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(finalExpertId, finalOrderId);
+                            final boolean finalHasOtherActive = hasOtherActive;
                             
                             this.db.runTransaction(transaction -> {
                                 // Deduct from user wallet
@@ -1608,7 +1615,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                                 
                                 // Create credit transaction for expert
                                 WalletTransaction creditTransaction = new WalletTransaction();
-                                creditTransaction.setType("CONSULTATION_DEDUCTION");
+                                creditTransaction.setType("ORDER_EARNING");
                                 creditTransaction.setSource("PAYMENT");
                                 creditTransaction.setAmount(finalExpertEarnings);
                                 creditTransaction.setCurrency(finalCurrency);
@@ -1626,8 +1633,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                                 );
                                 
                                 // Set expert status back to ONLINE if no other active consultations
-                                boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(finalExpertId, finalOrderId);
-                                if (!hasOtherActive) {
+                                if (!finalHasOtherActive) {
                                     walletService.setExpertStatusInTransaction(transaction, finalExpertId, "ONLINE");
                                 }
                                 
@@ -1635,17 +1641,17 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                             }).get();
                             
                             terminatedCount++;
-                            System.out.println("Successfully auto-terminated consultation: " + orderId);
+                            logger.log("Successfully auto-terminated consultation: " + orderId);
                         }
                     }
                 } catch (Exception e) {
                     errorCount++;
-                    System.err.println("Error auto-terminating consultation " + doc.getId() + ": " + e.getMessage());
+                    logger.log("Error auto-terminating consultation " + doc.getId() + ": " + e.getMessage());
                     e.printStackTrace();
                 }
             }
         } catch (Exception e) {
-            System.err.println("Error in handleAutoTerminateConsultations: " + e.getMessage());
+            logger.log("Error in handleAutoTerminateConsultations: " + e.getMessage());
             e.printStackTrace();
             return gson.toJson(Map.of(
                 "success", false,
@@ -1653,7 +1659,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             ));
         }
         
-        System.out.println("Auto-terminate job completed. Terminated: " + terminatedCount + ", Errors: " + errorCount);
+        logger.log("Auto-terminate job completed. Terminated: " + terminatedCount + ", Errors: " + errorCount);
         return gson.toJson(Map.of(
             "success", true,
             "terminatedCount", terminatedCount,
@@ -1712,9 +1718,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of("success", false, "errorMessage", "Invalid amount"));
         }
         
-        // Minimum recharge amount (e.g., 100 INR)
-        if (amount < 100) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Minimum recharge amount is ₹100"));
+        // Minimum recharge amount
+        if (amount < MIN_WALLET_RECHARGE_AMOUNT) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Minimum recharge amount is ₹" + MIN_WALLET_RECHARGE_AMOUNT));
         }
         
         WalletService walletService = new WalletService(this.db);
@@ -1769,11 +1775,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         
         // Check if payment already processed
         if (walletService.isPaymentAlreadyProcessed(userId, razorpayPaymentId)) {
-            Double currentBalance = walletService.getWalletBalance(userId, "INR");
+            String defaultCurrency = walletService.getUserDefaultCurrency(userId);
+            Double currentBalance = walletService.getWalletBalance(userId, defaultCurrency);
             return gson.toJson(Map.of(
                 "success", true,
                 "newBalance", currentBalance,
-                "currency", "INR",
+                "currency", defaultCurrency,
                 "message", "Payment already processed"
             ));
         }
@@ -1788,7 +1795,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         
         Double amount = rechargeOrderDoc.getDouble("amount");
         String currency = rechargeOrderDoc.getString("currency");
-        if (currency == null) currency = "INR";
+        if (currency == null) currency = WalletService.getDefaultCurrency();
         
         final String finalCurrency = currency;
         final Double finalAmount = amount;
@@ -1849,6 +1856,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of("success", false, "errorMessage", "Invalid consultation type"));
         }
         
+        // Normalize to lowercase for consistent use throughout the method
+        consultationType = consultationType.toLowerCase();
+        
         WalletService walletService = new WalletService(this.db);
         OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
         
@@ -1864,7 +1874,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         
         // Determine rate from plan
         Double rate = null;
-        String currency = "INR";
+        String currency = WalletService.getDefaultCurrency();
         
         if (planId != null && !planId.isEmpty()) {
             ServicePlan plan = getPlanDetails(planId, expertId);
@@ -1884,7 +1894,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         
         // Check wallet balance
         Double walletBalance = walletService.getWalletBalance(userId, currency);
-        Double minimumRequired = rate * 3; // 3 minutes minimum
+        Double minimumRequired = rate * MIN_CONSULTATION_MINUTES; // Minimum consultation minutes
         
         if (walletBalance < minimumRequired) {
             return gson.toJson(Map.of(
@@ -1962,33 +1972,65 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         String streamCallCid = null;
         
         if ("audio".equals(consultationType) || "video".equals(consultationType)) {
-            // Get GetStream token
-            PythonLambdaEventRequest getStreamTokenEvent = new PythonLambdaEventRequest();
-            getStreamTokenEvent.setFunction("get_stream_user_token");
-            getStreamTokenEvent.setUserId(userId);
-            getStreamTokenEvent.setUserName(user != null ? user.getName() : userId);
-            getStreamTokenEvent.setTest(isTest());
-            
-            streamUserToken = pythonLambdaService.invokePythonLambda(getStreamTokenEvent).getStreamUserToken();
-            
-            // Create GetStream call
-            PythonLambdaEventRequest createCallEvent = new PythonLambdaEventRequest();
-            createCallEvent.setFunction("create_call");
-            createCallEvent.setType("CONSULTATION");
-            createCallEvent.setUserId(userId);
-            createCallEvent.setUserName(user != null ? user.getName() : null);
-            createCallEvent.setExpertId(expertId);
-            createCallEvent.setExpertName(expert != null ? expert.getName() : null);
-            createCallEvent.setOrderId(orderId);
-            createCallEvent.setVideo("video".equals(consultationType));
-            createCallEvent.setTest(isTest());
-            
-            pythonLambdaService.invokePythonLambda(createCallEvent);
-            
-            streamCallCid = "consultation_" + consultationType + ":" + orderId;
-            
-            // Update order with stream call CID
-            consultationService.updateStreamCallCid(userId, orderId, streamCallCid);
+            try {
+                // Get GetStream token
+                PythonLambdaEventRequest getStreamTokenEvent = new PythonLambdaEventRequest();
+                getStreamTokenEvent.setFunction("get_stream_user_token");
+                getStreamTokenEvent.setUserId(userId);
+                getStreamTokenEvent.setUserName(user != null ? user.getName() : userId);
+                getStreamTokenEvent.setTest(isTest());
+                
+                streamUserToken = pythonLambdaService.invokePythonLambda(getStreamTokenEvent).getStreamUserToken();
+                
+                // Create GetStream call
+                PythonLambdaEventRequest createCallEvent = new PythonLambdaEventRequest();
+                createCallEvent.setFunction("create_call");
+                createCallEvent.setType("CONSULTATION");
+                createCallEvent.setUserId(userId);
+                createCallEvent.setUserName(user != null ? user.getName() : null);
+                createCallEvent.setExpertId(expertId);
+                createCallEvent.setExpertName(expert != null ? expert.getName() : null);
+                createCallEvent.setOrderId(orderId);
+                createCallEvent.setVideo("video".equals(consultationType));
+                createCallEvent.setTest(isTest());
+                
+                pythonLambdaService.invokePythonLambda(createCallEvent);
+                
+                streamCallCid = "consultation_" + consultationType + ":" + orderId;
+                
+                // Update order with stream call CID
+                consultationService.updateStreamCallCid(userId, orderId, streamCallCid);
+            } catch (Exception e) {
+                // Compensating transaction: revert expert status and mark order as FAILED
+                logger.log("GetStream call creation failed for order " + orderId + ": " + e.getMessage());
+                
+                try {
+                    // Check for other active consultations BEFORE transaction (to avoid race condition)
+                    boolean hasOtherConsultations = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+                    final boolean finalHasOtherConsultations = hasOtherConsultations;
+                    
+                    this.db.runTransaction(transaction -> {
+                        // Revert expert status to ONLINE if no other active consultations
+                        if (!finalHasOtherConsultations) {
+                            walletService.setExpertStatusInTransaction(transaction, expertId, "ONLINE");
+                        }
+                        
+                        // Mark order as FAILED
+                        consultationService.markOrderAsFailedInTransaction(transaction, userId, orderId);
+                        
+                        return null;
+                    }).get();
+                } catch (Exception compensationError) {
+                    logger.log("Error in compensating transaction: " + compensationError.getMessage());
+                    // Log but don't throw - the order is already marked as FAILED
+                }
+                
+                return gson.toJson(Map.of(
+                    "success", false,
+                    "errorCode", "STREAM_CALL_CREATION_FAILED",
+                    "errorMessage", "Failed to create video call. Please try again."
+                ));
+            }
         }
         
         Map<String, Object> response = new HashMap<>();
@@ -2103,23 +2145,57 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of("success", false, "errorMessage", "Consultation is not active"));
         }
         
-        // Calculate additional duration
         Double rate = order.getExpertRatePerMinute();
-        Long additionalDuration = (long) ((additionalAmount / rate) * 60); // in seconds
+        String currency = order.getCurrency();
         
-        // Update max duration
-        Long currentMaxDuration = order.getMaxAllowedDuration();
-        Long newMaxDuration = currentMaxDuration + additionalDuration;
+        // Verify wallet balance and recalculate max_duration based on actual balance
+        Long[] newMaxDurationHolder = new Long[1];
+        Long[] additionalDurationHolder = new Long[1];
         
-        this.db.runTransaction(transaction -> {
-            consultationService.updateMaxDurationInTransaction(transaction, userId, orderId, newMaxDuration);
-            return null;
-        }).get();
+        try {
+            this.db.runTransaction(transaction -> {
+                // Fetch current wallet balance in transaction
+                Double currentBalance = walletService.getWalletBalance(userId, currency);
+                
+                // Calculate max duration based on actual balance: (balance / rate) * 60
+                Long maxDurationFromBalance = (long) ((currentBalance / rate) * 60); // in seconds
+                
+                // Calculate elapsed time
+                Long elapsedSeconds = consultationService.calculateElapsedSeconds(order);
+                
+                // New max duration is the maximum we can afford based on balance
+                // Only extend if new max_duration > current elapsed time
+                if (maxDurationFromBalance <= elapsedSeconds) {
+                    throw new RuntimeException("Insufficient balance to extend consultation");
+                }
+                
+                Long currentMaxDuration = order.getMaxAllowedDuration();
+                Long newMaxDuration = maxDurationFromBalance;
+                
+                // Additional duration is the difference
+                additionalDurationHolder[0] = newMaxDuration - currentMaxDuration;
+                
+                // Update max duration atomically
+                consultationService.updateMaxDurationInTransaction(transaction, userId, orderId, newMaxDuration);
+                newMaxDurationHolder[0] = newMaxDuration;
+                
+                return null;
+            }).get();
+        } catch (Exception e) {
+            if (e.getMessage() != null && e.getMessage().contains("Insufficient balance")) {
+                return gson.toJson(Map.of(
+                    "success", false,
+                    "errorCode", "INSUFFICIENT_BALANCE",
+                    "errorMessage", "Insufficient wallet balance to extend consultation"
+                ));
+            }
+            throw e;
+        }
         
         return gson.toJson(Map.of(
             "success", true,
-            "newMaxDuration", newMaxDuration,
-            "additionalDuration", additionalDuration
+            "newMaxDuration", newMaxDurationHolder[0],
+            "additionalDuration", additionalDurationHolder[0]
         ));
     }
 
@@ -2200,7 +2276,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             
             // Create credit transaction for expert
             WalletTransaction creditTransaction = new WalletTransaction();
-            creditTransaction.setType("CONSULTATION_DEDUCTION");
+            creditTransaction.setType("ORDER_EARNING");
             creditTransaction.setSource("PAYMENT");
             creditTransaction.setAmount(finalExpertEarnings);
             creditTransaction.setCurrency(currency);
@@ -2217,14 +2293,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 finalDurationSeconds, finalCost, finalPlatformFeeAmount, finalExpertEarnings
             );
             
-            // Check if expert has other active consultations
-            boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
-            if (!hasOtherActive) {
-                walletService.setExpertStatusInTransaction(transaction, expertId, "ONLINE");
-            }
-            
             return null;
         }).get();
+        
+        // Check if expert has other active consultations AFTER transaction (to avoid race condition)
+        boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+        if (!hasOtherActive) {
+            walletService.setExpertStatus(expertId, "ONLINE");
+        }
         
         return gson.toJson(Map.of(
             "success", true,
