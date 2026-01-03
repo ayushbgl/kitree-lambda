@@ -1923,6 +1923,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         final String finalCurrency = currency;
         final Double finalPlatformFeePercent = platformFeePercent;
         final Long finalMaxAllowedDuration = maxAllowedDuration;
+        final String finalConsultationType = consultationType;
         
         // Create order and lock expert status in a transaction
         String[] orderIdHolder = new String[1];
@@ -1948,7 +1949,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 order.setExpertId(expertId);
                 order.setExpertName(expert != null ? expert.getName() : null);
                 order.setPlanId(planId);
-                order.setConsultationType(consultationType.toLowerCase());
+                order.setConsultationType(finalConsultationType);
                 order.setCategory(category);
                 order.setExpertRatePerMinute(finalRate);
                 order.setCurrency(finalCurrency);
