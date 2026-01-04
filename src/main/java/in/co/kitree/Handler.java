@@ -1395,7 +1395,17 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             servicePlan.setType((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("type", ""));
             servicePlan.setSubtype((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("subtype", ""));
             servicePlan.setCategory((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("category", ""));
-            servicePlan.setDuration((Long) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("duration", 30)); // TODO: Default value
+            // Handle both Integer and Long for duration (Firestore can return either)
+            Object durationObj = Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("duration", 30L);
+            Long duration;
+            if (durationObj instanceof Integer) {
+                duration = ((Integer) durationObj).longValue();
+            } else if (durationObj instanceof Long) {
+                duration = (Long) durationObj;
+            } else {
+                duration = 30L; // Default fallback
+            }
+            servicePlan.setDuration(duration);
             servicePlan.setDurationUnit((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("durationUnit", "MINUTES")); // TODO: Default value
             if (documentSnapshot.contains("date")) {
                 com.google.cloud.Timestamp date = ((com.google.cloud.Timestamp) Objects.requireNonNull(documentSnapshot.get("date")));
@@ -1410,6 +1420,62 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 servicePlan.setSessionCompletedAt(sessionCompletedAt);
             }
             servicePlan.setTitle((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("title", ""));
+            
+            // Read on-demand consultation rate fields (handle both Integer and Long from Firestore)
+            Map<String, Object> data = Objects.requireNonNull(documentSnapshot.getData());
+            
+            // Convert onDemandRatePerMinuteAudio
+            if (data.containsKey("onDemandRatePerMinuteAudio")) {
+                Object audioRateObj = data.get("onDemandRatePerMinuteAudio");
+                if (audioRateObj != null) {
+                    if (audioRateObj instanceof Double) {
+                        servicePlan.setOnDemandRatePerMinuteAudio((Double) audioRateObj);
+                    } else if (audioRateObj instanceof Integer) {
+                        servicePlan.setOnDemandRatePerMinuteAudio(((Integer) audioRateObj).doubleValue());
+                    } else if (audioRateObj instanceof Long) {
+                        servicePlan.setOnDemandRatePerMinuteAudio(((Long) audioRateObj).doubleValue());
+                    } else if (audioRateObj instanceof Number) {
+                        servicePlan.setOnDemandRatePerMinuteAudio(((Number) audioRateObj).doubleValue());
+                    }
+                }
+            }
+            
+            // Convert onDemandRatePerMinuteVideo
+            if (data.containsKey("onDemandRatePerMinuteVideo")) {
+                Object videoRateObj = data.get("onDemandRatePerMinuteVideo");
+                if (videoRateObj != null) {
+                    if (videoRateObj instanceof Double) {
+                        servicePlan.setOnDemandRatePerMinuteVideo((Double) videoRateObj);
+                    } else if (videoRateObj instanceof Integer) {
+                        servicePlan.setOnDemandRatePerMinuteVideo(((Integer) videoRateObj).doubleValue());
+                    } else if (videoRateObj instanceof Long) {
+                        servicePlan.setOnDemandRatePerMinuteVideo(((Long) videoRateObj).doubleValue());
+                    } else if (videoRateObj instanceof Number) {
+                        servicePlan.setOnDemandRatePerMinuteVideo(((Number) videoRateObj).doubleValue());
+                    }
+                }
+            }
+            
+            // Convert onDemandRatePerMinuteChat
+            if (data.containsKey("onDemandRatePerMinuteChat")) {
+                Object chatRateObj = data.get("onDemandRatePerMinuteChat");
+                if (chatRateObj != null) {
+                    if (chatRateObj instanceof Double) {
+                        servicePlan.setOnDemandRatePerMinuteChat((Double) chatRateObj);
+                    } else if (chatRateObj instanceof Integer) {
+                        servicePlan.setOnDemandRatePerMinuteChat(((Integer) chatRateObj).doubleValue());
+                    } else if (chatRateObj instanceof Long) {
+                        servicePlan.setOnDemandRatePerMinuteChat(((Long) chatRateObj).doubleValue());
+                    } else if (chatRateObj instanceof Number) {
+                        servicePlan.setOnDemandRatePerMinuteChat(((Number) chatRateObj).doubleValue());
+                    }
+                }
+            }
+            
+            // Set onDemandCurrency
+            if (data.containsKey("onDemandCurrency")) {
+                servicePlan.setOnDemandCurrency((String) data.get("onDemandCurrency"));
+            }
         }
 
         System.out.println("service plan: " + servicePlan);
