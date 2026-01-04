@@ -63,7 +63,10 @@ service cloud.firestore {
       
       // Wallet transactions - user and admin can read, backend writes only
       match /wallet_transactions/{transactionId} {
-        allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+        // Allow reading individual documents
+        allow get: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+        // Allow list queries (for orderBy, etc.)
+        allow list: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
         allow write: if false; // Only backend can write
       }
       

@@ -349,48 +349,121 @@ public class WalletService {
     }
 
     /**
-     * Get expert status (ONLINE, OFFLINE, BUSY).
+     * Get expert's computed status for display (BUSY > OFFLINE > ONLINE).
+     * This combines is_online (user-controlled) and consultation_status (system-controlled).
      *
      * @param expertId The expert's ID
-     * @return The expert status (defaults to "OFFLINE")
+     * @return The computed status: "BUSY" if consultation_status is BUSY, 
+     *         "OFFLINE" if is_online is false, "ONLINE" if is_online is true
      */
     public String getExpertStatus(String expertId) throws ExecutionException, InterruptedException {
         DocumentSnapshot storeDoc = db.collection("users").document(expertId)
                 .collection("public").document("store").get().get();
         
-        if (storeDoc.exists() && storeDoc.contains("expert_status")) {
-            String status = storeDoc.getString("expert_status");
-            return status != null ? status : "OFFLINE";
+        if (!storeDoc.exists()) {
+            System.out.println("[WalletService] Expert store document does not exist for expertId: " + expertId);
+            return "OFFLINE";
         }
-        return "OFFLINE";
+        
+        // Check consultation_status first (system-controlled: BUSY/FREE)
+        String consultationStatus = storeDoc.getString("consultation_status");
+        if ("BUSY".equals(consultationStatus)) {
+            System.out.println("[WalletService] Expert consultation_status is BUSY for expertId: " + expertId);
+            return "BUSY";
+        }
+        
+        // Then check is_online (user-controlled: true/false)
+        Boolean isOnline = storeDoc.getBoolean("is_online");
+        System.out.println("[WalletService] Expert is_online value for expertId " + expertId + ": " + isOnline + " (type: " + (isOnline != null ? isOnline.getClass().getSimpleName() : "null") + ")");
+        
+        if (isOnline == null || !isOnline) {
+            System.out.println("[WalletService] Expert is OFFLINE for expertId: " + expertId + " (isOnline: " + isOnline + ")");
+            return "OFFLINE";
+        }
+        
+        System.out.println("[WalletService] Expert is ONLINE for expertId: " + expertId);
+        return "ONLINE";
     }
 
     /**
-     * Set expert status atomically within a transaction.
+     * Get expert's online availability (user-controlled).
+     *
+     * @param expertId The expert's ID
+     * @return true if expert is online, false otherwise (defaults to false)
      */
-    public void setExpertStatusInTransaction(Transaction transaction, String expertId, String status)
+    public boolean getExpertOnlineStatus(String expertId) throws ExecutionException, InterruptedException {
+        DocumentSnapshot storeDoc = db.collection("users").document(expertId)
+                .collection("public").document("store").get().get();
+        
+        if (storeDoc.exists() && storeDoc.contains("is_online")) {
+            Boolean isOnline = storeDoc.getBoolean("is_online");
+            return isOnline != null && isOnline;
+        }
+        return false;
+    }
+
+    /**
+     * Get expert's consultation status (system-controlled).
+     *
+     * @param expertId The expert's ID
+     * @return "BUSY" if expert has active consultations, "FREE" otherwise (defaults to "FREE")
+     */
+    public String getConsultationStatus(String expertId) throws ExecutionException, InterruptedException {
+        DocumentSnapshot storeDoc = db.collection("users").document(expertId)
+                .collection("public").document("store").get().get();
+        
+        if (storeDoc.exists() && storeDoc.contains("consultation_status")) {
+            String status = storeDoc.getString("consultation_status");
+            return status != null ? status : "FREE";
+        }
+        return "FREE";
+    }
+
+    /**
+     * Set expert's online availability (user-controlled).
+     *
+     * @param expertId The expert's ID
+     * @param isOnline true for ONLINE, false for OFFLINE
+     */
+    public void setExpertOnlineStatus(String expertId, boolean isOnline) throws ExecutionException, InterruptedException {
+        DocumentReference storeRef = db.collection("users").document(expertId)
+                .collection("public").document("store");
+        
+        Map<String, Object> updates = new HashMap<>();
+        updates.put("is_online", isOnline);
+        updates.put("is_online_updated_at", Timestamp.now());
+        
+        storeRef.update(updates).get();
+    }
+
+    /**
+     * Set consultation status atomically within a transaction (system-controlled).
+     * Used to mark expert as BUSY when consultation starts, FREE when it ends.
+     */
+    public void setConsultationStatusInTransaction(Transaction transaction, String expertId, String status)
             throws ExecutionException, InterruptedException {
         DocumentReference storeRef = db.collection("users").document(expertId)
                 .collection("public").document("store");
         
         Map<String, Object> updates = new HashMap<>();
-        updates.put("expert_status", status);
-        updates.put("expert_status_updated_at", Timestamp.now());
+        updates.put("consultation_status", status);
+        updates.put("consultation_status_updated_at", Timestamp.now());
         
         transaction.update(storeRef, updates);
     }
 
     /**
-     * Set expert status (non-transactional).
+     * Set consultation status (non-transactional) - system-controlled.
      */
-    public void setExpertStatus(String expertId, String status) throws ExecutionException, InterruptedException {
+    public void setConsultationStatus(String expertId, String status) throws ExecutionException, InterruptedException {
         DocumentReference storeRef = db.collection("users").document(expertId)
                 .collection("public").document("store");
         
         Map<String, Object> updates = new HashMap<>();
-        updates.put("expert_status", status);
-        updates.put("expert_status_updated_at", Timestamp.now());
+        updates.put("consultation_status", status);
+        updates.put("consultation_status_updated_at", Timestamp.now());
         
         storeRef.update(updates).get();
     }
+
 }

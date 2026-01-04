@@ -1629,14 +1629,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                                 );
                                 
                                 // Check for other active consultations WITHIN transaction to avoid race condition
-                                // This ensures we check status atomically with the expert status update
+                                // This ensures we check status atomically with the consultation status update
                                 boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
                                     transaction, finalExpertId, finalOrderId
                                 );
                                 
-                                // Set expert status back to ONLINE if no other active consultations
+                                // Set consultation status back to FREE if no other active consultations
                                 if (!hasOtherActive) {
-                                    walletService.setExpertStatusInTransaction(transaction, finalExpertId, "ONLINE");
+                                    walletService.setConsultationStatusInTransaction(transaction, finalExpertId, "FREE");
                                 }
                                 
                                 return null;
@@ -1868,13 +1868,20 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         WalletService walletService = new WalletService(this.db);
         OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
         
-        // Check expert status
+        // Check expert status (computed: BUSY > OFFLINE > ONLINE)
+        // This already checks both consultation_status and is_online
         String expertStatus = walletService.getExpertStatus(expertId);
         if (!"ONLINE".equals(expertStatus)) {
+            String errorMessage;
+            if ("BUSY".equals(expertStatus)) {
+                errorMessage = "Expert is busy";
+            } else {
+                errorMessage = "Expert is offline";
+            }
             return gson.toJson(Map.of(
                 "success", false,
                 "errorCode", "EXPERT_NOT_AVAILABLE",
-                "errorMessage", "Expert is " + expertStatus.toLowerCase()
+                "errorMessage", errorMessage
             ));
         }
         
@@ -1933,14 +1940,21 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 DocumentReference storeRef = db.collection("users").document(expertId)
                         .collection("public").document("store");
                 DocumentSnapshot storeDoc = transaction.get(storeRef).get();
-                String currentStatus = storeDoc.getString("expert_status");
                 
-                if (!"ONLINE".equals(currentStatus)) {
+                // Check is_online (user-controlled)
+                Boolean isOnline = storeDoc.getBoolean("is_online");
+                if (isOnline == null || !isOnline) {
                     throw new RuntimeException("Expert is no longer available");
                 }
                 
-                // Lock expert status to BUSY
-                walletService.setExpertStatusInTransaction(transaction, expertId, "BUSY");
+                // Check consultation_status (system-controlled)
+                String consultationStatus = storeDoc.getString("consultation_status");
+                if ("BUSY".equals(consultationStatus)) {
+                    throw new RuntimeException("Expert is no longer available");
+                }
+                
+                // Set consultation status to BUSY (system-controlled)
+                walletService.setConsultationStatusInTransaction(transaction, expertId, "BUSY");
                 
                 // Create order
                 OnDemandConsultationOrder order = new OnDemandConsultationOrder();
@@ -2014,14 +2028,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 try {
                     this.db.runTransaction(transaction -> {
                         // Check for other active consultations WITHIN transaction to avoid race condition
-                        // This ensures we check status atomically with the expert status update
+                        // This ensures we check status atomically with the consultation status update
                         boolean hasOtherConsultations = consultationService.hasOtherConnectedConsultationsInTransaction(
                             transaction, expertId, orderId
                         );
                         
-                        // Revert expert status to ONLINE if no other active consultations
+                        // Set consultation status back to FREE if no other active consultations
                         if (!hasOtherConsultations) {
-                            walletService.setExpertStatusInTransaction(transaction, expertId, "ONLINE");
+                            walletService.setConsultationStatusInTransaction(transaction, expertId, "FREE");
                         }
                         
                         // Mark order as FAILED
@@ -2319,14 +2333,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             );
             
             // Check for other active consultations WITHIN transaction to avoid race condition
-            // This ensures we check status atomically with the expert status update
+            // This ensures we check status atomically with the consultation status update
             boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
                 transaction, expertId, orderId
             );
             
-            // Set expert status back to ONLINE if no other active consultations
+            // Set consultation status back to FREE if no other active consultations
             if (!hasOtherActive) {
-                walletService.setExpertStatusInTransaction(transaction, expertId, "ONLINE");
+                walletService.setConsultationStatusInTransaction(transaction, expertId, "FREE");
             }
             
             return null;
