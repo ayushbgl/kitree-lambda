@@ -1652,15 +1652,77 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                             final String finalCurrency = currency;
                             
                             this.db.runTransaction(transaction -> {
-                                // Deduct from user wallet
-                                walletService.updateWalletBalanceInTransaction(
-                                    transaction, finalUserId, finalCurrency, -finalCost
+                                // ============================================================
+                                // PHASE 1: READ ALL DOCUMENTS FIRST (Firestore requirement)
+                                // ============================================================
+                                
+                                // Read user wallet
+                                DocumentReference userWalletRef = db.collection("users").document(finalUserId);
+                                DocumentSnapshot userWalletDoc = transaction.get(userWalletRef).get();
+                                
+                                // Read expert wallet
+                                DocumentReference expertWalletRef = db.collection("users").document(finalExpertId);
+                                DocumentSnapshot expertWalletDoc = transaction.get(expertWalletRef).get();
+                                
+                                // Read order (for validation in completeOrderInTransaction)
+                                DocumentReference orderRef = db.collection("users").document(finalUserId)
+                                        .collection("orders").document(finalOrderId);
+                                DocumentSnapshot orderDoc = transaction.get(orderRef).get();
+                                
+                                // Verify order is still CONNECTED (prevent double-charging)
+                                if (!orderDoc.exists() || !"CONNECTED".equals(orderDoc.getString("status"))) {
+                                    throw new IllegalStateException("Order is not in CONNECTED status: " + finalOrderId);
+                                }
+                                
+                                // Check for other active consultations (read all potential orders)
+                                boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
+                                    transaction, finalExpertId, finalOrderId
                                 );
                                 
-                                // Credit expert wallet
-                                walletService.updateWalletBalanceInTransaction(
-                                    transaction, finalExpertId, finalCurrency, finalExpertEarnings
-                                );
+                                // Read expert status document
+                                DocumentReference expertStoreRef = db.collection("users").document(finalExpertId)
+                                        .collection("public").document("store");
+                                DocumentSnapshot expertStoreDoc = transaction.get(expertStoreRef).get();
+                                
+                                // ============================================================
+                                // PHASE 2: PERFORM ALL WRITES
+                                // ============================================================
+                                
+                                // Update user wallet balance
+                                Map<String, Double> userBalances = new HashMap<>();
+                                if (userWalletDoc.exists() && userWalletDoc.contains("wallet_balances")) {
+                                    @SuppressWarnings("unchecked")
+                                    Map<String, Object> existingBalances = (Map<String, Object>) userWalletDoc.get("wallet_balances");
+                                    if (existingBalances != null) {
+                                        for (Map.Entry<String, Object> entry : existingBalances.entrySet()) {
+                                            if (entry.getValue() instanceof Number) {
+                                                userBalances.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                                            }
+                                        }
+                                    }
+                                }
+                                Double userCurrentBalance = userBalances.getOrDefault(finalCurrency, 0.0);
+                                Double userNewBalance = userCurrentBalance - finalCost;
+                                userBalances.put(finalCurrency, userNewBalance);
+                                transaction.update(userWalletRef, "wallet_balances", userBalances);
+                                
+                                // Update expert wallet balance
+                                Map<String, Double> expertBalances = new HashMap<>();
+                                if (expertWalletDoc.exists() && expertWalletDoc.contains("wallet_balances")) {
+                                    @SuppressWarnings("unchecked")
+                                    Map<String, Object> existingBalances = (Map<String, Object>) expertWalletDoc.get("wallet_balances");
+                                    if (existingBalances != null) {
+                                        for (Map.Entry<String, Object> entry : existingBalances.entrySet()) {
+                                            if (entry.getValue() instanceof Number) {
+                                                expertBalances.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                                            }
+                                        }
+                                    }
+                                }
+                                Double expertCurrentBalance = expertBalances.getOrDefault(finalCurrency, 0.0);
+                                Double expertNewBalance = expertCurrentBalance + finalExpertEarnings;
+                                expertBalances.put(finalCurrency, expertNewBalance);
+                                transaction.update(expertWalletRef, "wallet_balances", expertBalances);
                                 
                                 // Create deduction transaction for user
                                 WalletTransaction deductionTransaction = new WalletTransaction();
@@ -1672,7 +1734,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                                 deductionTransaction.setStatus("COMPLETED");
                                 deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
                                 deductionTransaction.setDescription("On-demand consultation charge (auto-terminated)");
-                                
                                 walletService.createWalletTransactionInTransaction(transaction, finalUserId, deductionTransaction);
                                 
                                 // Create credit transaction for expert
@@ -1685,24 +1746,24 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                                 creditTransaction.setStatus("COMPLETED");
                                 creditTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
                                 creditTransaction.setDescription("On-demand consultation earning (auto-terminated)");
-                                
                                 walletService.createWalletTransactionInTransaction(transaction, finalExpertId, creditTransaction);
                                 
-                                // Update order
-                                consultationService.completeOrderInTransaction(
-                                    transaction, finalUserId, finalOrderId,
-                                    finalDurationSeconds, finalCost, finalPlatformFeeAmount, finalExpertEarnings
-                                );
-                                
-                                // Check for other active consultations WITHIN transaction to avoid race condition
-                                // This ensures we check status atomically with the consultation status update
-                                boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
-                                    transaction, finalExpertId, finalOrderId
-                                );
+                                // Update order status
+                                Map<String, Object> orderUpdates = new HashMap<>();
+                                orderUpdates.put("status", "COMPLETED");
+                                orderUpdates.put("end_time", com.google.cloud.Timestamp.now());
+                                orderUpdates.put("duration_seconds", finalDurationSeconds);
+                                orderUpdates.put("cost", finalCost);
+                                orderUpdates.put("platform_fee_amount", finalPlatformFeeAmount);
+                                orderUpdates.put("expert_earnings", finalExpertEarnings);
+                                transaction.update(orderRef, orderUpdates);
                                 
                                 // Set consultation status back to FREE if no other active consultations
                                 if (!hasOtherActive) {
-                                    walletService.setConsultationStatusInTransaction(transaction, finalExpertId, "FREE");
+                                    Map<String, Object> statusUpdates = new HashMap<>();
+                                    statusUpdates.put("consultation_status", "FREE");
+                                    statusUpdates.put("consultation_status_updated_at", com.google.cloud.Timestamp.now());
+                                    transaction.update(expertStoreRef, statusUpdates);
                                 }
                                 
                                 return null;
@@ -1968,6 +2029,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
         
         // Get platform fee config
+        // For on-demand consultations, category is optional (expert is already selected, category is implicit)
+        // Platform fee will use type-specific fee ("ON_DEMAND_CONSULTATION") or default
         PlatformFeeConfig feeConfig = walletService.getPlatformFeeConfig(expertId);
         Double platformFeePercent = feeConfig.getFeePercent("ON_DEMAND_CONSULTATION", category);
         
@@ -2030,7 +2093,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 order.setExpertName(expert != null ? expert.getName() : null);
                 order.setPlanId(planId);
                 order.setConsultationType(finalConsultationType);
-                order.setCategory(category);
+                // Category is optional for on-demand consultations (expert is already selected, category is implicit)
+                // Store category if provided (for analytics), but it's not required
+                order.setCategory(category); // Can be null
                 order.setExpertRatePerMinute(finalRate);
                 order.setCurrency(finalCurrency);
                 order.setPlatformFeePercent(finalPlatformFeePercent);
