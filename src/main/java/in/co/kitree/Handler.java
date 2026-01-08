@@ -1813,7 +1813,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         int freedExpertsCount = 0;
         try {
             logger.log("Checking for orphaned BUSY experts...");
-            WalletService walletService = new WalletService(this.db, isTest());
+            WalletService walletService = new WalletService(this.db);
             OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db);
             
             // Query for experts who are currently BUSY
@@ -2588,7 +2588,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 // For now, we trust the frontend to send correct data
             }
             
-            WalletService walletService = new WalletService(db, isTest());
+            WalletService walletService = new WalletService(db);
             
             // Set expert status to BUSY
             walletService.setConsultationStatus(expertId, "BUSY");
@@ -2615,7 +2615,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
             }
             
-            WalletService walletService = new WalletService(db, isTest());
+            WalletService walletService = new WalletService(db);
             OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
             
             // Check if expert has other active consultations
@@ -2770,7 +2770,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         
         try {
             OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
-            WalletService walletService = new WalletService(db, isTest());
+            WalletService walletService = new WalletService(db);
             
             // Find order by stream call CID
             Map<String, Object> orderData = consultationService.getOrderByStreamCallCid(callCid);
