@@ -159,6 +159,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 logger.log("warmed up\n");
                 return "Warmed up!";
             }
+            
+            // Path-based routing for webhooks (before body-based routing)
+            // This allows 3rd party webhooks (Stream, Razorpay) to POST to /webhooks/{provider}
+            String rawPath = event.getRawPath();
+            if (rawPath != null && rawPath.startsWith("/webhooks/")) {
+                logger.log("Webhook request received at path: " + rawPath + "\n");
+                return handleWebhookRequest(event, rawPath);
+            }
+            
             System.out.println("event body: " + event.getBody());
             RequestBody requestBody = this.gson.fromJson(event.getBody(), RequestBody.class);
             System.out.println("env is test: " + isTest());
@@ -217,6 +226,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             if ("generate_report".equals(requestBody.getFunction())) {
                 String language = requestBody.getLanguage() == null ? "en" : requestBody.getLanguage();
                 return fulfillDigitalOrders(userId, requestBody.getOrderId(), language);
+            }
+
+            // Mark expert as BUSY when they join a scheduled call
+            if ("mark_expert_busy".equals(requestBody.getFunction())) {
+                return handleMarkExpertBusy(userId, requestBody.getOrderId());
+            }
+
+            // Mark expert as FREE when they end a scheduled call
+            if ("mark_expert_free".equals(requestBody.getFunction())) {
+                return handleMarkExpertFree(userId, requestBody.getOrderId());
             }
 
             if ("buy_service".equals(requestBody.getFunction())) {
@@ -1788,10 +1807,73 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             ));
         }
         
-        logger.log("Auto-terminate job completed. Terminated: " + terminatedCount + ", Errors: " + errorCount);
+        // ============================================================
+        // PHASE 2: Free orphaned BUSY experts (scheduled calls fallback)
+        // ============================================================
+        int freedExpertsCount = 0;
+        try {
+            logger.log("Checking for orphaned BUSY experts...");
+            WalletService walletService = new WalletService(this.db, isTest());
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db);
+            
+            // Query for experts who are currently BUSY
+            Query busyExpertsQuery = this.db.collectionGroup("store")
+                    .whereEqualTo("consultation_status", "BUSY");
+            
+            for (QueryDocumentSnapshot doc : busyExpertsQuery.get().get().getDocuments()) {
+                try {
+                    // Extract expert ID from document path: users/{expertId}/public/store
+                    String expertId = doc.getReference().getParent().getParent().getParent().getId();
+                    
+                    // Check if expert has any active consultations (on-demand or scheduled)
+                    // For on-demand, we check CONNECTED status
+                    boolean hasActiveOnDemand = false;
+                    Query activeOnDemandQuery = this.db.collectionGroup("orders")
+                            .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                            .whereEqualTo("expertId", expertId)
+                            .whereEqualTo("status", "CONNECTED");
+                    
+                    if (!activeOnDemandQuery.get().get().isEmpty()) {
+                        hasActiveOnDemand = true;
+                    }
+                    
+                    // Also check for INITIATED on-demand consultations (buyer waiting)
+                    if (!hasActiveOnDemand) {
+                        Query initiatedQuery = this.db.collectionGroup("orders")
+                                .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                                .whereEqualTo("expertId", expertId)
+                                .whereEqualTo("status", "INITIATED");
+                        
+                        if (!initiatedQuery.get().get().isEmpty()) {
+                            hasActiveOnDemand = true;
+                        }
+                    }
+                    
+                    if (!hasActiveOnDemand) {
+                        // No active consultations - free this expert
+                        // This handles: scheduled call cleanup, orphaned status after crashes
+                        logger.log("Freeing orphaned BUSY expert: " + expertId);
+                        walletService.setConsultationStatus(expertId, "FREE");
+                        freedExpertsCount++;
+                        logger.log("Successfully freed expert: " + expertId);
+                    } else {
+                        logger.log("Expert " + expertId + " has active consultations, keeping BUSY");
+                    }
+                } catch (Exception e) {
+                    logger.log("Error checking/freeing expert: " + e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            logger.log("Error in orphaned BUSY expert cleanup: " + e.getMessage());
+            e.printStackTrace();
+        }
+        
+        logger.log("Auto-terminate job completed. Terminated: " + terminatedCount + 
+                ", Freed experts: " + freedExpertsCount + ", Errors: " + errorCount);
         return gson.toJson(Map.of(
             "success", true,
             "terminatedCount", terminatedCount,
+            "freedExpertsCount", freedExpertsCount,
             "errorCount", errorCount
         ));
     }
@@ -2483,6 +2565,282 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             "duration", durationSeconds,
             "currency", currency,
             "remainingBalance", remainingBalanceHolder[0]
+        ));
+    }
+    
+    /**
+     * Mark expert as BUSY when they join a scheduled call.
+     * This is called from the frontend when an expert joins a scheduled consultation.
+     */
+    private String handleMarkExpertBusy(String expertId, String orderId) {
+        logger.log(String.format("Marking expert %s as BUSY for order %s\n", expertId, orderId));
+        
+        try {
+            if (expertId == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
+            }
+            
+            // Validate the order exists and belongs to this expert (optional but recommended)
+            if (orderId != null) {
+                OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
+                // Try to find the order to verify expert ownership
+                // Note: This would require a method to get order by ID across collections
+                // For now, we trust the frontend to send correct data
+            }
+            
+            WalletService walletService = new WalletService(db, isTest());
+            
+            // Set expert status to BUSY
+            walletService.setConsultationStatus(expertId, "BUSY");
+            
+            logger.log(String.format("Expert %s marked as BUSY successfully\n", expertId));
+            return gson.toJson(Map.of("success", true, "status", "BUSY"));
+            
+        } catch (Exception e) {
+            logger.log(String.format("Error marking expert as BUSY: %s\n", e.getMessage()));
+            e.printStackTrace();
+            return gson.toJson(Map.of("success", false, "errorMessage", "Failed to update expert status: " + e.getMessage()));
+        }
+    }
+    
+    /**
+     * Mark expert as FREE when they end a scheduled call.
+     * Checks for other active consultations before freeing the expert.
+     */
+    private String handleMarkExpertFree(String expertId, String orderId) {
+        logger.log(String.format("Marking expert %s as FREE for order %s\n", expertId, orderId));
+        
+        try {
+            if (expertId == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
+            }
+            
+            WalletService walletService = new WalletService(db, isTest());
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
+            
+            // Check if expert has other active consultations
+            boolean hasOtherActive = false;
+            if (orderId != null) {
+                hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+            }
+            
+            if (hasOtherActive) {
+                logger.log(String.format("Expert %s still has other active consultations, keeping BUSY\n", expertId));
+                return gson.toJson(Map.of("success", true, "status", "BUSY", "reason", "other_active_consultations"));
+            }
+            
+            // Set expert status to FREE
+            walletService.setConsultationStatus(expertId, "FREE");
+            
+            logger.log(String.format("Expert %s marked as FREE successfully\n", expertId));
+            return gson.toJson(Map.of("success", true, "status", "FREE"));
+            
+        } catch (Exception e) {
+            logger.log(String.format("Error marking expert as FREE: %s\n", e.getMessage()));
+            e.printStackTrace();
+            return gson.toJson(Map.of("success", false, "errorMessage", "Failed to update expert status: " + e.getMessage()));
+        }
+    }
+    
+    /**
+     * Handle webhook requests from 3rd party services (Stream, Razorpay, etc.)
+     * Routes based on the URL path: /webhooks/stream, /webhooks/razorpay, etc.
+     */
+    private String handleWebhookRequest(RequestEvent event, String rawPath) {
+        logger.log("Processing webhook request for path: " + rawPath + "\n");
+        
+        switch (rawPath) {
+            case "/webhooks/stream":
+                return handleStreamWebhook(event);
+            case "/webhooks/razorpay":
+                // Future: migrate razorpay_webhook to path-based routing
+                return gson.toJson(Map.of("error", "Razorpay webhook not yet migrated to path-based routing"));
+            default:
+                logger.log("Unknown webhook endpoint: " + rawPath + "\n");
+                return gson.toJson(Map.of("error", "Unknown webhook endpoint", "path", rawPath));
+        }
+    }
+    
+    /**
+     * Handle Stream video webhooks for call events.
+     * Events: call.ended, call.session_participant_left, etc.
+     */
+    private String handleStreamWebhook(RequestEvent event) {
+        logger.log("Processing Stream webhook...\n");
+        
+        try {
+            // TODO: Verify webhook signature once StreamService is implemented
+            // String signature = event.getHeaders() != null ? event.getHeaders().get("x-webhook-signature") : null;
+            // if (!streamService.verifyWebhookSignature(event.getBody(), signature)) {
+            //     logger.log("Stream webhook signature verification failed\n");
+            //     return gson.toJson(Map.of("error", "Invalid signature"));
+            // }
+            
+            // Parse the webhook payload
+            String body = event.getBody();
+            if (body == null || body.isEmpty()) {
+                logger.log("Stream webhook body is empty\n");
+                return gson.toJson(Map.of("error", "Empty webhook body"));
+            }
+            
+            logger.log("Stream webhook body: " + body + "\n");
+            
+            // Parse webhook event
+            Map<String, Object> payload = gson.fromJson(body, Map.class);
+            String eventType = (String) payload.get("type");
+            
+            if (eventType == null) {
+                logger.log("Stream webhook missing event type\n");
+                return gson.toJson(Map.of("error", "Missing event type"));
+            }
+            
+            logger.log("Stream webhook event type: " + eventType + "\n");
+            
+            // Extract call CID from the payload
+            // Stream webhook format varies by event type
+            String callCid = extractCallCidFromPayload(payload);
+            
+            if (callCid == null) {
+                logger.log("Could not extract call CID from Stream webhook\n");
+                return gson.toJson(Map.of("status", "ignored", "reason", "no_call_cid"));
+            }
+            
+            logger.log("Stream webhook call CID: " + callCid + "\n");
+            
+            // Handle different event types
+            switch (eventType) {
+                case "call.ended":
+                    return handleStreamCallEnded(callCid, payload);
+                case "call.session_ended":
+                    return handleStreamCallEnded(callCid, payload);
+                case "call.session_participant_left":
+                    return handleStreamParticipantLeft(callCid, payload);
+                default:
+                    logger.log("Ignoring Stream webhook event type: " + eventType + "\n");
+                    return gson.toJson(Map.of("status", "ignored", "event_type", eventType));
+            }
+            
+        } catch (Exception e) {
+            logger.log("Error processing Stream webhook: " + e.getMessage() + "\n");
+            e.printStackTrace();
+            return gson.toJson(Map.of("error", "Internal error processing webhook", "message", e.getMessage()));
+        }
+    }
+    
+    /**
+     * Extract call CID from Stream webhook payload.
+     * The structure varies by event type.
+     */
+    @SuppressWarnings("unchecked")
+    private String extractCallCidFromPayload(Map<String, Object> payload) {
+        try {
+            // Try call.cid at root level
+            if (payload.containsKey("call_cid")) {
+                return (String) payload.get("call_cid");
+            }
+            
+            // Try nested in call object
+            Map<String, Object> call = (Map<String, Object>) payload.get("call");
+            if (call != null && call.containsKey("cid")) {
+                return (String) call.get("cid");
+            }
+            
+            // Try call.session structure
+            Map<String, Object> callSession = (Map<String, Object>) payload.get("call_session");
+            if (callSession != null) {
+                call = (Map<String, Object>) callSession.get("call");
+                if (call != null && call.containsKey("cid")) {
+                    return (String) call.get("cid");
+                }
+            }
+            
+            return null;
+        } catch (Exception e) {
+            logger.log("Error extracting call CID: " + e.getMessage() + "\n");
+            return null;
+        }
+    }
+    
+    /**
+     * Handle Stream call.ended or call.session_ended event.
+     * Frees the expert if no other active consultations.
+     */
+    private String handleStreamCallEnded(String callCid, Map<String, Object> payload) {
+        logger.log("Handling Stream call ended for CID: " + callCid + "\n");
+        
+        try {
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
+            WalletService walletService = new WalletService(db, isTest());
+            
+            // Find order by stream call CID
+            Map<String, Object> orderData = consultationService.getOrderByStreamCallCid(callCid);
+            
+            if (orderData == null) {
+                logger.log("No order found for Stream call CID: " + callCid + "\n");
+                return gson.toJson(Map.of("status", "order_not_found", "call_cid", callCid));
+            }
+            
+            String orderId = (String) orderData.get("orderId");
+            String expertId = (String) orderData.get("expertId");
+            String userId = (String) orderData.get("userId");
+            String orderType = (String) orderData.get("type");
+            String orderStatus = (String) orderData.get("status");
+            
+            logger.log(String.format("Found order: id=%s, type=%s, status=%s, expertId=%s\n", 
+                orderId, orderType, orderStatus, expertId));
+            
+            // Check if already completed - idempotency
+            if ("COMPLETED".equals(orderStatus) || "CANCELLED".equals(orderStatus)) {
+                logger.log("Order already completed/cancelled, ignoring webhook\n");
+                return gson.toJson(Map.of("status", "already_completed", "order_id", orderId));
+            }
+            
+            // For on-demand consultations that are still CONNECTED, finalize billing
+            if ("ON_DEMAND_CONSULTATION".equals(orderType) && "CONNECTED".equals(orderStatus)) {
+                logger.log("Finalizing on-demand consultation via webhook...\n");
+                // This will be handled similar to auto-terminate cron
+                // For now, just log - the full implementation will use existing endConsultation logic
+                // The cron job acts as fallback for this case
+            }
+            
+            // Free the expert if no other active consultations
+            boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+            
+            if (!hasOtherActive) {
+                logger.log("Freeing expert " + expertId + " (no other active consultations)\n");
+                walletService.setConsultationStatus(expertId, "FREE");
+            } else {
+                logger.log("Expert " + expertId + " still has other active consultations, keeping BUSY\n");
+            }
+            
+            return gson.toJson(Map.of(
+                "status", "processed",
+                "order_id", orderId,
+                "expert_freed", !hasOtherActive
+            ));
+            
+        } catch (Exception e) {
+            logger.log("Error handling Stream call ended: " + e.getMessage() + "\n");
+            e.printStackTrace();
+            return gson.toJson(Map.of("error", "Error processing call ended", "message", e.getMessage()));
+        }
+    }
+    
+    /**
+     * Handle Stream call.session_participant_left event.
+     * If only one participant remains, may trigger call end.
+     */
+    private String handleStreamParticipantLeft(String callCid, Map<String, Object> payload) {
+        logger.log("Handling Stream participant left for CID: " + callCid + "\n");
+        
+        // For now, we rely on call.ended event for cleanup
+        // Participant left is informational - the call may continue if other participant remains
+        // The client-side handles participant monitoring for immediate UX feedback
+        
+        return gson.toJson(Map.of(
+            "status", "acknowledged",
+            "event", "participant_left",
+            "call_cid", callCid
         ));
     }
 }

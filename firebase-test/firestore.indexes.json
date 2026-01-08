@@ -65,6 +65,16 @@
       "queryScope": "COLLECTION_GROUP",
       "fields": [
         {
+          "fieldPath": "stream_call_cid",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {
           "fieldPath": "category",
           "order": "ASCENDING"
         },

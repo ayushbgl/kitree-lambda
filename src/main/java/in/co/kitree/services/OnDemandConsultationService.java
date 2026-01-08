@@ -26,6 +26,14 @@ public class OnDemandConsultationService {
     }
 
     /**
+     * Constructor without WalletService for simple queries.
+     */
+    public OnDemandConsultationService(Firestore db) {
+        this.db = db;
+        this.walletService = null;
+    }
+
+    /**
      * Get the on-demand rate for a consultation type from a plan.
      *
      * @param plan            The service plan
@@ -370,6 +378,82 @@ public class OnDemandConsultationService {
         }
         
         return false;
+    }
+
+    /**
+     * Find any order (on-demand or scheduled) by Stream call CID.
+     * Searches across all users' orders using collection group query.
+     * 
+     * The Stream call CID format is typically: {call_type}:{order_id}
+     * e.g., "consultation_video:abc123" or "consultation_audio:xyz789"
+     * 
+     * @param streamCallCid The Stream call CID to search for
+     * @return Map containing order data (orderId, userId, expertId, type, status), or null if not found
+     */
+    public Map<String, Object> getOrderByStreamCallCid(String streamCallCid) 
+            throws ExecutionException, InterruptedException {
+        if (streamCallCid == null || streamCallCid.isEmpty()) {
+            return null;
+        }
+        
+        // Query across all users' orders for the stream_call_cid
+        Query query = db.collectionGroup("orders")
+                .whereEqualTo("stream_call_cid", streamCallCid)
+                .limit(1);
+        
+        QuerySnapshot snapshot = query.get().get();
+        
+        if (snapshot.isEmpty()) {
+            // Try deriving from CID format: {call_type}:{order_id}
+            // This works when stream_call_cid field isn't set but order_id matches
+            String[] parts = streamCallCid.split(":");
+            if (parts.length >= 2) {
+                String orderId = parts[parts.length - 1];
+                System.out.println("[OnDemandConsultationService] Trying to find order by ID from CID: " + orderId);
+                
+                // Search by orderId across all orders
+                Query orderIdQuery = db.collectionGroup("orders")
+                        .whereEqualTo("orderId", orderId)
+                        .limit(1);
+                snapshot = orderIdQuery.get().get();
+            }
+        }
+        
+        if (snapshot.isEmpty()) {
+            return null;
+        }
+        
+        DocumentSnapshot doc = snapshot.getDocuments().get(0);
+        
+        Map<String, Object> orderData = new HashMap<>();
+        orderData.put("orderId", doc.getId());
+        orderData.put("userId", doc.getString("userId"));
+        orderData.put("expertId", doc.getString("expertId"));
+        orderData.put("type", doc.getString("type"));
+        orderData.put("status", doc.getString("status"));
+        orderData.put("stream_call_cid", doc.getString("stream_call_cid"));
+        
+        // Include additional fields useful for processing
+        if (doc.contains("consultation_type")) {
+            orderData.put("consultation_type", doc.getString("consultation_type"));
+        }
+        if (doc.contains("start_time")) {
+            orderData.put("start_time", doc.getTimestamp("start_time"));
+        }
+        if (doc.contains("expert_rate_per_minute")) {
+            orderData.put("expert_rate_per_minute", doc.getDouble("expert_rate_per_minute"));
+        }
+        if (doc.contains("max_allowed_duration")) {
+            orderData.put("max_allowed_duration", doc.getLong("max_allowed_duration"));
+        }
+        if (doc.contains("platform_fee_percent")) {
+            orderData.put("platform_fee_percent", doc.getDouble("platform_fee_percent"));
+        }
+        if (doc.contains("currency")) {
+            orderData.put("currency", doc.getString("currency"));
+        }
+        
+        return orderData;
     }
 
     private Map<String, Object> orderToMap(OnDemandConsultationOrder order) {
