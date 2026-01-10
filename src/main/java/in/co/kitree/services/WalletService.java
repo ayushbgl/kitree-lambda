@@ -466,4 +466,238 @@ public class WalletService {
         storeRef.update(updates).get();
     }
 
+    // =====================================================================
+    // Expert-Specific Wallet Methods (Per-Expert Customer Wallets)
+    // Path: users/{userId}/expert_wallets/{expertId}
+    // =====================================================================
+
+    /**
+     * Get wallet balances for a user with a specific expert (all currencies).
+     * Path: users/{userId}/expert_wallets/{expertId}
+     *
+     * @param userId   The user's ID
+     * @param expertId The expert's ID
+     * @return Map of currency codes to balances
+     */
+    public Map<String, Double> getExpertWalletBalances(String userId, String expertId) throws ExecutionException, InterruptedException {
+        DocumentSnapshot walletDoc = db.collection("users").document(userId)
+                .collection("expert_wallets").document(expertId).get().get();
+        
+        if (walletDoc.exists() && walletDoc.contains("balances")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> balances = (Map<String, Object>) walletDoc.get("balances");
+            if (balances != null) {
+                Map<String, Double> result = new HashMap<>();
+                for (Map.Entry<String, Object> entry : balances.entrySet()) {
+                    if (entry.getValue() instanceof Number) {
+                        result.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                    }
+                }
+                return result;
+            }
+        }
+        return new HashMap<>();
+    }
+
+    /**
+     * Get wallet balance for a user with a specific expert in a specific currency.
+     *
+     * @param userId   The user's ID
+     * @param expertId The expert's ID
+     * @param currency The currency code (e.g., "INR", "USD")
+     * @return The balance in the specified currency (0.0 if not found)
+     */
+    public Double getExpertWalletBalance(String userId, String expertId, String currency) throws ExecutionException, InterruptedException {
+        Map<String, Double> balances = getExpertWalletBalances(userId, expertId);
+        return balances.getOrDefault(currency, 0.0);
+    }
+
+    /**
+     * Update expert-specific wallet balance using a Firestore transaction.
+     * Path: users/{userId}/expert_wallets/{expertId}
+     *
+     * @param transaction The Firestore transaction
+     * @param userId      The user's ID
+     * @param expertId    The expert's ID
+     * @param currency    The currency code
+     * @param amount      The amount to add (positive) or subtract (negative)
+     * @return The new balance after the update
+     */
+    public Double updateExpertWalletBalanceInTransaction(Transaction transaction, String userId, String expertId, String currency, Double amount)
+            throws ExecutionException, InterruptedException {
+        DocumentReference walletRef = db.collection("users").document(userId)
+                .collection("expert_wallets").document(expertId);
+        DocumentSnapshot walletDoc = transaction.get(walletRef).get();
+        
+        Map<String, Double> balances = new HashMap<>();
+        if (walletDoc.exists() && walletDoc.contains("balances")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> existingBalances = (Map<String, Object>) walletDoc.get("balances");
+            if (existingBalances != null) {
+                for (Map.Entry<String, Object> entry : existingBalances.entrySet()) {
+                    if (entry.getValue() instanceof Number) {
+                        balances.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                    }
+                }
+            }
+        }
+        
+        Double currentBalance = balances.getOrDefault(currency, 0.0);
+        Double newBalance = currentBalance + amount;
+        balances.put(currency, newBalance);
+        
+        Map<String, Object> data = new HashMap<>();
+        data.put("balances", balances);
+        data.put("updated_at", Timestamp.now());
+        
+        if (walletDoc.exists()) {
+            transaction.update(walletRef, data);
+        } else {
+            data.put("created_at", Timestamp.now());
+            transaction.set(walletRef, data);
+        }
+        
+        return newBalance;
+    }
+
+    /**
+     * Create a wallet transaction for expert-specific wallet within a Firestore transaction.
+     * Path: users/{userId}/expert_wallets/{expertId}/transactions/{txId}
+     *
+     * @param firestoreTransaction The Firestore transaction
+     * @param userId               The user's ID
+     * @param expertId             The expert's ID
+     * @param walletTransaction    The wallet transaction to create
+     * @return The transaction ID
+     */
+    public String createExpertWalletTransactionInTransaction(Transaction firestoreTransaction, String userId, String expertId, WalletTransaction walletTransaction)
+            throws ExecutionException, InterruptedException {
+        CollectionReference transactionsRef = db.collection("users").document(userId)
+                .collection("expert_wallets").document(expertId).collection("transactions");
+        DocumentReference docRef = transactionsRef.document();
+        
+        Map<String, Object> transactionData = buildWalletTransactionData(walletTransaction);
+        
+        firestoreTransaction.set(docRef, transactionData);
+        return docRef.getId();
+    }
+
+    /**
+     * Create a wallet transaction for expert-specific wallet (non-transactional).
+     * Path: users/{userId}/expert_wallets/{expertId}/transactions/{txId}
+     *
+     * @param userId            The user's ID
+     * @param expertId          The expert's ID
+     * @param walletTransaction The wallet transaction to create
+     * @return The transaction ID
+     */
+    public String createExpertWalletTransaction(String userId, String expertId, WalletTransaction walletTransaction)
+            throws ExecutionException, InterruptedException {
+        CollectionReference transactionsRef = db.collection("users").document(userId)
+                .collection("expert_wallets").document(expertId).collection("transactions");
+        DocumentReference docRef = transactionsRef.document();
+        
+        Map<String, Object> transactionData = buildWalletTransactionData(walletTransaction);
+        
+        docRef.set(transactionData).get();
+        return docRef.getId();
+    }
+
+    /**
+     * Check if a payment has already been processed for expert-specific wallet.
+     *
+     * @param userId    The user's ID
+     * @param expertId  The expert's ID
+     * @param paymentId The Razorpay payment ID
+     * @return true if payment already processed
+     */
+    public boolean isExpertWalletPaymentAlreadyProcessed(String userId, String expertId, String paymentId) throws ExecutionException, InterruptedException {
+        CollectionReference transactionsRef = db.collection("users").document(userId)
+                .collection("expert_wallets").document(expertId).collection("transactions");
+        Query query = transactionsRef.whereEqualTo("payment_id", paymentId).whereEqualTo("status", "COMPLETED");
+        return !query.get().get().isEmpty();
+    }
+
+    /**
+     * Increment expert-specific wallet balance (non-transactional, use with caution).
+     *
+     * @param userId   The user's ID
+     * @param expertId The expert's ID
+     * @param currency The currency code
+     * @param amount   The amount to add
+     * @return The new balance
+     */
+    public Double incrementExpertWalletBalance(String userId, String expertId, String currency, Double amount)
+            throws ExecutionException, InterruptedException {
+        DocumentReference walletRef = db.collection("users").document(userId)
+                .collection("expert_wallets").document(expertId);
+        
+        // Use FieldValue.increment for atomic updates
+        Map<String, Object> updates = new HashMap<>();
+        updates.put("balances." + currency, FieldValue.increment(amount));
+        updates.put("updated_at", Timestamp.now());
+        
+        // Check if document exists first
+        DocumentSnapshot walletDoc = walletRef.get().get();
+        if (walletDoc.exists()) {
+            walletRef.update(updates).get();
+        } else {
+            // Create new document with initial balance
+            Map<String, Object> data = new HashMap<>();
+            Map<String, Double> balances = new HashMap<>();
+            balances.put(currency, amount);
+            data.put("balances", balances);
+            data.put("created_at", Timestamp.now());
+            data.put("updated_at", Timestamp.now());
+            walletRef.set(data).get();
+        }
+        
+        return getExpertWalletBalance(userId, expertId, currency);
+    }
+
+    /**
+     * Helper method to build wallet transaction data map.
+     */
+    private Map<String, Object> buildWalletTransactionData(WalletTransaction walletTransaction) {
+        Map<String, Object> transactionData = new HashMap<>();
+        transactionData.put("type", walletTransaction.getType());
+        transactionData.put("source", walletTransaction.getSource());
+        transactionData.put("amount", walletTransaction.getAmount());
+        transactionData.put("currency", walletTransaction.getCurrency());
+        transactionData.put("status", walletTransaction.getStatus());
+        transactionData.put("created_at", walletTransaction.getCreatedAt() != null ? walletTransaction.getCreatedAt() : Timestamp.now());
+        transactionData.put("description", walletTransaction.getDescription());
+        
+        // Add optional fields if present
+        if (walletTransaction.getPaymentId() != null) {
+            transactionData.put("payment_id", walletTransaction.getPaymentId());
+        }
+        if (walletTransaction.getOrderId() != null) {
+            transactionData.put("order_id", walletTransaction.getOrderId());
+        }
+        if (walletTransaction.getCouponCode() != null) {
+            transactionData.put("coupon_code", walletTransaction.getCouponCode());
+        }
+        if (walletTransaction.getReferralCode() != null) {
+            transactionData.put("referral_code", walletTransaction.getReferralCode());
+        }
+        if (walletTransaction.getReferrerId() != null) {
+            transactionData.put("referrer_id", walletTransaction.getReferrerId());
+        }
+        if (walletTransaction.getCashbackSourceOrderId() != null) {
+            transactionData.put("cashback_source_order_id", walletTransaction.getCashbackSourceOrderId());
+        }
+        if (walletTransaction.getCashbackReason() != null) {
+            transactionData.put("cashback_reason", walletTransaction.getCashbackReason());
+        }
+        if (walletTransaction.getRefundReason() != null) {
+            transactionData.put("refund_reason", walletTransaction.getRefundReason());
+        }
+        if (walletTransaction.getBonusAmount() != null) {
+            transactionData.put("bonus_amount", walletTransaction.getBonusAmount());
+        }
+        
+        return transactionData;
+    }
+
 }

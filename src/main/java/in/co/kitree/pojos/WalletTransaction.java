@@ -45,6 +45,9 @@ public class WalletTransaction {
     private String cashbackSourceOrderId;  // Order ID that generated cashback if source is CASHBACK
     private String cashbackReason;    // Reason for cashback (e.g., "FIRST_CONSULTATION", "REFERRAL_BONUS")
     private String refundReason;      // Reason for refund if source is REFUND
+    
+    // Bonus amount for promotional recharges (tracked separately from main amount)
+    private Double bonusAmount;
 
     public WalletTransaction() {}
 
@@ -93,6 +96,9 @@ public class WalletTransaction {
 
     public String getRefundReason() { return refundReason; }
     public void setRefundReason(String refundReason) { this.refundReason = refundReason; }
+
+    public Double getBonusAmount() { return bonusAmount; }
+    public void setBonusAmount(Double bonusAmount) { this.bonusAmount = bonusAmount; }
 
     @Override
     public String toString() {
