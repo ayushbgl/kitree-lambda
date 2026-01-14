@@ -2631,19 +2631,25 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
         }
         
+        // IDEMPOTENCY: If already COMPLETED, return existing data (webhook may have already finalized)
+        if ("COMPLETED".equals(order.getStatus())) {
+            logger.log("Order " + orderId + " already COMPLETED, returning existing data (idempotent)\n");
+            // Get remaining balance for response
+            Double remainingBalance = walletService.getExpertWalletBalance(userId, order.getExpertId(), order.getCurrency());
+            return gson.toJson(Map.of(
+                "success", true,
+                "cost", order.getCost() != null ? order.getCost() : 0.0,
+                "duration", order.getDurationSeconds() != null ? order.getDurationSeconds() : 0L,
+                "currency", order.getCurrency(),
+                "remainingBalance", remainingBalance != null ? remainingBalance : 0.0,
+                "expertId", order.getExpertId(),
+                "message", "Consultation already completed"
+            ));
+        }
+        
         // Allow ending if CONNECTED or already TERMINATED
         if (!Arrays.asList("CONNECTED", "TERMINATED").contains(order.getStatus())) {
-            if ("COMPLETED".equals(order.getStatus())) {
-                // Already completed, return existing data
-                return gson.toJson(Map.of(
-                    "success", true,
-                    "cost", order.getCost(),
-                    "duration", order.getDurationSeconds(),
-                    "currency", order.getCurrency(),
-                    "message", "Consultation already completed"
-                ));
-            }
-            return gson.toJson(Map.of("success", false, "errorMessage", "Consultation is not active"));
+            return gson.toJson(Map.of("success", false, "errorMessage", "Consultation is not active (status: " + order.getStatus() + ")"));
         }
         
         // Calculate duration and cost
@@ -2663,50 +2669,71 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         
         Double[] remainingBalanceHolder = new Double[1];
         
-        this.db.runTransaction(transaction -> {
-            // Deduct from user's expert-specific wallet
-            remainingBalanceHolder[0] = walletService.updateExpertWalletBalanceInTransaction(
-                transaction, userId, expertId, currency, -finalCost
-            );
-            
-            // Credit expert's earnings passbook (separate from wallet)
-            earningsService.creditExpertEarningsInTransaction(
-                transaction, expertId, currency, finalCost, finalPlatformFeeAmount,
-                finalOrderId, "On-demand consultation earning"
-            );
-            
-            // Create deduction transaction for user's expert-specific wallet
-            WalletTransaction deductionTransaction = new WalletTransaction();
-            deductionTransaction.setType("CONSULTATION_DEDUCTION");
-            deductionTransaction.setSource("PAYMENT");
-            deductionTransaction.setAmount(-finalCost);
-            deductionTransaction.setCurrency(currency);
-            deductionTransaction.setOrderId(finalOrderId);
-            deductionTransaction.setStatus("COMPLETED");
-            deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-            deductionTransaction.setDescription("On-demand consultation charge");
-            
-            walletService.createExpertWalletTransactionInTransaction(transaction, userId, expertId, deductionTransaction);
-            
-            // Update order
-            consultationService.completeOrderInTransaction(
-                transaction, userId, finalOrderId,
-                finalDurationSeconds, finalCost, finalPlatformFeeAmount, finalExpertEarnings
-            );
-            
-            // Check for other active consultations WITHIN transaction to avoid race condition
-            // This ensures we check status atomically with the consultation status update
-            boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
-                transaction, expertId, finalOrderId
-            );
-            
-            // Set consultation status back to FREE if no other active consultations
-            if (!hasOtherActive) {
-                walletService.setConsultationStatusInTransaction(transaction, expertId, "FREE");
+        try {
+            this.db.runTransaction(transaction -> {
+                // Deduct from user's expert-specific wallet
+                remainingBalanceHolder[0] = walletService.updateExpertWalletBalanceInTransaction(
+                    transaction, userId, expertId, currency, -finalCost
+                );
+                
+                // Credit expert's earnings passbook (separate from wallet)
+                earningsService.creditExpertEarningsInTransaction(
+                    transaction, expertId, currency, finalCost, finalPlatformFeeAmount,
+                    finalOrderId, "On-demand consultation earning"
+                );
+                
+                // Create deduction transaction for user's expert-specific wallet
+                WalletTransaction deductionTransaction = new WalletTransaction();
+                deductionTransaction.setType("CONSULTATION_DEDUCTION");
+                deductionTransaction.setSource("PAYMENT");
+                deductionTransaction.setAmount(-finalCost);
+                deductionTransaction.setCurrency(currency);
+                deductionTransaction.setOrderId(finalOrderId);
+                deductionTransaction.setStatus("COMPLETED");
+                deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+                deductionTransaction.setDescription("On-demand consultation charge");
+                
+                walletService.createExpertWalletTransactionInTransaction(transaction, userId, expertId, deductionTransaction);
+                
+                // Update order - this will throw if order is not in CONNECTED status (concurrent completion)
+                consultationService.completeOrderInTransaction(
+                    transaction, userId, finalOrderId,
+                    finalDurationSeconds, finalCost, finalPlatformFeeAmount, finalExpertEarnings
+                );
+                
+                // Check for other active consultations WITHIN transaction to avoid race condition
+                // This ensures we check status atomically with the consultation status update
+                boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
+                    transaction, expertId, finalOrderId
+                );
+                
+                // Set consultation status back to FREE if no other active consultations
+                if (!hasOtherActive) {
+                    walletService.setConsultationStatusInTransaction(transaction, expertId, "FREE");
+                }
+                
+                return null;
+            }).get();
+        } catch (Exception e) {
+            // Check if this was a concurrent completion (order no longer CONNECTED)
+            // Re-fetch the order to see if it was completed by webhook
+            OnDemandConsultationOrder refreshedOrder = consultationService.getOrder(userId, orderId);
+            if (refreshedOrder != null && "COMPLETED".equals(refreshedOrder.getStatus())) {
+                logger.log("Order " + orderId + " was completed by concurrent request (webhook), returning existing data\n");
+                Double remainingBalance = walletService.getExpertWalletBalance(userId, expertId, currency);
+                return gson.toJson(Map.of(
+                    "success", true,
+                    "cost", refreshedOrder.getCost() != null ? refreshedOrder.getCost() : 0.0,
+                    "duration", refreshedOrder.getDurationSeconds() != null ? refreshedOrder.getDurationSeconds() : 0L,
+                    "currency", refreshedOrder.getCurrency(),
+                    "remainingBalance", remainingBalance != null ? remainingBalance : 0.0,
+                    "expertId", expertId,
+                    "message", "Consultation completed by server"
+                ));
             }
-            
-            return null;
-        }).get();
+            // If it wasn't a concurrent completion, re-throw the exception
+            throw e;
+        }
         
         return gson.toJson(Map.of(
             "success", true,
@@ -2819,15 +2846,57 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         logger.log("Processing Stream webhook...\n");
         
         try {
-            // TODO: Verify webhook signature once StreamService is implemented
-            // String signature = event.getHeaders() != null ? event.getHeaders().get("x-webhook-signature") : null;
-            // if (!streamService.verifyWebhookSignature(event.getBody(), signature)) {
-            //     logger.log("Stream webhook signature verification failed\n");
-            //     return gson.toJson(Map.of("error", "Invalid signature"));
-            // }
+            // Extract webhook metadata from headers
+            // Stream sends: X-SIGNATURE, X-API-KEY, X-WEBHOOK-ID, X-WEBHOOK-ATTEMPT
+            String body = event.getBody();
+            Map<String, String> headers = event.getHeaders();
+            
+            String webhookId = getHeader(headers, "X-WEBHOOK-ID", "x-webhook-id");
+            String webhookAttempt = getHeader(headers, "X-WEBHOOK-ATTEMPT", "x-webhook-attempt");
+            String signature = getHeader(headers, "X-SIGNATURE", "x-signature");
+            String apiKeyHeader = getHeader(headers, "X-API-KEY", "x-api-key");
+            
+            if (webhookId != null) {
+                logger.log("Webhook ID: " + webhookId + ", Attempt: " + webhookAttempt + "\n");
+            }
+            
+            // Verify webhook signature for security
+            // Stream uses HMAC-SHA256 with API secret to sign webhook payloads
+            StreamService streamService = new StreamService(isTest());
+            if (streamService.isConfigured()) {
+                // First, verify API key matches (if provided)
+                if (apiKeyHeader != null && !apiKeyHeader.isEmpty()) {
+                    if (!apiKeyHeader.equals(streamService.getApiKey())) {
+                        logger.log("Stream webhook API key mismatch! Expected: " + 
+                            streamService.getApiKey().substring(0, 4) + "..., Got: " + 
+                            apiKeyHeader.substring(0, Math.min(4, apiKeyHeader.length())) + "...\n");
+                        if (!isTest()) {
+                            return gson.toJson(Map.of("error", "Invalid API key"));
+                        }
+                    }
+                }
+                
+                // Verify signature
+                if (signature != null && !signature.isEmpty()) {
+                    boolean isValid = streamService.verifyWebhookSignature(body, signature);
+                    if (!isValid) {
+                        logger.log("Stream webhook signature verification FAILED\n");
+                        // Log but don't reject in test mode (signatures may not be configured)
+                        if (!isTest()) {
+                            return gson.toJson(Map.of("error", "Invalid webhook signature"));
+                        }
+                        logger.log("Continuing despite invalid signature (test mode)\n");
+                    } else {
+                        logger.log("Stream webhook signature verified successfully\n");
+                    }
+                } else {
+                    logger.log("No webhook signature found in headers, skipping verification\n");
+                }
+            } else {
+                logger.log("StreamService not configured, skipping signature verification\n");
+            }
             
             // Parse the webhook payload
-            String body = event.getBody();
             if (body == null || body.isEmpty()) {
                 logger.log("Stream webhook body is empty\n");
                 return gson.toJson(Map.of("error", "Empty webhook body"));
@@ -2878,6 +2947,21 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
     
     /**
+     * Helper to get a header value, trying multiple case variations.
+     * HTTP headers are case-insensitive, but Java Maps are case-sensitive.
+     */
+    private String getHeader(Map<String, String> headers, String... names) {
+        if (headers == null) return null;
+        for (String name : names) {
+            String value = headers.get(name);
+            if (value != null && !value.isEmpty()) {
+                return value;
+            }
+        }
+        return null;
+    }
+    
+    /**
      * Extract call CID from Stream webhook payload.
      * The structure varies by event type.
      */
@@ -2908,6 +2992,131 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         } catch (Exception e) {
             logger.log("Error extracting call CID: " + e.getMessage() + "\n");
             return null;
+        }
+    }
+    
+    /**
+     * Finalize an on-demand consultation order.
+     * Calculates cost, deducts from user's wallet, credits expert earnings, and updates order status.
+     * Returns true if successful, false otherwise.
+     */
+    private boolean finalizeOnDemandConsultation(String userId, String orderId, String expertId) {
+        try {
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
+            WalletService walletService = new WalletService(db);
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            
+            // Get the order
+            OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
+            if (order == null) {
+                logger.log("Order not found: " + orderId + "\n");
+                return false;
+            }
+            
+            // Only finalize if still CONNECTED
+            if (!"CONNECTED".equals(order.getStatus())) {
+                logger.log("Order is not in CONNECTED status (current: " + order.getStatus() + "), skipping finalization\n");
+                return false;
+            }
+            
+            // Calculate duration and cost
+            Long durationSeconds = consultationService.calculateElapsedSeconds(order);
+            Double cost = consultationService.calculateCost(durationSeconds, order.getExpertRatePerMinute());
+            Double platformFeeAmount = consultationService.calculatePlatformFee(cost, order.getPlatformFeePercent());
+            Double expertEarnings = cost - platformFeeAmount;
+            String currency = order.getCurrency();
+            
+            final Long finalDurationSeconds = durationSeconds;
+            final Double finalCost = cost;
+            final Double finalPlatformFeeAmount = platformFeeAmount;
+            final Double finalExpertEarnings = expertEarnings;
+            final String finalOrderId = orderId;
+            final String finalExpertId = expertId;
+            final String finalUserId = userId;
+            final String finalCurrency = currency;
+            
+            // Execute in transaction
+            this.db.runTransaction(transaction -> {
+                // Read all documents first (Firestore requirement)
+                DocumentReference userExpertWalletRef = db.collection("users").document(finalUserId)
+                        .collection("expert_wallets").document(finalExpertId);
+                transaction.get(userExpertWalletRef).get();
+                
+                DocumentReference expertUserRef = db.collection("users").document(finalExpertId);
+                transaction.get(expertUserRef).get();
+                
+                DocumentReference orderRef = db.collection("users").document(finalUserId)
+                        .collection("orders").document(finalOrderId);
+                DocumentSnapshot orderDoc = transaction.get(orderRef).get();
+                
+                // Verify order is still CONNECTED (prevent double-charging)
+                if (!orderDoc.exists() || !"CONNECTED".equals(orderDoc.getString("status"))) {
+                    throw new IllegalStateException("Order is not in CONNECTED status: " + finalOrderId);
+                }
+                
+                // Check for other active consultations
+                boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
+                    transaction, finalExpertId, finalOrderId
+                );
+                
+                // Read expert status document
+                DocumentReference expertStoreRef = db.collection("users").document(finalExpertId)
+                        .collection("public").document("store");
+                transaction.get(expertStoreRef).get();
+                
+                // Perform all writes
+                // Deduct from user's expert-specific wallet
+                walletService.updateExpertWalletBalanceInTransaction(
+                    transaction, finalUserId, finalExpertId, finalCurrency, -finalCost
+                );
+                
+                // Credit expert's earnings passbook
+                earningsService.creditExpertEarningsInTransaction(
+                    transaction, finalExpertId, finalCurrency, finalCost, finalPlatformFeeAmount,
+                    finalOrderId, "On-demand consultation earning"
+                );
+                
+                // Create deduction transaction
+                WalletTransaction deductionTransaction = new WalletTransaction();
+                deductionTransaction.setType("CONSULTATION_DEDUCTION");
+                deductionTransaction.setSource("PAYMENT");
+                deductionTransaction.setAmount(-finalCost);
+                deductionTransaction.setCurrency(finalCurrency);
+                deductionTransaction.setOrderId(finalOrderId);
+                deductionTransaction.setStatus("COMPLETED");
+                deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+                deductionTransaction.setDescription("On-demand consultation charge");
+                walletService.createExpertWalletTransactionInTransaction(transaction, finalUserId, finalExpertId, deductionTransaction);
+                
+                // Update order status
+                Map<String, Object> orderUpdates = new HashMap<>();
+                orderUpdates.put("status", "COMPLETED");
+                orderUpdates.put("end_time", com.google.cloud.Timestamp.now());
+                orderUpdates.put("duration_seconds", finalDurationSeconds);
+                orderUpdates.put("cost", finalCost);
+                orderUpdates.put("platform_fee_amount", finalPlatformFeeAmount);
+                orderUpdates.put("expert_earnings", finalExpertEarnings);
+                transaction.update(orderRef, orderUpdates);
+                
+                // Set consultation status back to FREE if no other active consultations
+                if (!hasOtherActive) {
+                    Map<String, Object> statusUpdates = new HashMap<>();
+                    statusUpdates.put("consultation_status", "FREE");
+                    statusUpdates.put("consultation_status_updated_at", com.google.cloud.Timestamp.now());
+                    transaction.update(expertStoreRef, statusUpdates);
+                }
+                
+                return null;
+            }).get();
+            
+            logger.log("Successfully finalized on-demand consultation: " + orderId + 
+                    " (duration: " + durationSeconds + "s, cost: " + cost + ")\n");
+            return true;
+            
+        } catch (Exception e) {
+            logger.log("Error finalizing on-demand consultation " + orderId + ": " + e.getMessage() + "\n");
+            e.printStackTrace();
+            return false;
         }
     }
     
@@ -2946,14 +3155,13 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
             
             // For on-demand consultations that are still CONNECTED, finalize billing
+            boolean finalized = false;
             if ("ON_DEMAND_CONSULTATION".equals(orderType) && "CONNECTED".equals(orderStatus)) {
                 logger.log("Finalizing on-demand consultation via webhook...\n");
-                // This will be handled similar to auto-terminate cron
-                // For now, just log - the full implementation will use existing endConsultation logic
-                // The cron job acts as fallback for this case
+                finalized = finalizeOnDemandConsultation(userId, orderId, expertId);
             }
             
-            // Free the expert if no other active consultations
+            // Free the expert if no other active consultations (or if we just finalized)
             boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
             
             if (!hasOtherActive) {
@@ -2966,6 +3174,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of(
                 "status", "processed",
                 "order_id", orderId,
+                "finalized", finalized,
                 "expert_freed", !hasOtherActive
             ));
             
@@ -2978,19 +3187,112 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     
     /**
      * Handle Stream call.session_participant_left event.
-     * If only one participant remains, may trigger call end.
+     * For 1:1 on-demand consultations, when ANY participant leaves, the call ends and billing is finalized.
+     * This is similar to WhatsApp calls - when either party leaves, the call is over.
      */
+    @SuppressWarnings("unchecked")
     private String handleStreamParticipantLeft(String callCid, Map<String, Object> payload) {
         logger.log("Handling Stream participant left for CID: " + callCid + "\n");
         
-        // For now, we rely on call.ended event for cleanup
-        // Participant left is informational - the call may continue if other participant remains
-        // The client-side handles participant monitoring for immediate UX feedback
-        
-        return gson.toJson(Map.of(
-            "status", "acknowledged",
-            "event", "participant_left",
-            "call_cid", callCid
-        ));
+        try {
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
+            WalletService walletService = new WalletService(db);
+            
+            // Find order by stream call CID
+            Map<String, Object> orderData = consultationService.getOrderByStreamCallCid(callCid);
+            
+            if (orderData == null) {
+                logger.log("No order found for Stream call CID: " + callCid + "\n");
+                return gson.toJson(Map.of("status", "order_not_found", "call_cid", callCid));
+            }
+            
+            String orderId = (String) orderData.get("orderId");
+            String expertId = (String) orderData.get("expertId");
+            String userId = (String) orderData.get("userId");
+            String orderType = (String) orderData.get("type");
+            String orderStatus = (String) orderData.get("status");
+            
+            logger.log(String.format("Found order: id=%s, type=%s, status=%s, expertId=%s, userId=%s\n", 
+                orderId, orderType, orderStatus, expertId, userId));
+            
+            // Check if already completed - idempotency
+            if ("COMPLETED".equals(orderStatus) || "CANCELLED".equals(orderStatus)) {
+                logger.log("Order already completed/cancelled, ignoring participant left event\n");
+                return gson.toJson(Map.of("status", "already_completed", "order_id", orderId));
+            }
+            
+            // Only handle on-demand consultations that are still CONNECTED
+            if (!"ON_DEMAND_CONSULTATION".equals(orderType) || !"CONNECTED".equals(orderStatus)) {
+                logger.log("Not an active on-demand consultation, ignoring participant left event\n");
+                return gson.toJson(Map.of("status", "ignored", "reason", "not_active_on_demand"));
+            }
+            
+            // Extract participant info from payload for logging purposes
+            String participantType = "unknown";
+            Map<String, Object> participant = (Map<String, Object>) payload.get("participant");
+            if (participant != null) {
+                Map<String, Object> participantUser = (Map<String, Object>) participant.get("user");
+                if (participantUser != null) {
+                    String participantUserId = (String) participantUser.get("id");
+                    if (participantUserId != null) {
+                        if (participantUserId.equals(userId)) {
+                            participantType = "user";
+                        } else if (participantUserId.equals(expertId)) {
+                            participantType = "expert";
+                        }
+                        logger.log("Participant who left: " + participantUserId + " (" + participantType + ")\n");
+                    }
+                }
+            }
+            
+            // For 1:1 calls, when ANY participant leaves, finalize the consultation
+            // This is like WhatsApp - when either party leaves, the call ends
+            logger.log("Participant left 1:1 call, finalizing on-demand consultation...\n");
+            boolean finalized = finalizeOnDemandConsultation(userId, orderId, expertId);
+            
+            // End the Stream call so the remaining participant is disconnected
+            // This ensures both parties are cleanly removed from the call
+            boolean callEnded = false;
+            if (finalized) {
+                try {
+                    StreamService streamService = new StreamService(isTest());
+                    String[] cidParts = StreamService.parseCallCid(callCid);
+                    if (cidParts != null) {
+                        logger.log("Ending Stream call: " + callCid + "\n");
+                        callEnded = streamService.endCall(cidParts[0], cidParts[1]);
+                        logger.log("Stream call end result: " + callEnded + "\n");
+                    }
+                } catch (Exception e) {
+                    logger.log("Error ending Stream call: " + e.getMessage() + "\n");
+                }
+                
+                // Double-check expert status is freed (finalizeOnDemandConsultation does this in transaction,
+                // but we do it again here as a safety net in case transaction partially failed)
+                try {
+                    boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+                    if (!hasOtherActive) {
+                        logger.log("Ensuring expert " + expertId + " is marked FREE\n");
+                        walletService.setConsultationStatus(expertId, "FREE");
+                    }
+                } catch (Exception e) {
+                    logger.log("Error checking/freeing expert status: " + e.getMessage() + "\n");
+                }
+            }
+            
+            return gson.toJson(Map.of(
+                "status", "processed",
+                "event", "participant_left",
+                "call_cid", callCid,
+                "order_id", orderId,
+                "finalized", finalized,
+                "call_ended", callEnded,
+                "participant_type", participantType
+            ));
+            
+        } catch (Exception e) {
+            logger.log("Error handling Stream participant left: " + e.getMessage() + "\n");
+            e.printStackTrace();
+            return gson.toJson(Map.of("error", "Error processing participant left", "message", e.getMessage()));
+        }
     }
 }
