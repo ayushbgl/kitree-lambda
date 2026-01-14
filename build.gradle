@@ -24,6 +24,14 @@ dependencies {
     // Stream Chat Java SDK for server-side webhook verification
     // Note: Video webhooks use same HMAC-SHA256 mechanism as Chat webhooks
     implementation 'io.getstream:stream-chat-java:1.30.0'
+    
+    // Structured logging for CloudWatch
+    implementation 'software.amazon.lambda:powertools-logging:1.18.0'
+    implementation 'org.apache.logging.log4j:log4j-core:2.22.1'
+    implementation 'org.apache.logging.log4j:log4j-api:2.22.1'
+    implementation 'org.apache.logging.log4j:log4j-slf4j2-impl:2.22.1'
+    implementation 'org.apache.logging.log4j:log4j-layout-template-json:2.22.1'
+    
     annotationProcessor 'org.projectlombok:lombok:1.18.32'
 
     // Test dependencies

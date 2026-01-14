@@ -1,0 +1,64 @@
+{
+  "timestamp": {
+    "$resolver": "timestamp",
+    "pattern": {
+      "format": "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+      "timeZone": "UTC"
+    }
+  },
+  "level": {
+    "$resolver": "level",
+    "field": "name"
+  },
+  "message": {
+    "$resolver": "message",
+    "stringified": true
+  },
+  "logger": {
+    "$resolver": "logger",
+    "field": "name"
+  },
+  "requestId": {
+    "$resolver": "mdc",
+    "key": "requestId"
+  },
+  "correlationId": {
+    "$resolver": "mdc",
+    "key": "correlationId"
+  },
+  "userId": {
+    "$resolver": "mdc",
+    "key": "userId"
+  },
+  "orderId": {
+    "$resolver": "mdc",
+    "key": "orderId"
+  },
+  "expertId": {
+    "$resolver": "mdc",
+    "key": "expertId"
+  },
+  "function": {
+    "$resolver": "mdc",
+    "key": "function"
+  },
+  "error": {
+    "$resolver": "exception",
+    "field": "message"
+  },
+  "errorType": {
+    "$resolver": "exception",
+    "field": "className"
+  },
+  "stackTrace": {
+    "$resolver": "exception",
+    "field": "stackTrace",
+    "stackTrace": {
+      "stringified": true
+    }
+  },
+  "data": {
+    "$resolver": "mdc",
+    "key": "data"
+  }
+}
