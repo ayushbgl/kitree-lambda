@@ -151,7 +151,6 @@ public class WalletService {
         transactionData.put("currency", transaction.getCurrency());
         transactionData.put("status", transaction.getStatus());
         transactionData.put("created_at", transaction.getCreatedAt() != null ? transaction.getCreatedAt() : Timestamp.now());
-        transactionData.put("description", transaction.getDescription());
         
         // Add optional fields if present
         if (transaction.getPaymentId() != null) {
@@ -198,7 +197,6 @@ public class WalletService {
         transactionData.put("currency", walletTransaction.getCurrency());
         transactionData.put("status", walletTransaction.getStatus());
         transactionData.put("created_at", walletTransaction.getCreatedAt() != null ? walletTransaction.getCreatedAt() : Timestamp.now());
-        transactionData.put("description", walletTransaction.getDescription());
         
         // Add optional fields if present
         if (walletTransaction.getPaymentId() != null) {
@@ -716,7 +714,6 @@ public class WalletService {
         transactionData.put("currency", walletTransaction.getCurrency());
         transactionData.put("status", walletTransaction.getStatus());
         transactionData.put("created_at", walletTransaction.getCreatedAt() != null ? walletTransaction.getCreatedAt() : Timestamp.now());
-        transactionData.put("description", walletTransaction.getDescription());
         
         // Add optional fields if present
         if (walletTransaction.getPaymentId() != null) {
@@ -745,6 +742,20 @@ public class WalletService {
         }
         if (walletTransaction.getBonusAmount() != null) {
             transactionData.put("bonus_amount", walletTransaction.getBonusAmount());
+        }
+        
+        // Consultation-specific normalized fields (for CONSULTATION_DEDUCTION type)
+        if (walletTransaction.getDurationSeconds() != null) {
+            transactionData.put("duration_seconds", walletTransaction.getDurationSeconds());
+        }
+        if (walletTransaction.getRatePerMinute() != null) {
+            transactionData.put("rate_per_minute", walletTransaction.getRatePerMinute());
+        }
+        if (walletTransaction.getConsultationType() != null) {
+            transactionData.put("consultation_type", walletTransaction.getConsultationType());
+        }
+        if (walletTransaction.getCategory() != null) {
+            transactionData.put("category", walletTransaction.getCategory());
         }
         
         return transactionData;

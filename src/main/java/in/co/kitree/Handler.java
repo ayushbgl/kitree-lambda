@@ -1737,6 +1737,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                                 );
                                 
                                 // Create deduction transaction for user's expert-specific wallet
+                                // Store normalized fields only - no description (frontend constructs from these fields)
+                                // expertId/expertName NOT stored - redundant since path is expert_wallets/{expertId}
                                 WalletTransaction deductionTransaction = new WalletTransaction();
                                 deductionTransaction.setType("CONSULTATION_DEDUCTION");
                                 deductionTransaction.setSource("PAYMENT");
@@ -1745,7 +1747,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                                 deductionTransaction.setOrderId(finalOrderId);
                                 deductionTransaction.setStatus("COMPLETED");
                                 deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                                deductionTransaction.setDescription("On-demand consultation charge (auto-terminated)");
+                                // Normalized fields for frontend to construct display text
+                                deductionTransaction.setDurationSeconds(finalDurationSeconds);
+                                deductionTransaction.setRatePerMinute(order.getExpertRatePerMinute());
+                                deductionTransaction.setConsultationType(order.getConsultationType());
+                                deductionTransaction.setCategory(order.getCategory());
+                                // description NOT set - frontend handles all display text
                                 walletService.createExpertWalletTransactionInTransaction(transaction, finalUserId, finalExpertId, deductionTransaction);
                                 
                                 // Update order status
@@ -2138,7 +2145,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 rechargeTransaction.setPaymentId(razorpayPaymentId);
                 rechargeTransaction.setStatus("COMPLETED");
                 rechargeTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                rechargeTransaction.setDescription("Wallet recharge via Razorpay");
                 if (finalBonus > 0) {
                     rechargeTransaction.setBonusAmount(finalBonus);
                 }
@@ -2155,7 +2161,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     bonusTransaction.setPaymentId(razorpayPaymentId);
                     bonusTransaction.setStatus("COMPLETED");
                     bonusTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                    bonusTransaction.setDescription("Recharge bonus");
                     
                     walletService.createExpertWalletTransactionInTransaction(transaction, userId, finalExpertId, bonusTransaction);
                 }
@@ -2172,7 +2177,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 walletTransaction.setPaymentId(razorpayPaymentId);
                 walletTransaction.setStatus("COMPLETED");
                 walletTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                walletTransaction.setDescription("Wallet recharge via Razorpay");
                 
                 walletService.createWalletTransactionInTransaction(transaction, userId, walletTransaction);
             }
@@ -2589,7 +2593,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 walletTransaction.setOrderId(orderId);
                 walletTransaction.setStatus("COMPLETED");
                 walletTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                walletTransaction.setDescription("Mid-consultation wallet recharge");
                 
                 walletService.createWalletTransactionInTransaction(transaction, userId, walletTransaction);
                 
@@ -2711,6 +2714,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 );
                 
                 // Create deduction transaction for user's expert-specific wallet
+                // Store normalized fields only - no description (frontend constructs from these fields)
+                // expertId/expertName NOT stored - redundant since path is expert_wallets/{expertId}
                 WalletTransaction deductionTransaction = new WalletTransaction();
                 deductionTransaction.setType("CONSULTATION_DEDUCTION");
                 deductionTransaction.setSource("PAYMENT");
@@ -2719,7 +2724,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 deductionTransaction.setOrderId(finalOrderId);
                 deductionTransaction.setStatus("COMPLETED");
                 deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                deductionTransaction.setDescription("On-demand consultation charge");
+                // Normalized fields for frontend to construct display text
+                deductionTransaction.setDurationSeconds(finalDurationSeconds);
+                deductionTransaction.setRatePerMinute(order.getExpertRatePerMinute());
+                deductionTransaction.setConsultationType(order.getConsultationType());
+                deductionTransaction.setCategory(order.getCategory());
+                // description NOT set - frontend handles all display text
                 
                 walletService.createExpertWalletTransactionInTransaction(transaction, userId, expertId, deductionTransaction);
                 
@@ -3128,6 +3138,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 );
                 
                 // Create deduction transaction
+                // Store normalized fields only - no description (frontend constructs from these fields)
+                // expertId/expertName NOT stored - redundant since path is expert_wallets/{expertId}
                 WalletTransaction deductionTransaction = new WalletTransaction();
                 deductionTransaction.setType("CONSULTATION_DEDUCTION");
                 deductionTransaction.setSource("PAYMENT");
@@ -3136,7 +3148,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 deductionTransaction.setOrderId(finalOrderId);
                 deductionTransaction.setStatus("COMPLETED");
                 deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                deductionTransaction.setDescription("On-demand consultation charge");
+                // Normalized fields for frontend to construct display text
+                deductionTransaction.setDurationSeconds(finalDurationSeconds);
+                deductionTransaction.setRatePerMinute(order.getExpertRatePerMinute());
+                deductionTransaction.setConsultationType(order.getConsultationType());
+                deductionTransaction.setCategory(order.getCategory());
+                // description NOT set - frontend handles all display text
                 walletService.createExpertWalletTransactionInTransaction(transaction, finalUserId, finalExpertId, deductionTransaction);
                 
                 // Update order status

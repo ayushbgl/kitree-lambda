@@ -35,9 +35,6 @@ public class WalletTransaction {
     // Transaction creation timestamp
     private Timestamp createdAt;
     
-    // Human-readable description (translated in frontend)
-    private String description;
-    
     // Flattened fields (instead of nested metadata)
     private String couponCode;        // Coupon code if source is COUPON
     private String referralCode;      // Referral code if source is REFERRAL
@@ -48,6 +45,13 @@ public class WalletTransaction {
     
     // Bonus amount for promotional recharges (tracked separately from main amount)
     private Double bonusAmount;
+    
+    // Consultation-specific normalized fields (for CONSULTATION_DEDUCTION type)
+    // Note: expertId/expertName NOT stored - fetch from path expert_wallets/{expertId} or users/{expertId} at display time
+    private Long durationSeconds;      // Call duration in seconds
+    private Double ratePerMinute;      // Rate charged per minute
+    private String consultationType;   // "audio", "video", or "chat"
+    private String category;           // Service category (e.g., "HOROSCOPE")
 
     public WalletTransaction() {}
 
@@ -76,9 +80,6 @@ public class WalletTransaction {
     public Timestamp getCreatedAt() { return createdAt; }
     public void setCreatedAt(Timestamp createdAt) { this.createdAt = createdAt; }
 
-    public String getDescription() { return description; }
-    public void setDescription(String description) { this.description = description; }
-
     public String getCouponCode() { return couponCode; }
     public void setCouponCode(String couponCode) { this.couponCode = couponCode; }
 
@@ -100,6 +101,18 @@ public class WalletTransaction {
     public Double getBonusAmount() { return bonusAmount; }
     public void setBonusAmount(Double bonusAmount) { this.bonusAmount = bonusAmount; }
 
+    public Long getDurationSeconds() { return durationSeconds; }
+    public void setDurationSeconds(Long durationSeconds) { this.durationSeconds = durationSeconds; }
+
+    public Double getRatePerMinute() { return ratePerMinute; }
+    public void setRatePerMinute(Double ratePerMinute) { this.ratePerMinute = ratePerMinute; }
+
+    public String getConsultationType() { return consultationType; }
+    public void setConsultationType(String consultationType) { this.consultationType = consultationType; }
+
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
+
     @Override
     public String toString() {
         return "WalletTransaction{" +
@@ -111,7 +124,6 @@ public class WalletTransaction {
                 ", orderId='" + orderId + '\'' +
                 ", status='" + status + '\'' +
                 ", createdAt=" + createdAt +
-                ", description='" + description + '\'' +
                 '}';
     }
 }
