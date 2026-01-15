@@ -1,5 +1,6 @@
 package in.co.kitree.pojos;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Map;
 
 public class RequestEvent {
@@ -7,6 +8,7 @@ public class RequestEvent {
     private String source;
     private String body;
     private Map<String, String> headers;
+    @JsonProperty("detail-type")
     private String detailType; // For EventBridge scheduled events
     private String rawPath;           // Lambda Function URL path, e.g., "/webhooks/stream"
     private String rawQueryString;    // Query params, e.g., "param1=value1"
