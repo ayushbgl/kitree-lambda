@@ -130,6 +130,75 @@ public class ExpertEarningsService {
     }
 
     /**
+     * Credit expert earnings using a Firestore transaction with a pre-read snapshot.
+     * This version avoids reading the document again to prevent "reads before writes" errors.
+     *
+     * @param transaction   The Firestore transaction
+     * @param expertId      The expert's ID
+     * @param userRef       The pre-created user document reference
+     * @param userDoc       The pre-read user document snapshot
+     * @param currency      The currency code
+     * @param amount        The earnings amount (gross, before platform fee)
+     * @param platformFee   The platform fee deducted
+     * @param orderId       The order ID for this earning
+     * @param description   Description of the earning
+     * @return The new earnings balance after the update
+     */
+    public Double creditExpertEarningsInTransactionWithSnapshot(
+            Transaction transaction,
+            String expertId,
+            DocumentReference userRef,
+            DocumentSnapshot userDoc,
+            String currency, 
+            Double amount,
+            Double platformFee,
+            String orderId,
+            String description
+    ) {
+        // Calculate net earnings
+        Double netEarnings = amount - platformFee;
+        
+        // Get existing balances from pre-read snapshot
+        Map<String, Double> balances = new HashMap<>();
+        if (userDoc.exists() && userDoc.contains("expert_earnings_balances")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> existingBalances = (Map<String, Object>) userDoc.get("expert_earnings_balances");
+            if (existingBalances != null) {
+                for (Map.Entry<String, Object> entry : existingBalances.entrySet()) {
+                    if (entry.getValue() instanceof Number) {
+                        balances.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                    }
+                }
+            }
+        }
+        
+        Double currentBalance = balances.getOrDefault(currency, 0.0);
+        Double newBalance = currentBalance + netEarnings;
+        balances.put(currency, newBalance);
+        
+        transaction.update(userRef, "expert_earnings_balances", balances);
+        
+        // Create earnings transaction record
+        CollectionReference earningsRef = db.collection("users").document(expertId).collection("expert_earnings");
+        DocumentReference earningDocRef = earningsRef.document();
+        
+        Map<String, Object> earningData = new HashMap<>();
+        earningData.put("type", "ORDER_EARNING");
+        earningData.put("gross_amount", amount);
+        earningData.put("platform_fee", platformFee);
+        earningData.put("amount", netEarnings);  // Net amount credited
+        earningData.put("currency", currency);
+        earningData.put("order_id", orderId);
+        earningData.put("status", "COMPLETED");
+        earningData.put("created_at", Timestamp.now());
+        earningData.put("description", description);
+        
+        transaction.set(earningDocRef, earningData);
+        
+        return newBalance;
+    }
+
+    /**
      * Credit expert earnings (non-transactional, use with caution).
      *
      * @param expertId    The expert's ID

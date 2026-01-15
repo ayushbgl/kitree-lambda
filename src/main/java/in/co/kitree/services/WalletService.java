@@ -561,6 +561,56 @@ public class WalletService {
     }
 
     /**
+     * Update expert wallet balance within a Firestore transaction using a pre-read snapshot.
+     * This version avoids reading the document again to prevent "reads before writes" errors.
+     * Path: users/{userId}/expert_wallets/{expertId}
+     *
+     * @param transaction The Firestore transaction
+     * @param walletRef   The pre-created wallet document reference
+     * @param walletDoc   The pre-read wallet document snapshot (can be non-existent)
+     * @param currency    The currency code
+     * @param amount      The amount to add (positive) or subtract (negative)
+     * @return The new balance after the update
+     */
+    public Double updateExpertWalletBalanceInTransactionWithSnapshot(
+            Transaction transaction, 
+            DocumentReference walletRef, 
+            DocumentSnapshot walletDoc, 
+            String currency, 
+            Double amount
+    ) {
+        Map<String, Double> balances = new HashMap<>();
+        if (walletDoc.exists() && walletDoc.contains("balances")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> existingBalances = (Map<String, Object>) walletDoc.get("balances");
+            if (existingBalances != null) {
+                for (Map.Entry<String, Object> entry : existingBalances.entrySet()) {
+                    if (entry.getValue() instanceof Number) {
+                        balances.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                    }
+                }
+            }
+        }
+        
+        Double currentBalance = balances.getOrDefault(currency, 0.0);
+        Double newBalance = currentBalance + amount;
+        balances.put(currency, newBalance);
+        
+        Map<String, Object> data = new HashMap<>();
+        data.put("balances", balances);
+        data.put("updated_at", Timestamp.now());
+        
+        if (walletDoc.exists()) {
+            transaction.update(walletRef, data);
+        } else {
+            data.put("created_at", Timestamp.now());
+            transaction.set(walletRef, data);
+        }
+        
+        return newBalance;
+    }
+
+    /**
      * Create a wallet transaction for expert-specific wallet within a Firestore transaction.
      * Path: users/{userId}/expert_wallets/{expertId}/transactions/{txId}
      *

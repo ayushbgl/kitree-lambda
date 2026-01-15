@@ -3080,42 +3080,50 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             
             // Execute in transaction
             this.db.runTransaction(transaction -> {
-                // Read all documents first (Firestore requirement)
+                // ===== PHASE 1: ALL READS FIRST (Firestore requirement) =====
+                
+                // Read user's expert-specific wallet
                 DocumentReference userExpertWalletRef = db.collection("users").document(finalUserId)
                         .collection("expert_wallets").document(finalExpertId);
-                transaction.get(userExpertWalletRef).get();
+                DocumentSnapshot walletDoc = transaction.get(userExpertWalletRef).get();
                 
+                // Read expert user document (for earnings balance)
                 DocumentReference expertUserRef = db.collection("users").document(finalExpertId);
-                transaction.get(expertUserRef).get();
+                DocumentSnapshot expertUserDoc = transaction.get(expertUserRef).get();
                 
+                // Read order document
                 DocumentReference orderRef = db.collection("users").document(finalUserId)
                         .collection("orders").document(finalOrderId);
                 DocumentSnapshot orderDoc = transaction.get(orderRef).get();
+                
+                // Read expert status document
+                DocumentReference expertStoreRef = db.collection("users").document(finalExpertId)
+                        .collection("public").document("store");
+                DocumentSnapshot expertStoreDoc = transaction.get(expertStoreRef).get();
+                
+                // Check for other active consultations (this does reads internally)
+                boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
+                    transaction, finalExpertId, finalOrderId
+                );
+                
+                // ===== PHASE 2: VALIDATIONS =====
                 
                 // Verify order is still CONNECTED (prevent double-charging)
                 if (!orderDoc.exists() || !"CONNECTED".equals(orderDoc.getString("status"))) {
                     throw new IllegalStateException("Order is not in CONNECTED status: " + finalOrderId);
                 }
                 
-                // Check for other active consultations
-                boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
-                    transaction, finalExpertId, finalOrderId
+                // ===== PHASE 3: ALL WRITES =====
+                
+                // Deduct from user's expert-specific wallet (pass pre-read snapshot)
+                walletService.updateExpertWalletBalanceInTransactionWithSnapshot(
+                    transaction, userExpertWalletRef, walletDoc, finalCurrency, -finalCost
                 );
                 
-                // Read expert status document
-                DocumentReference expertStoreRef = db.collection("users").document(finalExpertId)
-                        .collection("public").document("store");
-                transaction.get(expertStoreRef).get();
-                
-                // Perform all writes
-                // Deduct from user's expert-specific wallet
-                walletService.updateExpertWalletBalanceInTransaction(
-                    transaction, finalUserId, finalExpertId, finalCurrency, -finalCost
-                );
-                
-                // Credit expert's earnings passbook
-                earningsService.creditExpertEarningsInTransaction(
-                    transaction, finalExpertId, finalCurrency, finalCost, finalPlatformFeeAmount,
+                // Credit expert's earnings passbook (pass pre-read snapshot)
+                earningsService.creditExpertEarningsInTransactionWithSnapshot(
+                    transaction, finalExpertId, expertUserRef, expertUserDoc, 
+                    finalCurrency, finalCost, finalPlatformFeeAmount,
                     finalOrderId, "On-demand consultation earning"
                 );
                 
@@ -3142,7 +3150,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 transaction.update(orderRef, orderUpdates);
                 
                 // Set consultation status back to FREE if no other active consultations
-                if (!hasOtherActive) {
+                if (!hasOtherActive && expertStoreDoc.exists()) {
                     Map<String, Object> statusUpdates = new HashMap<>();
                     statusUpdates.put("consultation_status", "FREE");
                     statusUpdates.put("consultation_status_updated_at", com.google.cloud.Timestamp.now());
