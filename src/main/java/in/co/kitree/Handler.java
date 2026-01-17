@@ -3582,10 +3582,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             
         } catch (Exception e) {
             LoggingService.error("stream_webhook_processing_error", e);
-            return gson.toJson(Map.of("error", "Internal error processing webhook", "message", e.getMessage()));
+            String errorMessage = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            return gson.toJson(Map.of("error", "Internal error processing webhook", "message", errorMessage));
         }
     }
-    
+
     /**
      * Helper to get a header value, trying multiple case variations.
      * HTTP headers are case-insensitive, but Java Maps are case-sensitive.
@@ -3784,11 +3785,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return true;
             
         } catch (Exception e) {
-            LoggingService.error("finalize_consultation_error", e, Map.of("orderId", orderId));
+            LoggingService.error("finalize_consultation_error", e, Map.of("orderId", orderId != null ? orderId : "unknown"));
             return false;
         }
     }
-    
+
     /**
      * Handle Stream call.ended or call.session_ended event.
      * Frees the expert if no other active consultations.
@@ -3808,16 +3809,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return gson.toJson(Map.of("status", "order_not_found", "call_cid", callCid));
             }
             
-            String orderId = (String) orderData.get("orderId");
-            String expertId = (String) orderData.get("expertId");
-            String userId = (String) orderData.get("userId");
+            String orderId = (String) orderData.get("order_id");
+            String expertId = (String) orderData.get("expert_id");
+            String userId = (String) orderData.get("user_id");
             String orderType = (String) orderData.get("type");
             String orderStatus = (String) orderData.get("status");
-            
+
             LoggingService.setContext(userId, orderId, expertId);
             LoggingService.info("call_ended_order_found", Map.of(
-                "orderType", orderType,
-                "orderStatus", orderStatus
+                "orderType", orderType != null ? orderType : "unknown",
+                "orderStatus", orderStatus != null ? orderStatus : "unknown"
             ));
             
             // Check if already completed - idempotency
@@ -3852,10 +3853,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             
         } catch (Exception e) {
             LoggingService.error("stream_call_ended_error", e);
-            return gson.toJson(Map.of("error", "Error processing call ended", "message", e.getMessage()));
+            String errorMessage = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            return gson.toJson(Map.of("error", "Error processing call ended", "message", errorMessage));
         }
     }
-    
+
     /**
      * Handle Stream call.session_participant_joined event.
      * Tracks when each participant joins for dual-participant billing.
@@ -3876,9 +3878,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return gson.toJson(Map.of("status", "order_not_found", "call_cid", callCid));
             }
 
-            String orderId = (String) orderData.get("orderId");
-            String expertId = (String) orderData.get("expertId");
-            String userId = (String) orderData.get("userId");
+            String orderId = (String) orderData.get("order_id");
+            String expertId = (String) orderData.get("expert_id");
+            String userId = (String) orderData.get("user_id");
             String orderType = (String) orderData.get("type");
             String orderStatus = (String) orderData.get("status");
 
@@ -3891,7 +3893,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
 
             if (!"INITIATED".equals(orderStatus) && !"CONNECTED".equals(orderStatus)) {
-                LoggingService.info("participant_joined_order_not_active", Map.of("status", orderStatus));
+                LoggingService.info("participant_joined_order_not_active", Map.of("status", orderStatus != null ? orderStatus : "null"));
                 return gson.toJson(Map.of("status", "ignored", "reason", "order_not_active"));
             }
 
@@ -3911,8 +3913,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
 
             // Determine if this is the user or expert joining
-            boolean isUser = participantUserId.equals(userId);
-            boolean isExpert = participantUserId.equals(expertId);
+            boolean isUser = userId != null && participantUserId.equals(userId);
+            boolean isExpert = expertId != null && participantUserId.equals(expertId);
             String participantType = isUser ? "user" : (isExpert ? "expert" : "unknown");
 
             LoggingService.info("participant_joined", Map.of(
@@ -3923,8 +3925,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             if (!isUser && !isExpert) {
                 LoggingService.warn("participant_joined_unknown_participant", Map.of(
                     "participantUserId", participantUserId,
-                    "expectedUserId", userId,
-                    "expectedExpertId", expertId
+                    "expectedUserId", userId != null ? userId : "null",
+                    "expectedExpertId", expertId != null ? expertId : "null"
                 ));
                 return gson.toJson(Map.of("status", "ignored", "reason", "unknown_participant"));
             }
@@ -3996,7 +3998,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
         } catch (Exception e) {
             LoggingService.error("stream_participant_joined_error", e);
-            return gson.toJson(Map.of("error", "Error processing participant joined", "message", e.getMessage()));
+            String errorMessage = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            return gson.toJson(Map.of("error", "Error processing participant joined", "message", errorMessage));
         }
     }
 
@@ -4021,33 +4024,33 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return gson.toJson(Map.of("status", "order_not_found", "call_cid", callCid));
             }
             
-            String orderId = (String) orderData.get("orderId");
-            String expertId = (String) orderData.get("expertId");
-            String userId = (String) orderData.get("userId");
+            String orderId = (String) orderData.get("order_id");
+            String expertId = (String) orderData.get("expert_id");
+            String userId = (String) orderData.get("user_id");
             String orderType = (String) orderData.get("type");
             String orderStatus = (String) orderData.get("status");
-            
+
             LoggingService.setContext(userId, orderId, expertId);
             LoggingService.info("participant_left_order_found", Map.of(
-                "orderType", orderType,
-                "orderStatus", orderStatus
+                "orderType", orderType != null ? orderType : "unknown",
+                "orderStatus", orderStatus != null ? orderStatus : "unknown"
             ));
-            
+
             // Check if already completed - idempotency
             if ("COMPLETED".equals(orderStatus) || "CANCELLED".equals(orderStatus)) {
                 LoggingService.info("participant_left_order_already_completed");
-                return gson.toJson(Map.of("status", "already_completed", "order_id", orderId));
+                return gson.toJson(Map.of("status", "already_completed", "order_id", orderId != null ? orderId : "unknown"));
             }
-            
+
             // Only handle on-demand consultations that are still CONNECTED
             if (!"ON_DEMAND_CONSULTATION".equals(orderType) || !"CONNECTED".equals(orderStatus)) {
                 LoggingService.info("participant_left_not_active_on_demand", Map.of(
-                    "orderType", orderType,
-                    "orderStatus", orderStatus
+                    "orderType", orderType != null ? orderType : "unknown",
+                    "orderStatus", orderStatus != null ? orderStatus : "unknown"
                 ));
                 return gson.toJson(Map.of("status", "ignored", "reason", "not_active_on_demand"));
             }
-            
+
             // Extract participant info from payload for logging purposes
             String participantType = "unknown";
             Map<String, Object> participant = (Map<String, Object>) payload.get("participant");
@@ -4056,9 +4059,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 if (participantUser != null) {
                     String participantUserId = (String) participantUser.get("id");
                     if (participantUserId != null) {
-                        if (participantUserId.equals(userId)) {
+                        if (userId != null && participantUserId.equals(userId)) {
                             participantType = "user";
-                        } else if (participantUserId.equals(expertId)) {
+                        } else if (expertId != null && participantUserId.equals(expertId)) {
                             participantType = "expert";
                         }
                         LoggingService.info("participant_who_left", Map.of(
@@ -4107,15 +4110,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 "status", "processed",
                 "event", "participant_left",
                 "call_cid", callCid,
-                "order_id", orderId,
+                "order_id", orderId != null ? orderId : "unknown",
                 "finalized", finalized,
                 "call_ended", callEnded,
                 "participant_type", participantType
             ));
-            
+
         } catch (Exception e) {
             LoggingService.error("stream_participant_left_error", e);
-            return gson.toJson(Map.of("error", "Error processing participant left", "message", e.getMessage()));
+            String errorMessage = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            return gson.toJson(Map.of("error", "Error processing participant left", "message", errorMessage));
         }
     }
 }

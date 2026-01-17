@@ -456,7 +456,7 @@ public class OnDemandConsultationService {
         
         DocumentSnapshot doc = snapshot.getDocuments().get(0);
 
-        // All fields use snake_case for consistency
+        // All fields use snake_case
         Map<String, Object> orderData = new HashMap<>();
         orderData.put("order_id", doc.getId());
         orderData.put("user_id", doc.getString("user_id"));
