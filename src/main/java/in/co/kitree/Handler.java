@@ -3275,7 +3275,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             QuerySnapshot snapshot = baseQuery.get().get();
 
             for (QueryDocumentSnapshot doc : snapshot.getDocuments()) {
+                // Check both field naming conventions (snake_case for scheduled, camelCase for on-demand)
                 com.google.cloud.Timestamp createdAt = doc.getTimestamp("created_at");
+                if (createdAt == null) {
+                    createdAt = doc.getTimestamp("createdAt");
+                }
                 String orderType = doc.getString("type");
                 String orderStatus = doc.getString("status");
                 Double amount = doc.getDouble("amount");
