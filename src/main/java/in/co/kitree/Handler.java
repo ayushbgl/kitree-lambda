@@ -980,6 +980,10 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return handleGetActiveCallForUser(userId, requestBody);
             }
 
+            if ("get_expert_booking_metrics".equals(requestBody.getFunction())) {
+                return handleGetExpertBookingMetrics(userId, requestBody);
+            }
+
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -3306,6 +3310,157 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
 
         return gson.toJson(response);
+    }
+
+    /**
+     * Get aggregate booking metrics for an expert.
+     * Returns total bookings, revenue, and earnings with breakdown by type.
+     * Supports date range filtering for different time periods.
+     */
+    private String handleGetExpertBookingMetrics(String expertId, RequestBody requestBody) throws Exception {
+        LoggingService.setFunction("get_expert_booking_metrics");
+        LoggingService.setExpertId(expertId);
+        LoggingService.info("get_expert_booking_metrics_started");
+
+        if (expertId == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID required"));
+        }
+
+        // Parse date range from request
+        Long startDateMillis = requestBody.getStartDate();
+        Long endDateMillis = requestBody.getEndDate();
+        String bookingType = requestBody.getBookingType(); // "all", "scheduled", "onDemand", "product"
+
+        com.google.cloud.Timestamp startTs = startDateMillis != null
+                ? com.google.cloud.Timestamp.ofTimeMicroseconds(startDateMillis * 1000)
+                : null;
+        com.google.cloud.Timestamp endTs = endDateMillis != null
+                ? com.google.cloud.Timestamp.ofTimeMicroseconds(endDateMillis * 1000)
+                : null;
+
+        LoggingService.info("metrics_date_range", Map.of(
+            "startDate", startTs != null ? startTs.toString() : "null",
+            "endDate", endTs != null ? endTs.toString() : "null",
+            "bookingType", bookingType != null ? bookingType : "all"
+        ));
+
+        // Initialize counters
+        int totalBookings = 0;
+        double totalRevenue = 0.0;
+        double totalEarnings = 0.0;
+        int scheduledCount = 0;
+        int onDemandCount = 0;
+        int productCount = 0;
+        String currency = "INR"; // Default currency
+
+        try {
+            // Query orders for this expert using collection group
+            Query baseQuery = this.db.collectionGroup("orders")
+                    .whereEqualTo("expertId", expertId);
+
+            // Execute query and process results
+            // Note: Firestore doesn't support aggregate queries with multiple conditions
+            // so we need to fetch documents and calculate in memory
+            QuerySnapshot snapshot = baseQuery.get().get();
+
+            for (QueryDocumentSnapshot doc : snapshot.getDocuments()) {
+                com.google.cloud.Timestamp createdAt = doc.getTimestamp("created_at");
+                String orderType = doc.getString("type");
+                String orderStatus = doc.getString("status");
+                Double amount = doc.getDouble("amount");
+                Double cost = doc.getDouble("cost");
+                Double expertEarningsVal = doc.getDouble("expert_earnings");
+                String orderCurrency = doc.getString("currency");
+
+                // Apply date filter
+                if (startTs != null && createdAt != null && createdAt.compareTo(startTs) < 0) {
+                    continue;
+                }
+                if (endTs != null && createdAt != null && createdAt.compareTo(endTs) > 0) {
+                    continue;
+                }
+
+                // Determine booking type
+                boolean isOnDemand = "ON_DEMAND_CONSULTATION".equals(orderType);
+                boolean isProduct = "PRODUCT".equals(orderType);
+                boolean isScheduled = !isOnDemand && !isProduct; // Default to scheduled
+
+                // Apply type filter
+                if (bookingType != null && !bookingType.equals("all")) {
+                    if (bookingType.equals("scheduled") && !isScheduled) continue;
+                    if (bookingType.equals("onDemand") && !isOnDemand) continue;
+                    if (bookingType.equals("product") && !isProduct) continue;
+                }
+
+                // Only count completed/paid orders for revenue
+                boolean isPaid = "paid".equalsIgnoreCase(orderStatus) ||
+                               "COMPLETED".equalsIgnoreCase(orderStatus) ||
+                               doc.get("paymentReceivedAt") != null;
+
+                // Count booking
+                totalBookings++;
+
+                // Count by type
+                if (isOnDemand) {
+                    onDemandCount++;
+                } else if (isProduct) {
+                    productCount++;
+                } else {
+                    scheduledCount++;
+                }
+
+                // Add to revenue if paid
+                if (isPaid) {
+                    if (isOnDemand && cost != null) {
+                        totalRevenue += cost;
+                    } else if (amount != null) {
+                        totalRevenue += amount;
+                    }
+
+                    // Add expert earnings
+                    if (expertEarningsVal != null) {
+                        totalEarnings += expertEarningsVal;
+                    } else if (isOnDemand && cost != null) {
+                        // For on-demand, estimate earnings if not explicitly set
+                        // Typically 90% (10% platform fee)
+                        totalEarnings += cost * 0.90;
+                    } else if (amount != null) {
+                        // For scheduled, use amount as earnings (fees handled separately)
+                        totalEarnings += amount;
+                    }
+                }
+
+                // Get currency from first order
+                if (orderCurrency != null && currency.equals("INR")) {
+                    currency = orderCurrency;
+                }
+            }
+
+            LoggingService.info("metrics_calculated", Map.of(
+                "totalBookings", totalBookings,
+                "totalRevenue", totalRevenue,
+                "totalEarnings", totalEarnings
+            ));
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("totalBookings", totalBookings);
+            response.put("totalRevenue", Math.round(totalRevenue * 100.0) / 100.0);
+            response.put("totalEarnings", Math.round(totalEarnings * 100.0) / 100.0);
+            response.put("currency", currency);
+            response.put("scheduledCount", scheduledCount);
+            response.put("onDemandCount", onDemandCount);
+            response.put("productCount", productCount);
+
+            return gson.toJson(response);
+
+        } catch (Exception e) {
+            LoggingService.error("get_expert_booking_metrics_error", e);
+            return gson.toJson(Map.of(
+                "success", false,
+                "errorMessage", "Failed to calculate metrics: " + e.getMessage()
+            ));
+        }
     }
 
     /**

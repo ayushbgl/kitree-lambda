@@ -82,6 +82,11 @@ public class RequestBody {
     private String consultationType; // "audio", "video", or "chat" for on-demand consultations
     private Double additionalAmount; // For mid-consultation recharge to extend duration
 
+    // Booking metrics fields
+    private Long startDate; // Start date in milliseconds for metrics filtering
+    private Long endDate; // End date in milliseconds for metrics filtering
+    private String bookingType; // "all", "scheduled", "onDemand", "product"
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -534,5 +539,30 @@ public class RequestBody {
 
     public void setAdditionalAmount(Double additionalAmount) {
         this.additionalAmount = additionalAmount;
+    }
+
+    // Booking metrics getters/setters
+    public Long getStartDate() {
+        return startDate;
+    }
+
+    public void setStartDate(Long startDate) {
+        this.startDate = startDate;
+    }
+
+    public Long getEndDate() {
+        return endDate;
+    }
+
+    public void setEndDate(Long endDate) {
+        this.endDate = endDate;
+    }
+
+    public String getBookingType() {
+        return bookingType;
+    }
+
+    public void setBookingType(String bookingType) {
+        this.bookingType = bookingType;
     }
 }
