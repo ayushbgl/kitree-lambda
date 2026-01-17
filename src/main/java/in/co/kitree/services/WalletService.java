@@ -597,6 +597,7 @@ public class WalletService {
             throws ExecutionException, InterruptedException {
         Double totalCredit = amount + (bonus != null ? bonus : 0.0);
         Double[] newBalanceHolder = new Double[1];
+        final Double finalBonus = bonus != null ? bonus : 0.0;
 
         db.runTransaction(transaction -> {
             // Read wallet document
@@ -615,17 +616,38 @@ public class WalletService {
                 throw new IllegalStateException("Transaction is not pending or does not exist");
             }
 
-            // Update wallet balance
+            // Update wallet balance with total (amount + bonus)
             newBalanceHolder[0] = updateExpertWalletBalanceInTransactionWithSnapshot(
                     transaction, walletRef, walletDoc, currency, totalCredit
             );
 
-            // Update transaction status
+            // Update recharge transaction status (amount only, bonus tracked separately)
             Map<String, Object> txUpdates = new HashMap<>();
             txUpdates.put("status", "COMPLETED");
             txUpdates.put("payment_id", paymentId);
             txUpdates.put("completed_at", Timestamp.now());
             transaction.update(txRef, txUpdates);
+
+            // Create separate BONUS transaction if bonus > 0
+            if (finalBonus > 0) {
+                CollectionReference transactionsRef = db.collection("users").document(userId)
+                        .collection("expert_wallets").document(expertId)
+                        .collection("transactions");
+                DocumentReference bonusTxRef = transactionsRef.document();
+
+                Map<String, Object> bonusTx = new HashMap<>();
+                bonusTx.put("type", "BONUS");
+                bonusTx.put("source", "PROMOTION");
+                bonusTx.put("amount", finalBonus);
+                bonusTx.put("currency", currency);
+                bonusTx.put("status", "COMPLETED");
+                bonusTx.put("created_at", Timestamp.now());
+                bonusTx.put("completed_at", Timestamp.now());
+                bonusTx.put("related_recharge_tx_id", transactionId);
+                bonusTx.put("razorpay_order_id", txDoc.getString("razorpay_order_id"));
+
+                transaction.set(bonusTxRef, bonusTx);
+            }
 
             return null;
         }).get();
