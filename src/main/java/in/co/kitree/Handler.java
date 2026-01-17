@@ -1647,7 +1647,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             // Query all CONNECTED on-demand consultations
             // Using collectionGroup query to search across all users' orders
             com.google.cloud.Timestamp now = com.google.cloud.Timestamp.now();
-            long nowMillis = now.toDate().getTime();
+            nowMillis = now.toDate().getTime(); // Update nowMillis with precise timestamp
             
             Query query = this.db.collectionGroup("orders")
                     .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
