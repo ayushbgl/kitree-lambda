@@ -277,18 +277,49 @@ public class OnDemandConsultationService {
 
     /**
      * Calculate elapsed seconds for an active consultation.
+     * Uses startTime as the baseline for total call duration.
      */
     public Long calculateElapsedSeconds(OnDemandConsultationOrder order) {
         if (order.getStartTime() == null) {
             return 0L;
         }
-        
+
         long startTimeMillis = order.getStartTime().toDate().getTime();
-        long endTimeMillis = order.getEndTime() != null 
-                ? order.getEndTime().toDate().getTime() 
+        long endTimeMillis = order.getEndTime() != null
+                ? order.getEndTime().toDate().getTime()
                 : System.currentTimeMillis();
-        
+
         return (endTimeMillis - startTimeMillis) / 1000;
+    }
+
+    /**
+     * Calculate billable seconds for an active consultation.
+     * Uses bothParticipantsJoinedAt as the start time for billing.
+     * Only charges for time when BOTH user and expert were in the call.
+     * Falls back to startTime if bothParticipantsJoinedAt is not set.
+     */
+    public Long calculateBillableSeconds(OnDemandConsultationOrder order) {
+        // If we have both_participants_joined_at, use that for billing
+        // Otherwise fall back to start_time (legacy behavior)
+        Timestamp billingStartTime = order.getBothParticipantsJoinedAt();
+        if (billingStartTime == null) {
+            billingStartTime = order.getStartTime();
+        }
+
+        if (billingStartTime == null) {
+            // If neither is set, no billing
+            return 0L;
+        }
+
+        long startTimeMillis = billingStartTime.toDate().getTime();
+        long endTimeMillis = order.getEndTime() != null
+                ? order.getEndTime().toDate().getTime()
+                : System.currentTimeMillis();
+
+        long billableSeconds = (endTimeMillis - startTimeMillis) / 1000;
+
+        // Ensure non-negative
+        return Math.max(0L, billableSeconds);
     }
 
     /**

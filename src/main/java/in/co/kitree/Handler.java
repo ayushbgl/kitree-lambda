@@ -48,6 +48,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private static final int AUTO_TERMINATE_GRACE_PERIOD_SECONDS = 60;
     private static final double MIN_WALLET_RECHARGE_AMOUNT = 100.0;
     private static final int MIN_CONSULTATION_MINUTES = 3;
+
+    // Robustness constants for cron job
+    private static final int INITIATED_ORDER_TIMEOUT_SECONDS = 300; // 5 minutes - auto-fail INITIATED orders older than this
+    private static final int BUSY_STATUS_STALENESS_SECONDS = 1800; // 30 minutes - free expert if BUSY for this long with no valid orders
+    private static final int SINGLE_PARTICIPANT_TIMEOUT_SECONDS = 120; // 2 minutes - end call if only one participant
     
     Gson gson = (new GsonBuilder()).setPrettyPrinting().create();
     private Firestore db;
@@ -967,6 +972,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return handleOnDemandConsultationEnd(userId, requestBody);
             }
 
+            if ("cleanup_stale_order".equals(requestBody.getFunction())) {
+                return handleCleanupStaleOrder(userId, requestBody);
+            }
+
+            if ("get_active_call_for_user".equals(requestBody.getFunction())) {
+                return handleGetActiveCallForUser(userId, requestBody);
+            }
+
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -1668,15 +1681,24 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                         OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
                         if (order != null && "CONNECTED".equals(order.getStatus())) {
                             // Calculate final values
-                            Long durationSeconds = consultationService.calculateElapsedSeconds(order);
-                            Double cost = consultationService.calculateCost(durationSeconds, order.getExpertRatePerMinute());
+                            // Use billable seconds (time when both participants were present) for billing
+                            Long totalDurationSeconds = consultationService.calculateElapsedSeconds(order);
+                            Long billableSeconds = consultationService.calculateBillableSeconds(order);
+                            Double cost = consultationService.calculateCost(billableSeconds, order.getExpertRatePerMinute());
                             Double platformFeeAmount = consultationService.calculatePlatformFee(cost, order.getPlatformFeePercent());
                             Double expertEarnings = cost - platformFeeAmount;
-                            
+
                             String expertId = order.getExpertId();
                             String currency = order.getCurrency();
-                            
-                            final Long finalDurationSeconds = durationSeconds;
+
+                            LoggingService.info("auto_terminate_billing", Map.of(
+                                "orderId", orderId,
+                                "totalDurationSeconds", totalDurationSeconds,
+                                "billableSeconds", billableSeconds,
+                                "cost", cost
+                            ));
+
+                            final Long finalDurationSeconds = billableSeconds; // Use billable seconds
                             final Double finalCost = cost;
                             final Double finalPlatformFeeAmount = platformFeeAmount;
                             final Double finalExpertEarnings = expertEarnings;
@@ -1798,58 +1820,299 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
         
         // ============================================================
-        // PHASE 2: Free orphaned BUSY experts (scheduled calls fallback)
+        // PHASE 2: Auto-fail stale INITIATED orders (user started but never connected)
+        // ============================================================
+        int failedInitiatedCount = 0;
+        try {
+            LoggingService.info("checking_stale_initiated_orders");
+            WalletService walletService = new WalletService(this.db);
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+
+            // Query all INITIATED on-demand consultations
+            Query initiatedQuery = this.db.collectionGroup("orders")
+                    .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                    .whereEqualTo("status", "INITIATED");
+
+            for (QueryDocumentSnapshot doc : initiatedQuery.get().get().getDocuments()) {
+                try {
+                    String orderId = doc.getId();
+                    String userId = doc.getReference().getParent().getParent().getId();
+                    String expertId = doc.getString("expertId");
+                    com.google.cloud.Timestamp createdAt = doc.getTimestamp("created_at");
+
+                    if (createdAt == null) {
+                        LoggingService.warn("initiated_order_missing_created_at", Map.of("orderId", orderId));
+                        continue;
+                    }
+
+                    // Check if order is stale (older than INITIATED_ORDER_TIMEOUT_SECONDS)
+                    long createdAtMillis = createdAt.toDate().getTime();
+                    long elapsedSeconds = (nowMillis - createdAtMillis) / 1000;
+
+                    if (elapsedSeconds >= INITIATED_ORDER_TIMEOUT_SECONDS) {
+                        LoggingService.setContext(userId, orderId, expertId);
+                        LoggingService.info("auto_failing_stale_initiated_order", Map.of(
+                            "elapsedSeconds", elapsedSeconds,
+                            "timeoutSeconds", INITIATED_ORDER_TIMEOUT_SECONDS
+                        ));
+
+                        // Mark order as FAILED
+                        DocumentReference orderRef = doc.getReference();
+                        Map<String, Object> updates = new HashMap<>();
+                        updates.put("status", "FAILED");
+                        updates.put("end_time", com.google.cloud.Timestamp.now());
+                        updates.put("failure_reason", "INITIATED_TIMEOUT");
+                        orderRef.update(updates).get();
+
+                        // Free expert if no other active consultations
+                        if (expertId != null) {
+                            boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+                            // Also check for other non-stale INITIATED orders
+                            boolean hasOtherInitiated = hasNonStaleInitiatedOrders(expertId, orderId, nowMillis);
+
+                            if (!hasOtherActive && !hasOtherInitiated) {
+                                LoggingService.info("freeing_expert_after_initiated_timeout");
+                                walletService.setConsultationStatus(expertId, "FREE");
+                            }
+                        }
+
+                        // End the Stream call if it exists
+                        String streamCallCid = doc.getString("stream_call_cid");
+                        if (streamCallCid != null) {
+                            try {
+                                StreamService streamService = new StreamService(isTest());
+                                String[] cidParts = StreamService.parseCallCid(streamCallCid);
+                                if (cidParts != null) {
+                                    streamService.endCall(cidParts[0], cidParts[1]);
+                                }
+                            } catch (Exception streamError) {
+                                LoggingService.warn("failed_to_end_stream_call_for_stale_initiated", Map.of(
+                                    "streamCallCid", streamCallCid,
+                                    "error", streamError.getMessage()
+                                ));
+                            }
+                        }
+
+                        failedInitiatedCount++;
+                    }
+                } catch (Exception e) {
+                    errorCount++;
+                    LoggingService.error("auto_fail_initiated_order_error", e, Map.of(
+                        "orderId", doc.getId()
+                    ));
+                }
+            }
+        } catch (Exception e) {
+            LoggingService.error("stale_initiated_orders_cleanup_error", e);
+        }
+
+        // ============================================================
+        // PHASE 3: End calls with single participant for too long
+        // If only one participant has joined for > SINGLE_PARTICIPANT_TIMEOUT_SECONDS, end the call
+        // ============================================================
+        int singleParticipantEndedCount = 0;
+        try {
+            LoggingService.info("checking_single_participant_calls");
+            WalletService walletService = new WalletService(this.db);
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+
+            // Query all CONNECTED on-demand consultations
+            Query connectedQuery = this.db.collectionGroup("orders")
+                    .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                    .whereEqualTo("status", "CONNECTED");
+
+            for (QueryDocumentSnapshot doc : connectedQuery.get().get().getDocuments()) {
+                try {
+                    String orderId = doc.getId();
+                    String userId = doc.getReference().getParent().getParent().getId();
+                    String expertId = doc.getString("expertId");
+
+                    // Check participant join times
+                    com.google.cloud.Timestamp userJoinedAt = doc.getTimestamp("user_joined_at");
+                    com.google.cloud.Timestamp expertJoinedAt = doc.getTimestamp("expert_joined_at");
+                    com.google.cloud.Timestamp bothJoinedAt = doc.getTimestamp("both_participants_joined_at");
+                    com.google.cloud.Timestamp startTime = doc.getTimestamp("start_time");
+
+                    // Skip if both participants have joined (billing is happening normally)
+                    if (bothJoinedAt != null) {
+                        continue;
+                    }
+
+                    // Check if only one participant has been in the call for too long
+                    boolean shouldEnd = false;
+                    String endReason = null;
+
+                    // If user joined but expert hasn't joined for > timeout
+                    if (userJoinedAt != null && expertJoinedAt == null) {
+                        long waitingSeconds = (nowMillis - userJoinedAt.toDate().getTime()) / 1000;
+                        if (waitingSeconds >= SINGLE_PARTICIPANT_TIMEOUT_SECONDS) {
+                            shouldEnd = true;
+                            endReason = "USER_WAITING_TIMEOUT";
+                            LoggingService.info("single_participant_timeout_user_waiting", Map.of(
+                                "orderId", orderId,
+                                "waitingSeconds", waitingSeconds
+                            ));
+                        }
+                    }
+
+                    // If expert joined but user hasn't joined for > timeout (less common)
+                    if (expertJoinedAt != null && userJoinedAt == null) {
+                        long waitingSeconds = (nowMillis - expertJoinedAt.toDate().getTime()) / 1000;
+                        if (waitingSeconds >= SINGLE_PARTICIPANT_TIMEOUT_SECONDS) {
+                            shouldEnd = true;
+                            endReason = "EXPERT_WAITING_TIMEOUT";
+                            LoggingService.info("single_participant_timeout_expert_waiting", Map.of(
+                                "orderId", orderId,
+                                "waitingSeconds", waitingSeconds
+                            ));
+                        }
+                    }
+
+                    // If neither has joined but the order has been CONNECTED for > timeout
+                    // (This shouldn't normally happen, but handle it as a safety net)
+                    if (userJoinedAt == null && expertJoinedAt == null && startTime != null) {
+                        long waitingSeconds = (nowMillis - startTime.toDate().getTime()) / 1000;
+                        if (waitingSeconds >= SINGLE_PARTICIPANT_TIMEOUT_SECONDS * 2) {
+                            shouldEnd = true;
+                            endReason = "NO_PARTICIPANTS_TIMEOUT";
+                            LoggingService.info("single_participant_timeout_no_participants", Map.of(
+                                "orderId", orderId,
+                                "waitingSeconds", waitingSeconds
+                            ));
+                        }
+                    }
+
+                    if (shouldEnd) {
+                        LoggingService.setContext(userId, orderId, expertId);
+                        LoggingService.info("ending_single_participant_call", Map.of("reason", endReason));
+
+                        // Mark order as FAILED with reason
+                        DocumentReference orderRef = doc.getReference();
+                        Map<String, Object> updates = new HashMap<>();
+                        updates.put("status", "FAILED");
+                        updates.put("end_time", com.google.cloud.Timestamp.now());
+                        updates.put("failure_reason", endReason);
+                        // No billing since both participants never joined together
+                        updates.put("cost", 0.0);
+                        updates.put("duration_seconds", 0L);
+                        updates.put("billable_seconds", 0L);
+                        orderRef.update(updates).get();
+
+                        // Free expert
+                        if (expertId != null) {
+                            boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+                            if (!hasOtherActive) {
+                                walletService.setConsultationStatus(expertId, "FREE");
+                            }
+                        }
+
+                        // End the Stream call if it exists
+                        String streamCallCid = doc.getString("stream_call_cid");
+                        if (streamCallCid != null) {
+                            try {
+                                StreamService streamService = new StreamService(isTest());
+                                String[] cidParts = StreamService.parseCallCid(streamCallCid);
+                                if (cidParts != null) {
+                                    streamService.endCall(cidParts[0], cidParts[1]);
+                                }
+                            } catch (Exception streamError) {
+                                LoggingService.warn("failed_to_end_stream_call_single_participant", Map.of(
+                                    "streamCallCid", streamCallCid,
+                                    "error", streamError.getMessage()
+                                ));
+                            }
+                        }
+
+                        singleParticipantEndedCount++;
+                    }
+                } catch (Exception e) {
+                    errorCount++;
+                    LoggingService.error("single_participant_check_error", e, Map.of(
+                        "orderId", doc.getId()
+                    ));
+                }
+            }
+        } catch (Exception e) {
+            LoggingService.error("single_participant_cleanup_error", e);
+        }
+
+        // ============================================================
+        // PHASE 4: Free orphaned BUSY experts (with improved staleness checks)
         // ============================================================
         int freedExpertsCount = 0;
         try {
             LoggingService.info("checking_orphaned_busy_experts");
             WalletService walletService = new WalletService(this.db);
             OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db);
-            
+
             // Query for experts who are currently BUSY
             Query busyExpertsQuery = this.db.collectionGroup("store")
                     .whereEqualTo("consultation_status", "BUSY");
-            
+
             for (QueryDocumentSnapshot doc : busyExpertsQuery.get().get().getDocuments()) {
                 try {
                     // Extract expert ID from document path: users/{expertId}/public/store
                     String expertId = doc.getReference().getParent().getParent().getParent().getId();
-                    
-                    // Check if expert has any active consultations (on-demand or scheduled)
-                    // For on-demand, we check CONNECTED status
-                    boolean hasActiveOnDemand = false;
-                    Query activeOnDemandQuery = this.db.collectionGroup("orders")
+                    LoggingService.setExpertId(expertId);
+
+                    // Get BUSY status timestamp for staleness check
+                    com.google.cloud.Timestamp busyStatusUpdatedAt = doc.getTimestamp("consultation_status_updated_at");
+                    boolean isBusyStatusStale = false;
+                    if (busyStatusUpdatedAt != null) {
+                        long busyDurationSeconds = (nowMillis - busyStatusUpdatedAt.toDate().getTime()) / 1000;
+                        isBusyStatusStale = busyDurationSeconds >= BUSY_STATUS_STALENESS_SECONDS;
+                        if (isBusyStatusStale) {
+                            LoggingService.info("busy_status_is_stale", Map.of(
+                                "busyDurationSeconds", busyDurationSeconds,
+                                "threshold", BUSY_STATUS_STALENESS_SECONDS
+                            ));
+                        }
+                    }
+
+                    // Check for CONNECTED consultations
+                    boolean hasActiveConnected = false;
+                    Query activeConnectedQuery = this.db.collectionGroup("orders")
                             .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
                             .whereEqualTo("expertId", expertId)
                             .whereEqualTo("status", "CONNECTED");
-                    
-                    if (!activeOnDemandQuery.get().get().isEmpty()) {
-                        hasActiveOnDemand = true;
+
+                    if (!activeConnectedQuery.get().get().isEmpty()) {
+                        hasActiveConnected = true;
                     }
-                    
-                    // Also check for INITIATED on-demand consultations (buyer waiting)
-                    if (!hasActiveOnDemand) {
-                        Query initiatedQuery = this.db.collectionGroup("orders")
-                                .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
-                                .whereEqualTo("expertId", expertId)
-                                .whereEqualTo("status", "INITIATED");
-                        
-                        if (!initiatedQuery.get().get().isEmpty()) {
-                            hasActiveOnDemand = true;
-                        }
+
+                    // Check for non-stale INITIATED consultations
+                    boolean hasActiveInitiated = false;
+                    if (!hasActiveConnected) {
+                        hasActiveInitiated = hasNonStaleInitiatedOrders(expertId, null, nowMillis);
                     }
-                    
-                    if (!hasActiveOnDemand) {
-                        // No active consultations - free this expert
-                        // This handles: scheduled call cleanup, orphaned status after crashes
-                        LoggingService.setExpertId(expertId);
-                        LoggingService.info("freeing_orphaned_busy_expert");
+
+                    // Decision: Free expert if:
+                    // 1. No active CONNECTED orders AND no non-stale INITIATED orders, OR
+                    // 2. BUSY status is stale (safety fallback)
+                    boolean shouldFreeExpert = false;
+                    String freeReason = null;
+
+                    if (!hasActiveConnected && !hasActiveInitiated) {
+                        shouldFreeExpert = true;
+                        freeReason = "no_active_consultations";
+                    } else if (isBusyStatusStale && !hasActiveConnected) {
+                        // If BUSY for too long but no CONNECTED calls, free even if there are stale INITIATED
+                        shouldFreeExpert = true;
+                        freeReason = "busy_status_stale_no_connected";
+                    }
+
+                    if (shouldFreeExpert) {
+                        LoggingService.info("freeing_orphaned_busy_expert", Map.of(
+                            "reason", freeReason
+                        ));
                         walletService.setConsultationStatus(expertId, "FREE");
                         freedExpertsCount++;
                         LoggingService.info("expert_freed_successfully");
                     } else {
                         LoggingService.debug("expert_has_active_consultations_keeping_busy", Map.of(
-                            "expertId", expertId
+                            "expertId", expertId,
+                            "hasActiveConnected", hasActiveConnected,
+                            "hasActiveInitiated", hasActiveInitiated
                         ));
                     }
                 } catch (Exception e) {
@@ -1861,18 +2124,66 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         } catch (Exception e) {
             LoggingService.error("orphaned_busy_expert_cleanup_error", e);
         }
-        
+
         LoggingService.info("auto_terminate_job_completed", Map.of(
             "terminatedCount", terminatedCount,
+            "failedInitiatedCount", failedInitiatedCount,
+            "singleParticipantEndedCount", singleParticipantEndedCount,
             "freedExpertsCount", freedExpertsCount,
             "errorCount", errorCount
         ));
         return gson.toJson(Map.of(
             "success", true,
             "terminatedCount", terminatedCount,
+            "failedInitiatedCount", failedInitiatedCount,
+            "singleParticipantEndedCount", singleParticipantEndedCount,
             "freedExpertsCount", freedExpertsCount,
             "errorCount", errorCount
         ));
+    }
+
+    /**
+     * Check if an expert has any non-stale INITIATED orders.
+     * An order is considered stale if it's older than INITIATED_ORDER_TIMEOUT_SECONDS.
+     *
+     * @param expertId The expert ID to check
+     * @param excludeOrderId Optional order ID to exclude from the check
+     * @param nowMillis Current time in milliseconds
+     * @return true if there are non-stale INITIATED orders
+     */
+    private boolean hasNonStaleInitiatedOrders(String expertId, String excludeOrderId, long nowMillis) {
+        try {
+            Query initiatedQuery = this.db.collectionGroup("orders")
+                    .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                    .whereEqualTo("expertId", expertId)
+                    .whereEqualTo("status", "INITIATED");
+
+            for (QueryDocumentSnapshot doc : initiatedQuery.get().get().getDocuments()) {
+                String orderId = doc.getId();
+                if (excludeOrderId != null && orderId.equals(excludeOrderId)) {
+                    continue;
+                }
+
+                com.google.cloud.Timestamp createdAt = doc.getTimestamp("created_at");
+                if (createdAt == null) {
+                    // If no created_at, assume it's recent and count it
+                    return true;
+                }
+
+                long elapsedSeconds = (nowMillis - createdAt.toDate().getTime()) / 1000;
+                if (elapsedSeconds < INITIATED_ORDER_TIMEOUT_SECONDS) {
+                    // Found a non-stale INITIATED order
+                    return true;
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            LoggingService.error("error_checking_non_stale_initiated_orders", e, Map.of(
+                "expertId", expertId
+            ));
+            // On error, assume there might be active orders to avoid incorrectly freeing expert
+            return true;
+        }
     }
 
     public class HandlerException extends Exception {
@@ -2682,17 +2993,25 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         if (!Arrays.asList("CONNECTED", "TERMINATED").contains(order.getStatus())) {
             return gson.toJson(Map.of("success", false, "errorMessage", "Consultation is not active (status: " + order.getStatus() + ")"));
         }
-        
+
         // Calculate duration and cost
-        Long durationSeconds = consultationService.calculateElapsedSeconds(order);
-        Double cost = consultationService.calculateCost(durationSeconds, order.getExpertRatePerMinute());
+        // Use billable seconds (time when both participants were present) for billing
+        Long totalDurationSeconds = consultationService.calculateElapsedSeconds(order);
+        Long billableSeconds = consultationService.calculateBillableSeconds(order);
+        Double cost = consultationService.calculateCost(billableSeconds, order.getExpertRatePerMinute());
         Double platformFeeAmount = consultationService.calculatePlatformFee(cost, order.getPlatformFeePercent());
         Double expertEarnings = cost - platformFeeAmount;
-        
+
         String expertId = order.getExpertId();
         String currency = order.getCurrency();
-        
-        final Long finalDurationSeconds = durationSeconds;
+
+        LoggingService.info("consultation_end_billing", Map.of(
+            "totalDurationSeconds", totalDurationSeconds,
+            "billableSeconds", billableSeconds,
+            "cost", cost
+        ));
+
+        final Long finalDurationSeconds = billableSeconds; // Use billable seconds for the stored duration
         final Double finalCost = cost;
         final Double finalPlatformFeeAmount = platformFeeAmount;
         final Double finalExpertEarnings = expertEarnings;
@@ -2785,7 +3104,210 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             "expertId", expertId
         ));
     }
-    
+
+    /**
+     * Cleanup a stale order that should have been completed/failed but wasn't.
+     * Called by frontend when expert tries to join a call that has already ended.
+     * This verifies with Stream if the call is still active and cleans up if not.
+     */
+    private String handleCleanupStaleOrder(String userId, RequestBody requestBody) throws Exception {
+        String orderId = requestBody.getOrderId();
+        LoggingService.setFunction("cleanup_stale_order");
+        LoggingService.setContext(userId, orderId, null);
+        LoggingService.info("cleanup_stale_order_started");
+
+        if (orderId == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
+        }
+
+        WalletService walletService = new WalletService(this.db);
+        OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+
+        // Find the order - it could be in any user's orders collection
+        Map<String, Object> orderData = null;
+
+        // First try to get from the requesting user
+        OnDemandConsultationOrder userOrder = consultationService.getOrder(userId, orderId);
+        if (userOrder != null) {
+            orderData = Map.of(
+                "orderId", orderId,
+                "userId", userId,
+                "expertId", userOrder.getExpertId(),
+                "status", userOrder.getStatus(),
+                "streamCallCid", userOrder.getStreamCallCid() != null ? userOrder.getStreamCallCid() : ""
+            );
+        } else {
+            // Try finding by orderId across all users (for expert calling this)
+            String streamCallCidGuess = "consultation_video:" + orderId;
+            orderData = consultationService.getOrderByStreamCallCid(streamCallCidGuess);
+            if (orderData == null) {
+                streamCallCidGuess = "consultation_audio:" + orderId;
+                orderData = consultationService.getOrderByStreamCallCid(streamCallCidGuess);
+            }
+        }
+
+        if (orderData == null) {
+            LoggingService.warn("cleanup_order_not_found");
+            return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
+        }
+
+        String orderUserId = (String) orderData.get("userId");
+        String expertId = (String) orderData.get("expertId");
+        String status = (String) orderData.get("status");
+        String streamCallCid = (String) orderData.get("streamCallCid");
+
+        LoggingService.setContext(orderUserId, orderId, expertId);
+        LoggingService.info("cleanup_order_found", Map.of("status", status));
+
+        // If already completed/failed, just return success
+        if ("COMPLETED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status)) {
+            LoggingService.info("cleanup_order_already_terminal");
+            // Free expert just in case
+            if (expertId != null) {
+                boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+                if (!hasOtherActive) {
+                    walletService.setConsultationStatus(expertId, "FREE");
+                }
+            }
+            return gson.toJson(Map.of("success", true, "status", status, "message", "Order already in terminal state"));
+        }
+
+        // Verify with Stream if the call is still active
+        boolean streamCallActive = false;
+        if (streamCallCid != null && !streamCallCid.isEmpty()) {
+            // We can't easily query Stream for call state without more API setup,
+            // so we'll try to end the call and see what happens
+            try {
+                StreamService streamService = new StreamService(isTest());
+                String[] cidParts = StreamService.parseCallCid(streamCallCid);
+                if (cidParts != null) {
+                    // Try to end the call - if it's already ended, this will return true (404 is OK)
+                    boolean ended = streamService.endCall(cidParts[0], cidParts[1]);
+                    LoggingService.info("stream_call_end_attempt", Map.of("ended", ended));
+                }
+            } catch (Exception e) {
+                LoggingService.warn("stream_call_end_error", Map.of("error", e.getMessage()));
+            }
+        }
+
+        // Mark order as FAILED with cleanup reason
+        DocumentReference orderRef = this.db.collection("users").document(orderUserId)
+                .collection("orders").document(orderId);
+
+        Map<String, Object> updates = new HashMap<>();
+        updates.put("status", "FAILED");
+        updates.put("end_time", com.google.cloud.Timestamp.now());
+        updates.put("failure_reason", "CLEANUP_STALE_ORDER");
+        orderRef.update(updates).get();
+
+        // Free expert if no other active consultations
+        if (expertId != null) {
+            boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+            if (!hasOtherActive) {
+                LoggingService.info("freeing_expert_after_cleanup");
+                walletService.setConsultationStatus(expertId, "FREE");
+            }
+        }
+
+        LoggingService.info("cleanup_stale_order_completed");
+        return gson.toJson(Map.of(
+            "success", true,
+            "status", "FAILED",
+            "message", "Order cleaned up successfully"
+        ));
+    }
+
+    /**
+     * Get active call for a user (for rejoin functionality).
+     * Returns the active on-demand consultation order if one exists.
+     */
+    private String handleGetActiveCallForUser(String userId, RequestBody requestBody) throws Exception {
+        LoggingService.setFunction("get_active_call_for_user");
+        LoggingService.setContext(userId, null, null);
+        LoggingService.info("get_active_call_for_user_started");
+
+        OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db);
+
+        // Query for active orders (INITIATED or CONNECTED) for this user
+        Query activeOrdersQuery = this.db.collection("users").document(userId)
+                .collection("orders")
+                .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                .whereIn("status", Arrays.asList("INITIATED", "CONNECTED"));
+
+        QuerySnapshot snapshot = activeOrdersQuery.get().get();
+
+        if (snapshot.isEmpty()) {
+            LoggingService.info("no_active_call_found");
+            return gson.toJson(Map.of(
+                "success", true,
+                "hasActiveCall", false
+            ));
+        }
+
+        // Get the most recent active order
+        QueryDocumentSnapshot latestDoc = null;
+        for (QueryDocumentSnapshot doc : snapshot.getDocuments()) {
+            if (latestDoc == null) {
+                latestDoc = doc;
+            } else {
+                com.google.cloud.Timestamp docCreated = doc.getTimestamp("created_at");
+                com.google.cloud.Timestamp latestCreated = latestDoc.getTimestamp("created_at");
+                if (docCreated != null && latestCreated != null && docCreated.compareTo(latestCreated) > 0) {
+                    latestDoc = doc;
+                }
+            }
+        }
+
+        if (latestDoc == null) {
+            return gson.toJson(Map.of(
+                "success", true,
+                "hasActiveCall", false
+            ));
+        }
+
+        // Check if order is stale (INITIATED for too long)
+        String status = latestDoc.getString("status");
+        com.google.cloud.Timestamp createdAt = latestDoc.getTimestamp("created_at");
+        long nowMillis = System.currentTimeMillis();
+
+        if ("INITIATED".equals(status) && createdAt != null) {
+            long elapsedSeconds = (nowMillis - createdAt.toDate().getTime()) / 1000;
+            if (elapsedSeconds >= INITIATED_ORDER_TIMEOUT_SECONDS) {
+                LoggingService.info("active_call_is_stale_initiated", Map.of("elapsedSeconds", elapsedSeconds));
+                return gson.toJson(Map.of(
+                    "success", true,
+                    "hasActiveCall", false,
+                    "message", "Active call was stale and should be cleaned up"
+                ));
+            }
+        }
+
+        String orderId = latestDoc.getId();
+        String expertId = latestDoc.getString("expertId");
+        String expertName = latestDoc.getString("expertName");
+        String consultationType = latestDoc.getString("consultation_type");
+        String streamCallCid = latestDoc.getString("stream_call_cid");
+
+        LoggingService.info("active_call_found", Map.of(
+            "orderId", orderId,
+            "status", status
+        ));
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("hasActiveCall", true);
+        response.put("orderId", orderId);
+        response.put("expertId", expertId);
+        response.put("expertName", expertName);
+        response.put("consultationType", consultationType);
+        response.put("status", status);
+        if (streamCallCid != null) {
+            response.put("streamCallCid", streamCallCid);
+        }
+
+        return gson.toJson(response);
+    }
+
     /**
      * Mark expert as BUSY when they join a scheduled call.
      * This is called from the frontend when an expert joins a scheduled consultation.
@@ -2983,6 +3505,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     return handleStreamCallEnded(callCid, payload);
                 case "call.session_ended":
                     return handleStreamCallEnded(callCid, payload);
+                case "call.session_participant_joined":
+                    return handleStreamParticipantJoined(callCid, payload);
                 case "call.session_participant_left":
                     return handleStreamParticipantLeft(callCid, payload);
                 default:
@@ -3073,13 +3597,21 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
             
             // Calculate duration and cost
-            Long durationSeconds = consultationService.calculateElapsedSeconds(order);
-            Double cost = consultationService.calculateCost(durationSeconds, order.getExpertRatePerMinute());
+            // Use billable seconds (time when both participants were present) for billing
+            Long totalDurationSeconds = consultationService.calculateElapsedSeconds(order);
+            Long billableSeconds = consultationService.calculateBillableSeconds(order);
+            Double cost = consultationService.calculateCost(billableSeconds, order.getExpertRatePerMinute());
             Double platformFeeAmount = consultationService.calculatePlatformFee(cost, order.getPlatformFeePercent());
             Double expertEarnings = cost - platformFeeAmount;
             String currency = order.getCurrency();
-            
-            final Long finalDurationSeconds = durationSeconds;
+
+            LoggingService.info("billing_calculation", Map.of(
+                "totalDurationSeconds", totalDurationSeconds,
+                "billableSeconds", billableSeconds,
+                "cost", cost
+            ));
+
+            final Long finalDurationSeconds = billableSeconds; // Use billable seconds for the stored duration
             final Double finalCost = cost;
             final Double finalPlatformFeeAmount = platformFeeAmount;
             final Double finalExpertEarnings = expertEarnings;
@@ -3258,6 +3790,150 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
     }
     
+    /**
+     * Handle Stream call.session_participant_joined event.
+     * Tracks when each participant joins for dual-participant billing.
+     * When both user and expert have joined, billing starts from that moment.
+     */
+    @SuppressWarnings("unchecked")
+    private String handleStreamParticipantJoined(String callCid, Map<String, Object> payload) {
+        LoggingService.info("handling_stream_participant_joined", Map.of("callCid", callCid));
+
+        try {
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
+
+            // Find order by stream call CID
+            Map<String, Object> orderData = consultationService.getOrderByStreamCallCid(callCid);
+
+            if (orderData == null) {
+                LoggingService.info("participant_joined_order_not_found", Map.of("callCid", callCid));
+                return gson.toJson(Map.of("status", "order_not_found", "call_cid", callCid));
+            }
+
+            String orderId = (String) orderData.get("orderId");
+            String expertId = (String) orderData.get("expertId");
+            String userId = (String) orderData.get("userId");
+            String orderType = (String) orderData.get("type");
+            String orderStatus = (String) orderData.get("status");
+
+            LoggingService.setContext(userId, orderId, expertId);
+
+            // Only process for on-demand consultations that are active
+            if (!"ON_DEMAND_CONSULTATION".equals(orderType)) {
+                LoggingService.info("participant_joined_not_on_demand");
+                return gson.toJson(Map.of("status", "ignored", "reason", "not_on_demand"));
+            }
+
+            if (!"INITIATED".equals(orderStatus) && !"CONNECTED".equals(orderStatus)) {
+                LoggingService.info("participant_joined_order_not_active", Map.of("status", orderStatus));
+                return gson.toJson(Map.of("status", "ignored", "reason", "order_not_active"));
+            }
+
+            // Extract participant info from payload
+            Map<String, Object> participant = (Map<String, Object>) payload.get("participant");
+            if (participant == null) {
+                LoggingService.warn("participant_joined_no_participant_data");
+                return gson.toJson(Map.of("status", "ignored", "reason", "no_participant_data"));
+            }
+
+            Map<String, Object> participantUser = (Map<String, Object>) participant.get("user");
+            String participantUserId = participantUser != null ? (String) participantUser.get("id") : null;
+
+            if (participantUserId == null) {
+                LoggingService.warn("participant_joined_no_user_id");
+                return gson.toJson(Map.of("status", "ignored", "reason", "no_user_id"));
+            }
+
+            // Determine if this is the user or expert joining
+            boolean isUser = participantUserId.equals(userId);
+            boolean isExpert = participantUserId.equals(expertId);
+            String participantType = isUser ? "user" : (isExpert ? "expert" : "unknown");
+
+            LoggingService.info("participant_joined", Map.of(
+                "participantUserId", participantUserId,
+                "participantType", participantType
+            ));
+
+            if (!isUser && !isExpert) {
+                LoggingService.warn("participant_joined_unknown_participant", Map.of(
+                    "participantUserId", participantUserId,
+                    "expectedUserId", userId,
+                    "expectedExpertId", expertId
+                ));
+                return gson.toJson(Map.of("status", "ignored", "reason", "unknown_participant"));
+            }
+
+            // Update order with join timestamp
+            com.google.cloud.Timestamp nowTs = com.google.cloud.Timestamp.now();
+            DocumentReference orderRef = db.collection("users").document(userId)
+                    .collection("orders").document(orderId);
+
+            // Use transaction to atomically update and check for both participants
+            Map<String, Object> result = db.runTransaction(transaction -> {
+                DocumentSnapshot orderDoc = transaction.get(orderRef).get();
+                if (!orderDoc.exists()) {
+                    throw new IllegalStateException("Order not found");
+                }
+
+                Map<String, Object> updates = new HashMap<>();
+                boolean bothJoined = false;
+
+                com.google.cloud.Timestamp userJoinedAt = orderDoc.getTimestamp("user_joined_at");
+                com.google.cloud.Timestamp expertJoinedAt = orderDoc.getTimestamp("expert_joined_at");
+                com.google.cloud.Timestamp bothJoinedAt = orderDoc.getTimestamp("both_participants_joined_at");
+
+                // Only update if not already set
+                if (isUser && userJoinedAt == null) {
+                    updates.put("user_joined_at", nowTs);
+                    userJoinedAt = nowTs;
+                    LoggingService.info("user_join_time_recorded");
+                }
+
+                if (isExpert && expertJoinedAt == null) {
+                    updates.put("expert_joined_at", nowTs);
+                    expertJoinedAt = nowTs;
+                    LoggingService.info("expert_join_time_recorded");
+                }
+
+                // Check if both have now joined and we haven't recorded it yet
+                if (userJoinedAt != null && expertJoinedAt != null && bothJoinedAt == null) {
+                    // Both participants are now in the call - this is when billing should start
+                    updates.put("both_participants_joined_at", nowTs);
+                    bothJoined = true;
+                    LoggingService.info("both_participants_joined_billing_starts");
+                }
+
+                if (!updates.isEmpty()) {
+                    transaction.update(orderRef, updates);
+                }
+
+                Map<String, Object> resultMap = new HashMap<>();
+                resultMap.put("bothJoined", bothJoined);
+                resultMap.put("userJoined", userJoinedAt != null);
+                resultMap.put("expertJoined", expertJoinedAt != null);
+                return resultMap;
+            }).get();
+
+            boolean bothNowJoined = (boolean) result.get("bothJoined");
+            boolean userJoined = (boolean) result.get("userJoined");
+            boolean expertJoined = (boolean) result.get("expertJoined");
+
+            return gson.toJson(Map.of(
+                "status", "processed",
+                "order_id", orderId,
+                "participant_type", participantType,
+                "user_joined", userJoined,
+                "expert_joined", expertJoined,
+                "both_now_joined", bothNowJoined,
+                "billing_started", bothNowJoined
+            ));
+
+        } catch (Exception e) {
+            LoggingService.error("stream_participant_joined_error", e);
+            return gson.toJson(Map.of("error", "Error processing participant joined", "message", e.getMessage()));
+        }
+    }
+
     /**
      * Handle Stream call.session_participant_left event.
      * For 1:1 on-demand consultations, when ANY participant leaves, the call ends and billing is finalized.

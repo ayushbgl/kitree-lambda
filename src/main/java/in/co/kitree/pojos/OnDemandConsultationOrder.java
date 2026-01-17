@@ -61,9 +61,25 @@ public class OnDemandConsultationOrder {
     
     // GetStream call ID (e.g., "consultation_audio:{orderId}") - only for audio/video
     private String streamCallCid;
-    
+
     // Chat session ID - only for chat consultations (future)
     private String chatSessionId;
+
+    // Dual-participant billing tracking
+    // When user joined the Stream call
+    private Timestamp userJoinedAt;
+
+    // When expert joined the Stream call
+    private Timestamp expertJoinedAt;
+
+    // When both participants were in the call together (billing starts)
+    private Timestamp bothParticipantsJoinedAt;
+
+    // Actual billable seconds (time when both participants were present)
+    private Long billableSeconds;
+
+    // Failure reason (for FAILED orders)
+    private String failureReason;
 
     public OnDemandConsultationOrder() {
         this.type = "ON_DEMAND_CONSULTATION";
@@ -138,6 +154,21 @@ public class OnDemandConsultationOrder {
 
     public String getChatSessionId() { return chatSessionId; }
     public void setChatSessionId(String chatSessionId) { this.chatSessionId = chatSessionId; }
+
+    public Timestamp getUserJoinedAt() { return userJoinedAt; }
+    public void setUserJoinedAt(Timestamp userJoinedAt) { this.userJoinedAt = userJoinedAt; }
+
+    public Timestamp getExpertJoinedAt() { return expertJoinedAt; }
+    public void setExpertJoinedAt(Timestamp expertJoinedAt) { this.expertJoinedAt = expertJoinedAt; }
+
+    public Timestamp getBothParticipantsJoinedAt() { return bothParticipantsJoinedAt; }
+    public void setBothParticipantsJoinedAt(Timestamp bothParticipantsJoinedAt) { this.bothParticipantsJoinedAt = bothParticipantsJoinedAt; }
+
+    public Long getBillableSeconds() { return billableSeconds; }
+    public void setBillableSeconds(Long billableSeconds) { this.billableSeconds = billableSeconds; }
+
+    public String getFailureReason() { return failureReason; }
+    public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
 
     @Override
     public String toString() {
