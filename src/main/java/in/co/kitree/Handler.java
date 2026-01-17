@@ -1636,6 +1636,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
      * This method is called by AWS EventBridge on a schedule (e.g., every 5 minutes).
      */
     private String handleAutoTerminateConsultations() {
+        long nowMillis = System.currentTimeMillis();
         int terminatedCount = 0;
         int errorCount = 0;
         
@@ -3102,7 +3103,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         return gson.toJson(Map.of(
             "success", true,
             "cost", cost,
-            "duration", durationSeconds,
+            "duration", billableSeconds,
             "currency", currency,
             "remainingBalance", remainingBalanceHolder[0],
             "expertId", expertId
@@ -3866,7 +3867,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             
             LoggingService.info("consultation_finalized_successfully", Map.of(
                 "orderId", orderId,
-                "durationSeconds", durationSeconds,
+                "durationSeconds", billableSeconds,
                 "cost", cost,
                 "currency", currency
             ));
