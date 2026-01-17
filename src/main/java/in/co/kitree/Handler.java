@@ -275,16 +275,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
                 FirebaseUser user = UserService.getUserDetails(this.db, userId);
                 FirebaseUser expert = UserService.getUserDetails(this.db, requestBody.getExpertId()); // TODO: This is only for admin dashboard
-                orderDetails.put("createdAt", new Timestamp(System.currentTimeMillis()));
-                orderDetails.put("userName", user.getName());
-                orderDetails.put("userId", userId);
-                orderDetails.put("userPhoneNumber", user.getPhoneNumber());
+                orderDetails.put("created_at", new Timestamp(System.currentTimeMillis()));
+                orderDetails.put("user_name", user.getName());
+                orderDetails.put("user_id", userId);
+                orderDetails.put("user_phone_number", user.getPhoneNumber());
                 orderDetails.put("amount", servicePlan.getAmount());
                 orderDetails.put("currency", servicePlan.getCurrency());
-                orderDetails.put("planId", requestBody.getPlanId());
+                orderDetails.put("plan_id", requestBody.getPlanId());
                 orderDetails.put("type", servicePlan.getType());
-                orderDetails.put("expertId", requestBody.getExpertId());
-                orderDetails.put("expertName", expert.getName());
+                orderDetails.put("expert_id", requestBody.getExpertId());
+                orderDetails.put("expert_name", expert.getName());
                 if (servicePlan.getType().equals("DIGITAL_PRODUCT")) {
                     orderDetails.put("subtype", servicePlan.getSubtype());
                 }
@@ -295,22 +295,22 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 }
 
                 if (!servicePlan.getType().equals("WEBINAR")) {
-                    orderDetails.put("isVideo", servicePlan.isVideo());
+                    orderDetails.put("is_video", servicePlan.isVideo());
                     orderDetails.put("category", servicePlan.getCategory()); // Rename service to category in frontend orders screen.
                 } else {
                     orderDetails.put("date", servicePlan.getDate());
                     orderDetails.put("title", servicePlan.getTitle());
                     if (servicePlan.getSessionStartedAt() != null) {
-                        orderDetails.put("sessionStartedAt", servicePlan.getSessionStartedAt());
+                        orderDetails.put("session_started_at", servicePlan.getSessionStartedAt());
                     }
                     if (servicePlan.getSessionCompletedAt() != null) {
-                        orderDetails.put("sessionCompletedAt", servicePlan.getSessionCompletedAt());
+                        orderDetails.put("session_completed_at", servicePlan.getSessionCompletedAt());
                     }
                 }
 
                 if (servicePlan.getAmount() == null || servicePlan.getAmount() <= 0) {
                     String orderId = UUID.randomUUID().toString();
-                    orderDetails.put("orderId", orderId);
+                    orderDetails.put("order_id", orderId);
                     createOrderInDB(userId, orderId, orderDetails);
                     // No referrals and coupons awarded, TODO: Test referrals with webinar etc.
                     verifyOrderInDB(userId, orderId); // TODO: Make one firestore call.
@@ -324,8 +324,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     String language = requestBody.getLanguage() == null ? "en" : requestBody.getLanguage();
                     CouponResult couponResult = applyCoupon(requestBody.getCouponCode(), requestBody.getExpertId(), requestBody.getPlanId(), userId, language);
                     if (couponResult.isValid()) {
-                        orderDetails.put("couponCode", requestBody.getCouponCode());
-                        orderDetails.put("originalAmount", servicePlan.getAmount());
+                        orderDetails.put("coupon_code", requestBody.getCouponCode());
+                        orderDetails.put("original_amount", servicePlan.getAmount());
                         orderDetails.put("amount", couponResult.getNewAmount());
                         orderDetails.put("discount", couponResult.getDiscount());
                         servicePlan.setAmount(couponResult.getNewAmount());
@@ -349,11 +349,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                             int referredDiscount = Integer.parseInt(String.valueOf(Objects.requireNonNull(referralDetails.getData()).getOrDefault("referredDiscount", 0)));
                             int referrerDiscount = Integer.parseInt(String.valueOf(Objects.requireNonNull(referralDetails.getData()).getOrDefault("referrerDiscount", 0)));
                             System.out.println("referredDiscount: " + referredDiscount);
-                            orderDetails.put("referredBy", referredBy);
-                            orderDetails.put("referrerDiscount", referrerDiscount);
-                            orderDetails.put("referredDiscount", referredDiscount);
-                            if (orderDetails.get("couponCode") == null && referredDiscount > 0 && referredDiscount <= 100) {
-                                orderDetails.put("originalAmount", servicePlan.getAmount());
+                            orderDetails.put("referred_by", referredBy);
+                            orderDetails.put("referrer_discount", referrerDiscount);
+                            orderDetails.put("referred_discount", referredDiscount);
+                            if (orderDetails.get("coupon_code") == null && referredDiscount > 0 && referredDiscount <= 100) {
+                                orderDetails.put("original_amount", servicePlan.getAmount());
                                 Double newAmount = servicePlan.getAmount() * (1.00 - referredDiscount / 100.0);
                                 orderDetails.put("amount", newAmount);
                                 orderDetails.put("discount", servicePlan.getAmount() - (Double) orderDetails.get("amount"));
@@ -551,7 +551,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                         ordersQuery = ordersQuery.whereEqualTo("type", requestBody.getType());
                     }
                     if (requestBody.getDateRangeFilter() != null && !requestBody.getDateRangeFilter().isEmpty()) {
-                        ordersQuery = ordersQuery.orderBy("createdAt", Query.Direction.DESCENDING);
+                        ordersQuery = ordersQuery.orderBy("created_at", Query.Direction.DESCENDING);
 
                         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
 
@@ -561,8 +561,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                         Date endDate = dateFormat.parse(requestBody.getDateRangeFilter().get(1));
                         Timestamp endTimestamp = new Timestamp(endDate.getTime());
 
-                        ordersQuery = ordersQuery.whereGreaterThanOrEqualTo("createdAt", startTimestamp);
-                        ordersQuery = ordersQuery.whereLessThan("createdAt", endTimestamp);
+                        ordersQuery = ordersQuery.whereGreaterThanOrEqualTo("created_at", startTimestamp);
+                        ordersQuery = ordersQuery.whereLessThan("created_at", endTimestamp);
 
                         subscriptionsQuery = subscriptionsQuery.whereGreaterThanOrEqualTo("paymentReceivedAt", startTimestamp);
                         subscriptionsQuery = subscriptionsQuery.whereLessThan("paymentReceivedAt", endTimestamp);
@@ -1383,7 +1383,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             DocumentSnapshot subscriptionSnapshot = subscriptionRef.get().get();
             Long amount = subscriptionSnapshot.getLong("amount");
             String currency = subscriptionSnapshot.getString("currency");
-            String expertId = subscriptionSnapshot.getString("expertId");
+            String expertId = subscriptionSnapshot.getString("expert_id");
             String category = subscriptionSnapshot.getString("category");
 
             long currentEnd = razorpayWebhookBody.getJSONObject("payload").getJSONObject("subscription").getJSONObject("entity").getLong("current_end");
@@ -1392,12 +1392,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             Map<String, Object> subscriptionPaymentsFields = new HashMap<>();
             Timestamp currentTimestamp = new Timestamp(System.currentTimeMillis());
 
-            subscriptionFields.put("currentEndTime", currentEndTime); // TODO: Maybe want to check that the subscription state is active
-            subscriptionFields.put("paymentReceivedAt", currentTimestamp);
-            subscriptionPaymentsFields.put("paymentReceivedAt", currentTimestamp);
+            subscriptionFields.put("current_end_time", currentEndTime); // TODO: Maybe want to check that the subscription state is active
+            subscriptionFields.put("payment_received_at", currentTimestamp);
+            subscriptionPaymentsFields.put("payment_received_at", currentTimestamp);
             subscriptionPaymentsFields.put("amount", amount);
             subscriptionPaymentsFields.put("currency", currency);
-            subscriptionPaymentsFields.put("expertId", expertId);
+            subscriptionPaymentsFields.put("expert_id", expertId);
             subscriptionPaymentsFields.put("category", category);
 
             ApiFuture<WriteResult> future = this.db.collection("users").document(userId).collection("orders").document(subscriptionId).update(subscriptionFields);
@@ -1411,7 +1411,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     private void cancelSubscriptionInDb(String userId, String subscriptionId) throws ExecutionException, InterruptedException {
-        ApiFuture<WriteResult> future = this.db.collection("users").document(userId).collection("orders").document(subscriptionId).update("cancelledAt", new Timestamp(System.currentTimeMillis()));
+        ApiFuture<WriteResult> future = this.db.collection("users").document(userId).collection("orders").document(subscriptionId).update("cancelled_at", new Timestamp(System.currentTimeMillis()));
         future.get();
 
     }
@@ -1842,7 +1842,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 try {
                     String orderId = doc.getId();
                     String userId = doc.getReference().getParent().getParent().getId();
-                    String expertId = doc.getString("expertId");
+                    String expertId = doc.getString("expert_id");
                     com.google.cloud.Timestamp createdAt = doc.getTimestamp("created_at");
 
                     if (createdAt == null) {
@@ -1930,7 +1930,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 try {
                     String orderId = doc.getId();
                     String userId = doc.getReference().getParent().getParent().getId();
-                    String expertId = doc.getString("expertId");
+                    String expertId = doc.getString("expert_id");
 
                     // Check participant join times
                     com.google.cloud.Timestamp userJoinedAt = doc.getTimestamp("user_joined_at");
@@ -3198,8 +3198,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
 
         String orderId = latestDoc.getId();
-        String expertId = latestDoc.getString("expertId");
-        String expertName = latestDoc.getString("expertName");
+        String expertId = latestDoc.getString("expert_id");
+        String expertName = latestDoc.getString("expert_name");
         String consultationType = latestDoc.getString("consultation_type");
         String streamCallCid = latestDoc.getString("stream_call_cid");
 
@@ -3267,7 +3267,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         try {
             // Query orders for this expert using collection group
             Query baseQuery = this.db.collectionGroup("orders")
-                    .whereEqualTo("expertId", expertId);
+                    .whereEqualTo("expert_id", expertId);
 
             // Execute query and process results
             // Note: Firestore doesn't support aggregate queries with multiple conditions
@@ -3275,11 +3275,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             QuerySnapshot snapshot = baseQuery.get().get();
 
             for (QueryDocumentSnapshot doc : snapshot.getDocuments()) {
-                // Check both field naming conventions (snake_case for scheduled, camelCase for on-demand)
                 com.google.cloud.Timestamp createdAt = doc.getTimestamp("created_at");
-                if (createdAt == null) {
-                    createdAt = doc.getTimestamp("createdAt");
-                }
                 String orderType = doc.getString("type");
                 String orderStatus = doc.getString("status");
                 Double amount = doc.getDouble("amount");

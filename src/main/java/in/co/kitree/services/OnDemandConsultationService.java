@@ -393,7 +393,7 @@ public class OnDemandConsultationService {
             }
             
             // Get the document reference to read within transaction
-            String userId = doc.getString("userId");
+            String userId = doc.getString("user_id");
             if (userId == null) {
                 continue;
             }
@@ -455,15 +455,16 @@ public class OnDemandConsultationService {
         }
         
         DocumentSnapshot doc = snapshot.getDocuments().get(0);
-        
+
+        // All fields use snake_case for consistency
         Map<String, Object> orderData = new HashMap<>();
-        orderData.put("orderId", doc.getId());
-        orderData.put("userId", doc.getString("userId"));
-        orderData.put("expertId", doc.getString("expertId"));
+        orderData.put("order_id", doc.getId());
+        orderData.put("user_id", doc.getString("user_id"));
+        orderData.put("expert_id", doc.getString("expert_id"));
         orderData.put("type", doc.getString("type"));
         orderData.put("status", doc.getString("status"));
         orderData.put("stream_call_cid", doc.getString("stream_call_cid"));
-        
+
         // Include additional fields useful for processing
         if (doc.contains("consultation_type")) {
             orderData.put("consultation_type", doc.getString("consultation_type"));
@@ -483,23 +484,24 @@ public class OnDemandConsultationService {
         if (doc.contains("currency")) {
             orderData.put("currency", doc.getString("currency"));
         }
-        
+
         return orderData;
     }
 
     private Map<String, Object> orderToMap(OnDemandConsultationOrder order) {
         Map<String, Object> map = new HashMap<>();
-        map.put("orderId", order.getOrderId());
-        map.put("userId", order.getUserId());
-        map.put("expertId", order.getExpertId());
+        // All fields use snake_case for consistency
+        map.put("order_id", order.getOrderId());
+        map.put("user_id", order.getUserId());
+        map.put("expert_id", order.getExpertId());
         map.put("type", order.getType());
         map.put("consultation_type", order.getConsultationType());
         map.put("status", order.getStatus());
-        map.put("createdAt", order.getCreatedAt());
-        
-        if (order.getUserName() != null) map.put("userName", order.getUserName());
-        if (order.getExpertName() != null) map.put("expertName", order.getExpertName());
-        if (order.getPlanId() != null) map.put("planId", order.getPlanId());
+        map.put("created_at", order.getCreatedAt());
+
+        if (order.getUserName() != null) map.put("user_name", order.getUserName());
+        if (order.getExpertName() != null) map.put("expert_name", order.getExpertName());
+        if (order.getPlanId() != null) map.put("plan_id", order.getPlanId());
         if (order.getCategory() != null) map.put("category", order.getCategory());
         if (order.getExpertRatePerMinute() != null) map.put("expert_rate_per_minute", order.getExpertRatePerMinute());
         if (order.getCurrency() != null) map.put("currency", order.getCurrency());
@@ -507,26 +509,27 @@ public class OnDemandConsultationService {
         if (order.getPlatformFeePercent() != null) map.put("platform_fee_percent", order.getPlatformFeePercent());
         if (order.getStreamCallCid() != null) map.put("stream_call_cid", order.getStreamCallCid());
         if (order.getChatSessionId() != null) map.put("chat_session_id", order.getChatSessionId());
-        
+
         return map;
     }
 
     private OnDemandConsultationOrder docToOrder(DocumentSnapshot doc) {
         OnDemandConsultationOrder order = new OnDemandConsultationOrder();
+        // All fields use snake_case for consistency
         order.setOrderId(doc.getId());
-        order.setUserId(doc.getString("userId"));
-        order.setUserName(doc.getString("userName"));
-        order.setExpertId(doc.getString("expertId"));
-        order.setExpertName(doc.getString("expertName"));
-        order.setPlanId(doc.getString("planId"));
+        order.setUserId(doc.getString("user_id"));
+        order.setUserName(doc.getString("user_name"));
+        order.setExpertId(doc.getString("expert_id"));
+        order.setExpertName(doc.getString("expert_name"));
+        order.setPlanId(doc.getString("plan_id"));
         order.setType(doc.getString("type"));
         order.setConsultationType(doc.getString("consultation_type"));
         order.setCategory(doc.getString("category"));
         order.setStatus(doc.getString("status"));
         order.setStreamCallCid(doc.getString("stream_call_cid"));
         order.setChatSessionId(doc.getString("chat_session_id"));
-        
-        if (doc.contains("createdAt")) order.setCreatedAt(doc.getTimestamp("createdAt"));
+
+        if (doc.contains("created_at")) order.setCreatedAt(doc.getTimestamp("created_at"));
         if (doc.contains("start_time")) order.setStartTime(doc.getTimestamp("start_time"));
         if (doc.contains("end_time")) order.setEndTime(doc.getTimestamp("end_time"));
         if (doc.contains("expert_rate_per_minute")) order.setExpertRatePerMinute(doc.getDouble("expert_rate_per_minute"));
@@ -537,7 +540,7 @@ public class OnDemandConsultationService {
         if (doc.contains("platform_fee_percent")) order.setPlatformFeePercent(doc.getDouble("platform_fee_percent"));
         if (doc.contains("platform_fee_amount")) order.setPlatformFeeAmount(doc.getDouble("platform_fee_amount"));
         if (doc.contains("expert_earnings")) order.setExpertEarnings(doc.getDouble("expert_earnings"));
-        
+
         return order;
     }
 }
