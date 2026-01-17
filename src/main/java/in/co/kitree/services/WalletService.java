@@ -22,42 +22,6 @@ public class WalletService {
     }
 
     /**
-     * Get wallet balances for a user (all currencies).
-     *
-     * @param userId The user's ID
-     * @return Map of currency codes to balances
-     */
-    public Map<String, Double> getWalletBalances(String userId) throws ExecutionException, InterruptedException {
-        DocumentSnapshot userDoc = db.collection("users").document(userId).get().get();
-        if (userDoc.exists() && userDoc.contains("wallet_balances")) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> balances = (Map<String, Object>) userDoc.get("wallet_balances");
-            if (balances != null) {
-                Map<String, Double> result = new HashMap<>();
-                for (Map.Entry<String, Object> entry : balances.entrySet()) {
-                    if (entry.getValue() instanceof Number) {
-                        result.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
-                    }
-                }
-                return result;
-            }
-        }
-        return new HashMap<>();
-    }
-
-    /**
-     * Get wallet balance for a user in a specific currency.
-     *
-     * @param userId   The user's ID
-     * @param currency The currency code (e.g., "INR", "USD")
-     * @return The balance in the specified currency (0.0 if not found)
-     */
-    public Double getWalletBalance(String userId, String currency) throws ExecutionException, InterruptedException {
-        Map<String, Double> balances = getWalletBalances(userId);
-        return balances.getOrDefault(currency, 0.0);
-    }
-
-    /**
      * Get the user's default currency.
      *
      * @param userId The user's ID
@@ -71,174 +35,9 @@ public class WalletService {
         }
         return DEFAULT_CURRENCY;
     }
-    
+
     public static String getDefaultCurrency() {
         return DEFAULT_CURRENCY;
-    }
-
-    /**
-     * Update wallet balance for a user in a specific currency using a Firestore transaction.
-     * This method should be called within an existing transaction context.
-     *
-     * @param transaction The Firestore transaction
-     * @param userId      The user's ID
-     * @param currency    The currency code
-     * @param amount      The amount to add (positive) or subtract (negative)
-     * @return The new balance after the update
-     */
-    public Double updateWalletBalanceInTransaction(Transaction transaction, String userId, String currency, Double amount)
-            throws ExecutionException, InterruptedException {
-        DocumentReference userRef = db.collection("users").document(userId);
-        DocumentSnapshot userDoc = transaction.get(userRef).get();
-        
-        Map<String, Double> balances = new HashMap<>();
-        if (userDoc.exists() && userDoc.contains("wallet_balances")) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> existingBalances = (Map<String, Object>) userDoc.get("wallet_balances");
-            if (existingBalances != null) {
-                for (Map.Entry<String, Object> entry : existingBalances.entrySet()) {
-                    if (entry.getValue() instanceof Number) {
-                        balances.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
-                    }
-                }
-            }
-        }
-        
-        Double currentBalance = balances.getOrDefault(currency, 0.0);
-        Double newBalance = currentBalance + amount;
-        balances.put(currency, newBalance);
-        
-        transaction.update(userRef, "wallet_balances", balances);
-        return newBalance;
-    }
-
-    /**
-     * Increment wallet balance (non-transactional, use with caution).
-     *
-     * @param userId   The user's ID
-     * @param currency The currency code
-     * @param amount   The amount to add
-     * @return The new balance
-     */
-    public Double incrementWalletBalance(String userId, String currency, Double amount)
-            throws ExecutionException, InterruptedException {
-        DocumentReference userRef = db.collection("users").document(userId);
-        
-        // Use FieldValue.increment for atomic updates
-        Map<String, Object> updates = new HashMap<>();
-        updates.put("wallet_balances." + currency, FieldValue.increment(amount));
-        userRef.update(updates).get();
-        
-        return getWalletBalance(userId, currency);
-    }
-
-    /**
-     * Create a wallet transaction record.
-     *
-     * @param userId      The user's ID
-     * @param transaction The wallet transaction to create
-     * @return The transaction ID
-     */
-    public String createWalletTransaction(String userId, WalletTransaction transaction)
-            throws ExecutionException, InterruptedException {
-        CollectionReference transactionsRef = db.collection("users").document(userId).collection("wallet_transactions");
-        DocumentReference docRef = transactionsRef.document();
-        
-        Map<String, Object> transactionData = new HashMap<>();
-        transactionData.put("type", transaction.getType());
-        transactionData.put("source", transaction.getSource());
-        transactionData.put("amount", transaction.getAmount());
-        transactionData.put("currency", transaction.getCurrency());
-        transactionData.put("status", transaction.getStatus());
-        transactionData.put("created_at", transaction.getCreatedAt() != null ? transaction.getCreatedAt() : Timestamp.now());
-        
-        // Add optional fields if present
-        if (transaction.getPaymentId() != null) {
-            transactionData.put("payment_id", transaction.getPaymentId());
-        }
-        if (transaction.getOrderId() != null) {
-            transactionData.put("order_id", transaction.getOrderId());
-        }
-        if (transaction.getCouponCode() != null) {
-            transactionData.put("coupon_code", transaction.getCouponCode());
-        }
-        if (transaction.getReferralCode() != null) {
-            transactionData.put("referral_code", transaction.getReferralCode());
-        }
-        if (transaction.getReferrerId() != null) {
-            transactionData.put("referrer_id", transaction.getReferrerId());
-        }
-        if (transaction.getCashbackSourceOrderId() != null) {
-            transactionData.put("cashback_source_order_id", transaction.getCashbackSourceOrderId());
-        }
-        if (transaction.getCashbackReason() != null) {
-            transactionData.put("cashback_reason", transaction.getCashbackReason());
-        }
-        if (transaction.getRefundReason() != null) {
-            transactionData.put("refund_reason", transaction.getRefundReason());
-        }
-        
-        docRef.set(transactionData).get();
-        return docRef.getId();
-    }
-
-    /**
-     * Create a wallet transaction within an existing Firestore transaction.
-     */
-    public String createWalletTransactionInTransaction(Transaction firestoreTransaction, String userId, WalletTransaction walletTransaction)
-            throws ExecutionException, InterruptedException {
-        CollectionReference transactionsRef = db.collection("users").document(userId).collection("wallet_transactions");
-        DocumentReference docRef = transactionsRef.document();
-        
-        Map<String, Object> transactionData = new HashMap<>();
-        transactionData.put("type", walletTransaction.getType());
-        transactionData.put("source", walletTransaction.getSource());
-        transactionData.put("amount", walletTransaction.getAmount());
-        transactionData.put("currency", walletTransaction.getCurrency());
-        transactionData.put("status", walletTransaction.getStatus());
-        transactionData.put("created_at", walletTransaction.getCreatedAt() != null ? walletTransaction.getCreatedAt() : Timestamp.now());
-        
-        // Add optional fields if present
-        if (walletTransaction.getPaymentId() != null) {
-            transactionData.put("payment_id", walletTransaction.getPaymentId());
-        }
-        if (walletTransaction.getOrderId() != null) {
-            transactionData.put("order_id", walletTransaction.getOrderId());
-        }
-        if (walletTransaction.getCouponCode() != null) {
-            transactionData.put("coupon_code", walletTransaction.getCouponCode());
-        }
-        if (walletTransaction.getReferralCode() != null) {
-            transactionData.put("referral_code", walletTransaction.getReferralCode());
-        }
-        if (walletTransaction.getReferrerId() != null) {
-            transactionData.put("referrer_id", walletTransaction.getReferrerId());
-        }
-        if (walletTransaction.getCashbackSourceOrderId() != null) {
-            transactionData.put("cashback_source_order_id", walletTransaction.getCashbackSourceOrderId());
-        }
-        if (walletTransaction.getCashbackReason() != null) {
-            transactionData.put("cashback_reason", walletTransaction.getCashbackReason());
-        }
-        if (walletTransaction.getRefundReason() != null) {
-            transactionData.put("refund_reason", walletTransaction.getRefundReason());
-        }
-        
-        firestoreTransaction.set(docRef, transactionData);
-        return docRef.getId();
-    }
-
-    /**
-     * Check if a payment has already been processed (to prevent duplicate recharges).
-     *
-     * @param userId    The user's ID
-     * @param paymentId The Razorpay payment ID
-     * @return true if payment already processed
-     */
-    public boolean isPaymentAlreadyProcessed(String userId, String paymentId) throws ExecutionException, InterruptedException {
-        CollectionReference transactionsRef = db.collection("users").document(userId).collection("wallet_transactions");
-        Query query = transactionsRef.whereEqualTo("payment_id", paymentId).whereEqualTo("status", "COMPLETED");
-        return !query.get().get().isEmpty();
     }
 
     /**
@@ -652,21 +451,6 @@ public class WalletService {
     }
 
     /**
-     * Check if a payment has already been processed for expert-specific wallet.
-     *
-     * @param userId    The user's ID
-     * @param expertId  The expert's ID
-     * @param paymentId The Razorpay payment ID
-     * @return true if payment already processed
-     */
-    public boolean isExpertWalletPaymentAlreadyProcessed(String userId, String expertId, String paymentId) throws ExecutionException, InterruptedException {
-        CollectionReference transactionsRef = db.collection("users").document(userId)
-                .collection("expert_wallets").document(expertId).collection("transactions");
-        Query query = transactionsRef.whereEqualTo("payment_id", paymentId).whereEqualTo("status", "COMPLETED");
-        return !query.get().get().isEmpty();
-    }
-
-    /**
      * Increment expert-specific wallet balance (non-transactional, use with caution).
      *
      * @param userId   The user's ID
@@ -714,10 +498,13 @@ public class WalletService {
         transactionData.put("currency", walletTransaction.getCurrency());
         transactionData.put("status", walletTransaction.getStatus());
         transactionData.put("created_at", walletTransaction.getCreatedAt() != null ? walletTransaction.getCreatedAt() : Timestamp.now());
-        
+
         // Add optional fields if present
         if (walletTransaction.getPaymentId() != null) {
             transactionData.put("payment_id", walletTransaction.getPaymentId());
+        }
+        if (walletTransaction.getRazorpayOrderId() != null) {
+            transactionData.put("razorpay_order_id", walletTransaction.getRazorpayOrderId());
         }
         if (walletTransaction.getOrderId() != null) {
             transactionData.put("order_id", walletTransaction.getOrderId());
@@ -759,6 +546,112 @@ public class WalletService {
         }
         
         return transactionData;
+    }
+
+    /**
+     * Find a pending recharge transaction by Razorpay order ID.
+     * Path: users/{userId}/expert_wallets/{expertId}/transactions
+     *
+     * @param userId          The user's ID
+     * @param expertId        The expert's ID
+     * @param razorpayOrderId The Razorpay order ID
+     * @return Map containing transaction data and document ID, or null if not found
+     */
+    public Map<String, Object> findPendingRechargeByOrderId(String userId, String expertId, String razorpayOrderId)
+            throws ExecutionException, InterruptedException {
+        CollectionReference transactionsRef = db.collection("users").document(userId)
+                .collection("expert_wallets").document(expertId).collection("transactions");
+
+        Query query = transactionsRef
+                .whereEqualTo("razorpay_order_id", razorpayOrderId)
+                .whereEqualTo("status", "PENDING")
+                .limit(1);
+
+        QuerySnapshot snapshot = query.get().get();
+        if (snapshot.isEmpty()) {
+            return null;
+        }
+
+        QueryDocumentSnapshot doc = snapshot.getDocuments().get(0);
+        Map<String, Object> result = new HashMap<>(doc.getData());
+        result.put("_id", doc.getId());
+        result.put("_ref", doc.getReference());
+        return result;
+    }
+
+    /**
+     * Complete a recharge transaction - update status to COMPLETED and credit balance.
+     * This is done atomically in a transaction.
+     *
+     * @param userId          The user's ID
+     * @param expertId        The expert's ID
+     * @param transactionId   The transaction document ID
+     * @param paymentId       The Razorpay payment ID
+     * @param amount          The recharge amount
+     * @param bonus           The bonus amount
+     * @param currency        The currency code
+     * @return The new wallet balance
+     */
+    public Double completeRechargeTransaction(String userId, String expertId, String transactionId,
+                                               String paymentId, Double amount, Double bonus, String currency)
+            throws ExecutionException, InterruptedException {
+        Double totalCredit = amount + (bonus != null ? bonus : 0.0);
+        Double[] newBalanceHolder = new Double[1];
+
+        db.runTransaction(transaction -> {
+            // Read wallet document
+            DocumentReference walletRef = db.collection("users").document(userId)
+                    .collection("expert_wallets").document(expertId);
+            DocumentSnapshot walletDoc = transaction.get(walletRef).get();
+
+            // Read transaction document
+            DocumentReference txRef = db.collection("users").document(userId)
+                    .collection("expert_wallets").document(expertId)
+                    .collection("transactions").document(transactionId);
+            DocumentSnapshot txDoc = transaction.get(txRef).get();
+
+            // Verify transaction is still PENDING
+            if (!txDoc.exists() || !"PENDING".equals(txDoc.getString("status"))) {
+                throw new IllegalStateException("Transaction is not pending or does not exist");
+            }
+
+            // Update wallet balance
+            newBalanceHolder[0] = updateExpertWalletBalanceInTransactionWithSnapshot(
+                    transaction, walletRef, walletDoc, currency, totalCredit
+            );
+
+            // Update transaction status
+            Map<String, Object> txUpdates = new HashMap<>();
+            txUpdates.put("status", "COMPLETED");
+            txUpdates.put("payment_id", paymentId);
+            txUpdates.put("completed_at", Timestamp.now());
+            transaction.update(txRef, txUpdates);
+
+            return null;
+        }).get();
+
+        return newBalanceHolder[0];
+    }
+
+    /**
+     * Check if a recharge transaction already exists and is completed for the given Razorpay order.
+     *
+     * @param userId          The user's ID
+     * @param expertId        The expert's ID
+     * @param razorpayOrderId The Razorpay order ID
+     * @return true if a COMPLETED transaction exists for this order
+     */
+    public boolean isRechargeOrderAlreadyCompleted(String userId, String expertId, String razorpayOrderId)
+            throws ExecutionException, InterruptedException {
+        CollectionReference transactionsRef = db.collection("users").document(userId)
+                .collection("expert_wallets").document(expertId).collection("transactions");
+
+        Query query = transactionsRef
+                .whereEqualTo("razorpay_order_id", razorpayOrderId)
+                .whereEqualTo("status", "COMPLETED")
+                .limit(1);
+
+        return !query.get().get().isEmpty();
     }
 
 }

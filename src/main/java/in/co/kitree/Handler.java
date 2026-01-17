@@ -2205,56 +2205,36 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     // =====================================================================
 
     /**
-     * Get wallet balance for a user.
-     * If expertId is provided, returns expert-specific wallet balance.
-     * Otherwise returns legacy wallet balance (deprecated).
+     * Get wallet balance for a user with a specific expert.
+     * Requires expertId - wallets are per-expert.
      */
     private String handleWalletBalance(String userId, RequestBody requestBody) throws ExecutionException, InterruptedException {
         WalletService walletService = new WalletService(this.db);
         String currency = requestBody.getCurrency();
         String expertId = requestBody.getExpertId();
-        
-        // If expertId is provided, use expert-specific wallet
-        if (expertId != null && !expertId.isEmpty()) {
-            if (currency != null && !currency.isEmpty()) {
-                // Return specific currency balance for expert wallet
-                Double balance = walletService.getExpertWalletBalance(userId, expertId, currency);
-                return gson.toJson(Map.of(
-                    "success", true,
-                    "balance", balance,
-                    "currency", currency,
-                    "expertId", expertId
-                ));
-            } else {
-                // Return all currency balances for expert wallet
-                Map<String, Double> balances = walletService.getExpertWalletBalances(userId, expertId);
-                String defaultCurrency = walletService.getUserDefaultCurrency(userId);
-                return gson.toJson(Map.of(
-                    "success", true,
-                    "balances", balances,
-                    "defaultCurrency", defaultCurrency,
-                    "expertId", expertId
-                ));
-            }
+
+        if (expertId == null || expertId.isEmpty()) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
         }
-        
-        // Legacy: Return global wallet balance (deprecated)
+
         if (currency != null && !currency.isEmpty()) {
             // Return specific currency balance
-            Double balance = walletService.getWalletBalance(userId, currency);
+            Double balance = walletService.getExpertWalletBalance(userId, expertId, currency);
             return gson.toJson(Map.of(
                 "success", true,
                 "balance", balance,
-                "currency", currency
+                "currency", currency,
+                "expertId", expertId
             ));
         } else {
             // Return all currency balances
-            Map<String, Double> balances = walletService.getWalletBalances(userId);
+            Map<String, Double> balances = walletService.getExpertWalletBalances(userId, expertId);
             String defaultCurrency = walletService.getUserDefaultCurrency(userId);
             return gson.toJson(Map.of(
                 "success", true,
                 "balances", balances,
-                "defaultCurrency", defaultCurrency
+                "defaultCurrency", defaultCurrency,
+                "expertId", expertId
             ));
         }
     }
@@ -2342,180 +2322,110 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         
         // Create Razorpay order
         String razorpayOrderId = razorpay.createOrder(amount, CustomerCipher.encryptCaesarCipher(userId));
-        
-        // Store recharge order details for verification
-        Map<String, Object> rechargeOrderDetails = new HashMap<>();
-        rechargeOrderDetails.put("userId", userId);
-        rechargeOrderDetails.put("expertId", expertId);
-        rechargeOrderDetails.put("amount", amount);
-        rechargeOrderDetails.put("bonus", bonus);
-        rechargeOrderDetails.put("currency", currency);
-        rechargeOrderDetails.put("razorpay_order_id", razorpayOrderId);
-        rechargeOrderDetails.put("status", "PENDING");
-        rechargeOrderDetails.put("created_at", com.google.cloud.Timestamp.now());
-        
-        this.db.collection("users").document(userId).collection("wallet_recharge_orders")
-                .document(razorpayOrderId).set(rechargeOrderDetails).get();
-        
+
+        // Create PENDING transaction directly in expert_wallets transactions
+        // This shows immediately in passbook for better UX
+        WalletService walletService = new WalletService(this.db);
+        WalletTransaction pendingTransaction = new WalletTransaction();
+        pendingTransaction.setType("RECHARGE");
+        pendingTransaction.setSource("PAYMENT");
+        pendingTransaction.setAmount(amount);
+        pendingTransaction.setCurrency(currency);
+        pendingTransaction.setStatus("PENDING");
+        pendingTransaction.setRazorpayOrderId(razorpayOrderId);
+        pendingTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+        if (bonus > 0) {
+            pendingTransaction.setBonusAmount(bonus);
+        }
+
+        walletService.createExpertWalletTransaction(userId, expertId, pendingTransaction);
+
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
-        response.put("order_id", razorpayOrderId);
-        response.put("razorpay_key", razorpay.getRazorpayKey());
+        response.put("orderId", razorpayOrderId);
+        response.put("razorpayKey", razorpay.getRazorpayKey());
         response.put("amount", amount);
         response.put("bonus", bonus);
         response.put("currency", currency);
         response.put("expertId", expertId);
-        
+
         return gson.toJson(response);
     }
 
     /**
      * Verify Razorpay payment and update wallet balance.
      * Step 2 of the two-step recharge process.
-     * 
-     * Credits to expert-specific wallet and includes bonus if applicable.
+     *
+     * Finds the PENDING transaction created in step 1, updates it to COMPLETED,
+     * and credits the wallet balance.
      */
     private String handleVerifyWalletRecharge(String userId, RequestBody requestBody) throws Exception {
         String razorpayOrderId = requestBody.getRazorpayOrderId();
         String razorpayPaymentId = requestBody.getRazorpayPaymentId();
         String razorpaySignature = requestBody.getRazorpaySignature();
-        
+        String expertId = requestBody.getExpertId();
+
         if (razorpayOrderId == null || razorpayPaymentId == null || razorpaySignature == null) {
             return gson.toJson(Map.of("success", false, "errorMessage", "Missing payment details"));
         }
-        
+
+        if (expertId == null || expertId.isEmpty()) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
+        }
+
         // Verify payment signature
         if (!razorpay.verifyPayment(razorpayOrderId, razorpayPaymentId, razorpaySignature)) {
             return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed"));
         }
-        
-        // Fetch recharge order details
-        DocumentSnapshot rechargeOrderDoc = this.db.collection("users").document(userId)
-                .collection("wallet_recharge_orders").document(razorpayOrderId).get().get();
-        
-        if (!rechargeOrderDoc.exists()) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Recharge order not found"));
-        }
-        
-        Double amount = rechargeOrderDoc.getDouble("amount");
-        if (amount == null) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Invalid recharge order: amount field is missing"));
-        }
-        
-        String expertId = rechargeOrderDoc.getString("expertId");
-        Double bonus = rechargeOrderDoc.getDouble("bonus");
-        if (bonus == null) bonus = 0.0;
-        
-        String currency = rechargeOrderDoc.getString("currency");
-        if (currency == null) currency = WalletService.getDefaultCurrency();
-        
+
         WalletService walletService = new WalletService(this.db);
-        
-        // Check if payment already processed (for expert-specific wallet if expertId present)
-        if (expertId != null && !expertId.isEmpty()) {
-            if (walletService.isExpertWalletPaymentAlreadyProcessed(userId, expertId, razorpayPaymentId)) {
-                Double currentBalance = walletService.getExpertWalletBalance(userId, expertId, currency);
-                return gson.toJson(Map.of(
-                    "success", true,
-                    "newBalance", currentBalance,
-                    "currency", currency,
-                    "expertId", expertId,
-                    "message", "Payment already processed"
-                ));
-            }
-        } else {
-            // Legacy: Check global wallet
-            if (walletService.isPaymentAlreadyProcessed(userId, razorpayPaymentId)) {
-                String defaultCurrency = walletService.getUserDefaultCurrency(userId);
-                Double currentBalance = walletService.getWalletBalance(userId, defaultCurrency);
-                return gson.toJson(Map.of(
-                    "success", true,
-                    "newBalance", currentBalance,
-                    "currency", defaultCurrency,
-                    "message", "Payment already processed"
-                ));
-            }
+
+        // Check if already completed (idempotency)
+        if (walletService.isRechargeOrderAlreadyCompleted(userId, expertId, razorpayOrderId)) {
+            String currency = WalletService.getDefaultCurrency();
+            Double currentBalance = walletService.getExpertWalletBalance(userId, expertId, currency);
+            return gson.toJson(Map.of(
+                "success", true,
+                "newBalance", currentBalance,
+                "currency", currency,
+                "expertId", expertId,
+                "message", "Payment already processed"
+            ));
         }
-        
-        final String finalCurrency = currency;
-        final Double finalAmount = amount;
-        final Double finalBonus = bonus;
-        final String finalExpertId = expertId;
-        final Double totalCredit = amount + bonus;
-        
-        // Use transaction to update balance and create transaction record
-        Double[] newBalanceHolder = new Double[1];
-        this.db.runTransaction(transaction -> {
-            if (finalExpertId != null && !finalExpertId.isEmpty()) {
-                // Credit to expert-specific wallet
-                newBalanceHolder[0] = walletService.updateExpertWalletBalanceInTransaction(
-                    transaction, userId, finalExpertId, finalCurrency, totalCredit
-                );
-                
-                // Create recharge transaction record
-                WalletTransaction rechargeTransaction = new WalletTransaction();
-                rechargeTransaction.setType("RECHARGE");
-                rechargeTransaction.setSource("PAYMENT");
-                rechargeTransaction.setAmount(finalAmount);
-                rechargeTransaction.setCurrency(finalCurrency);
-                rechargeTransaction.setPaymentId(razorpayPaymentId);
-                rechargeTransaction.setStatus("COMPLETED");
-                rechargeTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                if (finalBonus > 0) {
-                    rechargeTransaction.setBonusAmount(finalBonus);
-                }
-                
-                walletService.createExpertWalletTransactionInTransaction(transaction, userId, finalExpertId, rechargeTransaction);
-                
-                // If there's a bonus, create a separate bonus transaction for clarity
-                if (finalBonus > 0) {
-                    WalletTransaction bonusTransaction = new WalletTransaction();
-                    bonusTransaction.setType("BONUS");
-                    bonusTransaction.setSource("PROMOTION");
-                    bonusTransaction.setAmount(finalBonus);
-                    bonusTransaction.setCurrency(finalCurrency);
-                    bonusTransaction.setPaymentId(razorpayPaymentId);
-                    bonusTransaction.setStatus("COMPLETED");
-                    bonusTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                    
-                    walletService.createExpertWalletTransactionInTransaction(transaction, userId, finalExpertId, bonusTransaction);
-                }
-            } else {
-                // Legacy: Credit to global wallet (deprecated)
-                newBalanceHolder[0] = walletService.updateWalletBalanceInTransaction(transaction, userId, finalCurrency, totalCredit);
-                
-                // Create wallet transaction record
-                WalletTransaction walletTransaction = new WalletTransaction();
-                walletTransaction.setType("RECHARGE");
-                walletTransaction.setSource("PAYMENT");
-                walletTransaction.setAmount(totalCredit);
-                walletTransaction.setCurrency(finalCurrency);
-                walletTransaction.setPaymentId(razorpayPaymentId);
-                walletTransaction.setStatus("COMPLETED");
-                walletTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                
-                walletService.createWalletTransactionInTransaction(transaction, userId, walletTransaction);
-            }
-            
-            return null;
-        }).get();
-        
-        // Update recharge order status
-        this.db.collection("users").document(userId).collection("wallet_recharge_orders")
-                .document(razorpayOrderId).update("status", "COMPLETED", "payment_id", razorpayPaymentId).get();
-        
+
+        // Find the PENDING transaction
+        Map<String, Object> pendingTx = walletService.findPendingRechargeByOrderId(userId, expertId, razorpayOrderId);
+        if (pendingTx == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Recharge order not found or already processed"));
+        }
+
+        String transactionId = (String) pendingTx.get("_id");
+        Double amount = pendingTx.get("amount") instanceof Number ? ((Number) pendingTx.get("amount")).doubleValue() : null;
+        Double bonus = pendingTx.get("bonus_amount") instanceof Number ? ((Number) pendingTx.get("bonus_amount")).doubleValue() : 0.0;
+        String currency = (String) pendingTx.get("currency");
+
+        if (amount == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Invalid transaction: amount is missing"));
+        }
+        if (currency == null) {
+            currency = WalletService.getDefaultCurrency();
+        }
+
+        // Complete the transaction - update status and credit balance
+        Double newBalance = walletService.completeRechargeTransaction(
+            userId, expertId, transactionId, razorpayPaymentId, amount, bonus, currency
+        );
+
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
-        response.put("newBalance", newBalanceHolder[0]);
+        response.put("newBalance", newBalance);
         response.put("currency", currency);
         response.put("amountPaid", amount);
+        response.put("expertId", expertId);
         if (bonus > 0) {
             response.put("bonusReceived", bonus);
         }
-        if (expertId != null && !expertId.isEmpty()) {
-            response.put("expertId", expertId);
-        }
-        
+
         return gson.toJson(response);
     }
 
@@ -2887,19 +2797,19 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         
         Double rate = order.getExpertRatePerMinute();
         String currency = order.getCurrency();
-        
+        String expertId = order.getExpertId();
+
         // Verify wallet balance and recalculate max_duration based on actual balance + additional amount
         Long[] newMaxDurationHolder = new Long[1];
         Long[] additionalDurationHolder = new Long[1];
-        
+
         try {
             this.db.runTransaction(transaction -> {
-                // Fetch current wallet balance in transaction
-                Double currentBalance = walletService.getWalletBalance(userId, currency);
-                
-                // Add the additional amount to the wallet balance (mid-consultation recharge)
-                Double newBalance = walletService.updateWalletBalanceInTransaction(transaction, userId, currency, additionalAmount);
-                
+                // Add the additional amount to the expert-specific wallet balance
+                Double newBalance = walletService.updateExpertWalletBalanceInTransaction(
+                    transaction, userId, expertId, currency, additionalAmount
+                );
+
                 // Create wallet transaction record for the recharge
                 WalletTransaction walletTransaction = new WalletTransaction();
                 walletTransaction.setType("RECHARGE");
@@ -2909,8 +2819,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 walletTransaction.setOrderId(orderId);
                 walletTransaction.setStatus("COMPLETED");
                 walletTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
-                
-                walletService.createWalletTransactionInTransaction(transaction, userId, walletTransaction);
+
+                walletService.createExpertWalletTransactionInTransaction(transaction, userId, expertId, walletTransaction);
                 
                 // Calculate max duration based on new balance (including additional amount): (balance / rate) * 60
                 Long maxDurationFromBalance = (long) ((newBalance / rate) * 60); // in seconds

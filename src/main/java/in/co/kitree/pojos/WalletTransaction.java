@@ -23,9 +23,12 @@ public class WalletTransaction {
     // ISO currency code (e.g., "INR", "USD")
     private String currency;
     
-    // Razorpay payment ID for recharges
+    // Razorpay payment ID for recharges (set after payment verification)
     private String paymentId;
-    
+
+    // Razorpay order ID for recharges (set when order is created)
+    private String razorpayOrderId;
+
     // Reference to order document for consultation deductions
     private String orderId;
     
@@ -70,6 +73,9 @@ public class WalletTransaction {
 
     public String getPaymentId() { return paymentId; }
     public void setPaymentId(String paymentId) { this.paymentId = paymentId; }
+
+    public String getRazorpayOrderId() { return razorpayOrderId; }
+    public void setRazorpayOrderId(String razorpayOrderId) { this.razorpayOrderId = razorpayOrderId; }
 
     public String getOrderId() { return orderId; }
     public void setOrderId(String orderId) { this.orderId = orderId; }

@@ -70,12 +70,18 @@ service cloud.firestore {
         allow write: if false; // Only backend can write
       }
       
-      // Wallet recharge orders - user can read their own, backend writes only
-      match /wallet_recharge_orders/{orderId} {
-        allow read: if request.auth != null && request.auth.uid == userId;
+      // Expert-specific wallets - user can read their own, backend writes only
+      match /expert_wallets/{expertId} {
+        allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
         allow write: if false; // Only backend can write
+
+        // Transactions within expert wallet (includes recharges and deductions)
+        match /transactions/{transactionId} {
+          allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+          allow write: if false; // Only backend can write
+        }
       }
-      
+
       match /orders/{orderId} {
       	allow read: if request.auth != null && request.auth.uid == userId;
         // Allow profile ID updates for all order types
