@@ -989,6 +989,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return handleRecordExpertPayout(userId, requestBody);
             }
 
+            // Admin endpoint for setting expert platform fee config
+            if ("set_expert_platform_fee".equals(requestBody.getFunction())) {
+                return handleSetExpertPlatformFee(userId, requestBody);
+            }
+
+            // Admin endpoint for getting expert platform fee config
+            if ("get_expert_platform_fee".equals(requestBody.getFunction())) {
+                return handleGetExpertPlatformFee(userId, requestBody);
+            }
+
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -3308,26 +3318,25 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 totalBookings = scheduledCount;
             }
 
-            // --- REVENUE/EARNINGS QUERIES (only COMPLETED orders) ---
+            // --- EARNINGS QUERIES (only COMPLETED orders) ---
+            // NOTE: Revenue calculation removed from expert dashboard - experts only see their earnings
+            // Revenue is not shown to experts; only totalEarnings is calculated and returned
 
-            double totalRevenue = 0.0;
             double totalEarnings = 0.0;
 
-            // On-demand completed: sum cost and expert_earnings
+            // On-demand completed: sum expert_earnings only
             if (bookingType == null || bookingType.equals("all") || bookingType.equals("onDemand")) {
                 Query onDemandCompletedQuery = baseQuery
                         .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
                         .whereEqualTo("status", "COMPLETED");
                 AggregateQuerySnapshot onDemandSums = onDemandCompletedQuery
-                        .aggregate(sum("cost"), sum("expert_earnings"))
+                        .aggregate(sum("expert_earnings"))
                         .get().get();
-                Double onDemandRevenue = onDemandSums.getDouble(sum("cost"));
                 Double onDemandEarnings = onDemandSums.getDouble(sum("expert_earnings"));
-                if (onDemandRevenue != null) totalRevenue += onDemandRevenue;
                 if (onDemandEarnings != null) totalEarnings += onDemandEarnings;
             }
 
-            // Scheduled completed (CONSULTATION type): sum amount and expert_earnings
+            // Scheduled completed (CONSULTATION type): sum expert_earnings
             if (bookingType == null || bookingType.equals("all") || bookingType.equals("scheduled")) {
                 Query scheduledCompletedQuery = baseQuery
                         .whereEqualTo("type", "CONSULTATION")
@@ -3335,35 +3344,35 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 AggregateQuerySnapshot scheduledSums = scheduledCompletedQuery
                         .aggregate(sum("amount"), sum("expert_earnings"))
                         .get().get();
-                Double scheduledRevenue = scheduledSums.getDouble(sum("amount"));
+                Double scheduledAmount = scheduledSums.getDouble(sum("amount"));
                 Double scheduledEarnings = scheduledSums.getDouble(sum("expert_earnings"));
-                if (scheduledRevenue != null) totalRevenue += scheduledRevenue;
                 // For scheduled, if expert_earnings not set, use amount (no platform fee on scheduled)
                 if (scheduledEarnings != null) {
                     totalEarnings += scheduledEarnings;
-                } else if (scheduledRevenue != null) {
-                    totalEarnings += scheduledRevenue;
+                } else if (scheduledAmount != null) {
+                    totalEarnings += scheduledAmount;
                 }
             }
 
-            // Product completed: sum amount
+            // Product completed: sum expert_earnings (or amount if expert_earnings not set)
             if (bookingType == null || bookingType.equals("all") || bookingType.equals("product")) {
                 Query productCompletedQuery = baseQuery
                         .whereEqualTo("type", "PRODUCT")
                         .whereEqualTo("status", "paid");
                 AggregateQuerySnapshot productSums = productCompletedQuery
-                        .aggregate(sum("amount"))
+                        .aggregate(sum("amount"), sum("expert_earnings"))
                         .get().get();
-                Double productRevenue = productSums.getDouble(sum("amount"));
-                if (productRevenue != null) {
-                    totalRevenue += productRevenue;
-                    totalEarnings += productRevenue; // Products have no platform fee
+                Double productAmount = productSums.getDouble(sum("amount"));
+                Double productEarnings = productSums.getDouble(sum("expert_earnings"));
+                if (productEarnings != null) {
+                    totalEarnings += productEarnings;
+                } else if (productAmount != null) {
+                    totalEarnings += productAmount; // Fallback to amount if expert_earnings not set
                 }
             }
 
             LoggingService.info("metrics_calculated", Map.of(
                 "totalBookings", totalBookings,
-                "totalRevenue", totalRevenue,
                 "totalEarnings", totalEarnings,
                 "onDemandCount", onDemandCount,
                 "scheduledCount", scheduledCount,
@@ -3373,7 +3382,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("totalBookings", totalBookings);
-            response.put("totalRevenue", Math.round(totalRevenue * 100.0) / 100.0);
+            // NOTE: Revenue removed from expert dashboard - experts only see earnings
+            response.put("totalRevenue", 0); // Kept for backward compatibility but always 0
             response.put("totalEarnings", Math.round(totalEarnings * 100.0) / 100.0);
             response.put("currency", currency);
             response.put("scheduledCount", scheduledCount);
@@ -3476,6 +3486,144 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of(
                 "success", false,
                 "errorMessage", "Failed to record payout: " + e.getMessage()
+            ));
+        }
+    }
+
+    /**
+     * Admin endpoint to set platform fee configuration for an expert.
+     * Stores in users/{expertId}/private/platform_fee_config document.
+     * Only admins can call this endpoint.
+     *
+     * @param adminUserId The calling user's ID (must be admin)
+     * @param requestBody Contains expertId and fee configuration
+     * @return JSON response with success status
+     */
+    private String handleSetExpertPlatformFee(String adminUserId, RequestBody requestBody) {
+        LoggingService.setFunction("set_expert_platform_fee");
+        LoggingService.info("set_expert_platform_fee_started");
+
+        try {
+            // Verify admin access - CRITICAL security check
+            if (!isAdmin(adminUserId)) {
+                LoggingService.warn("set_expert_platform_fee_unauthorized", Map.of("userId", adminUserId));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
+            }
+
+            // Get required parameters
+            String expertId = requestBody.getExpertId();
+            Double defaultFeePercent = requestBody.getDefaultFeePercent();
+            Map<String, Double> feeByType = requestBody.getFeeByType();
+            Map<String, Double> feeByCategory = requestBody.getFeeByCategory();
+
+            // Validate expert ID
+            if (expertId == null || expertId.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
+            }
+
+            // At least one fee configuration must be provided
+            if (defaultFeePercent == null && (feeByType == null || feeByType.isEmpty()) && (feeByCategory == null || feeByCategory.isEmpty())) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "At least one fee configuration is required"));
+            }
+
+            // Validate fee percentages (should be between 0 and 100)
+            if (defaultFeePercent != null && (defaultFeePercent < 0 || defaultFeePercent > 100)) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Default fee percent must be between 0 and 100"));
+            }
+
+            LoggingService.setExpertId(expertId);
+            LoggingService.info("set_expert_platform_fee_processing", Map.of(
+                "defaultFeePercent", defaultFeePercent != null ? defaultFeePercent : "not set",
+                "feeByTypeCount", feeByType != null ? feeByType.size() : 0,
+                "feeByCategoryCount", feeByCategory != null ? feeByCategory.size() : 0
+            ));
+
+            // Prepare the document data
+            Map<String, Object> feeConfigData = new HashMap<>();
+            if (defaultFeePercent != null) {
+                feeConfigData.put("default_fee_percent", defaultFeePercent);
+            }
+            if (feeByType != null && !feeByType.isEmpty()) {
+                feeConfigData.put("fee_by_type", feeByType);
+            }
+            if (feeByCategory != null && !feeByCategory.isEmpty()) {
+                feeConfigData.put("fee_by_category", feeByCategory);
+            }
+            feeConfigData.put("updated_at", com.google.cloud.Timestamp.now());
+            feeConfigData.put("updated_by", adminUserId);
+
+            // Write to the private collection: users/{expertId}/private/platform_fee_config
+            DocumentReference feeConfigRef = db.collection("users").document(expertId)
+                    .collection("private").document("platform_fee_config");
+            feeConfigRef.set(feeConfigData, SetOptions.merge()).get();
+
+            LoggingService.info("set_expert_platform_fee_success", Map.of("expertId", expertId));
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("expertId", expertId);
+            response.put("message", "Platform fee configuration updated successfully");
+
+            return gson.toJson(response);
+
+        } catch (Exception e) {
+            LoggingService.error("set_expert_platform_fee_error", e);
+            return gson.toJson(Map.of(
+                "success", false,
+                "errorMessage", "Failed to set platform fee: " + e.getMessage()
+            ));
+        }
+    }
+
+    /**
+     * Admin endpoint to get platform fee configuration for an expert.
+     * Reads from users/{expertId}/private/platform_fee_config document.
+     * Only admins can call this endpoint.
+     *
+     * @param adminUserId The calling user's ID (must be admin)
+     * @param requestBody Contains expertId
+     * @return JSON response with fee configuration
+     */
+    private String handleGetExpertPlatformFee(String adminUserId, RequestBody requestBody) {
+        LoggingService.setFunction("get_expert_platform_fee");
+        LoggingService.info("get_expert_platform_fee_started");
+
+        try {
+            // Verify admin access - CRITICAL security check
+            if (!isAdmin(adminUserId)) {
+                LoggingService.warn("get_expert_platform_fee_unauthorized", Map.of("userId", adminUserId));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
+            }
+
+            String expertId = requestBody.getExpertId();
+
+            // Validate expert ID
+            if (expertId == null || expertId.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
+            }
+
+            LoggingService.setExpertId(expertId);
+
+            // Get the platform fee config using WalletService
+            WalletService walletService = new WalletService(db);
+            PlatformFeeConfig feeConfig = walletService.getPlatformFeeConfig(expertId);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("expertId", expertId);
+            response.put("defaultFeePercent", feeConfig.getDefaultFeePercent());
+            response.put("feeByType", feeConfig.getFeeByType());
+            response.put("feeByCategory", feeConfig.getFeeByCategory());
+
+            LoggingService.info("get_expert_platform_fee_success", Map.of("expertId", expertId));
+
+            return gson.toJson(response);
+
+        } catch (Exception e) {
+            LoggingService.error("get_expert_platform_fee_error", e);
+            return gson.toJson(Map.of(
+                "success", false,
+                "errorMessage", "Failed to get platform fee: " + e.getMessage()
             ));
         }
     }

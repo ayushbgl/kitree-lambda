@@ -92,6 +92,11 @@ public class RequestBody {
     private String payoutReference; // Transaction reference ID
     private String notes; // Optional notes for payout
 
+    // Platform fee config fields (for admin setting platform fees)
+    private Double defaultFeePercent; // Default platform fee percentage (e.g., 10.0 for 10%)
+    private Map<String, Double> feeByType; // Fee by order type (e.g., "CONSULTATION": 10.0, "ON_DEMAND_CONSULTATION": 15.0)
+    private Map<String, Double> feeByCategory; // Fee by category (e.g., "HOROSCOPE": 10.0, "TAROT": 12.0)
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -594,5 +599,30 @@ public class RequestBody {
 
     public void setNotes(String notes) {
         this.notes = notes;
+    }
+
+    // Platform fee config getters/setters
+    public Double getDefaultFeePercent() {
+        return defaultFeePercent;
+    }
+
+    public void setDefaultFeePercent(Double defaultFeePercent) {
+        this.defaultFeePercent = defaultFeePercent;
+    }
+
+    public Map<String, Double> getFeeByType() {
+        return feeByType;
+    }
+
+    public void setFeeByType(Map<String, Double> feeByType) {
+        this.feeByType = feeByType;
+    }
+
+    public Map<String, Double> getFeeByCategory() {
+        return feeByCategory;
+    }
+
+    public void setFeeByCategory(Map<String, Double> feeByCategory) {
+        this.feeByCategory = feeByCategory;
     }
 }
