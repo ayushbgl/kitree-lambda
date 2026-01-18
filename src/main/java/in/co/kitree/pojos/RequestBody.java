@@ -87,6 +87,11 @@ public class RequestBody {
     private Long endDate; // End date in milliseconds for metrics filtering
     private String bookingType; // "all", "scheduled", "onDemand", "product"
 
+    // Payout fields (for admin recording payouts)
+    private String payoutMethod; // "BANK_TRANSFER", "UPI", etc.
+    private String payoutReference; // Transaction reference ID
+    private String notes; // Optional notes for payout
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -564,5 +569,30 @@ public class RequestBody {
 
     public void setBookingType(String bookingType) {
         this.bookingType = bookingType;
+    }
+
+    // Payout getters/setters
+    public String getPayoutMethod() {
+        return payoutMethod;
+    }
+
+    public void setPayoutMethod(String payoutMethod) {
+        this.payoutMethod = payoutMethod;
+    }
+
+    public String getPayoutReference() {
+        return payoutReference;
+    }
+
+    public void setPayoutReference(String payoutReference) {
+        this.payoutReference = payoutReference;
+    }
+
+    public String getNotes() {
+        return notes;
+    }
+
+    public void setNotes(String notes) {
+        this.notes = notes;
     }
 }

@@ -9,11 +9,15 @@ import java.util.concurrent.ExecutionException;
 
 /**
  * Service for handling expert earnings operations.
- * This is separate from the wallet - earnings are credited here when consultations complete.
- * Path: users/{expertId}/expert_earnings/{transactionId}
- * 
- * The expert earnings balance is stored on the expert's user document:
- * users/{expertId}.expert_earnings_balances: { "INR": 450, ... }
+ *
+ * Architecture:
+ * - Earnings are stored as `expert_earnings` field on order documents (not a separate collection)
+ * - Balance is stored on user document: users/{expertId}.expert_earnings_balances
+ * - Payouts are stored in: users/{expertId}/payouts/{payoutId}
+ *
+ * This service handles:
+ * - Crediting earnings balance when consultations complete
+ * - Recording payouts (admin function)
  */
 public class ExpertEarningsService {
     private static final String DEFAULT_CURRENCY = "INR";
@@ -64,20 +68,21 @@ public class ExpertEarningsService {
     /**
      * Credit expert earnings using a Firestore transaction.
      * This is called when a consultation ends and the expert should receive their earnings.
+     * Only updates the balance - earnings details are stored on the order document.
      *
      * @param transaction   The Firestore transaction
      * @param expertId      The expert's ID
      * @param currency      The currency code
      * @param amount        The earnings amount (gross, before platform fee)
      * @param platformFee   The platform fee deducted
-     * @param orderId       The order ID for this earning
-     * @param description   Description of the earning
+     * @param orderId       The order ID for this earning (for logging only)
+     * @param description   Description of the earning (for logging only)
      * @return The new earnings balance after the update
      */
     public Double creditExpertEarningsInTransaction(
-            Transaction transaction, 
-            String expertId, 
-            String currency, 
+            Transaction transaction,
+            String expertId,
+            String currency,
             Double amount,
             Double platformFee,
             String orderId,
@@ -85,11 +90,11 @@ public class ExpertEarningsService {
     ) throws ExecutionException, InterruptedException {
         // Calculate net earnings
         Double netEarnings = amount - platformFee;
-        
-        // Update earnings balance
+
+        // Update earnings balance on user document
         DocumentReference userRef = db.collection("users").document(expertId);
         DocumentSnapshot userDoc = transaction.get(userRef).get();
-        
+
         Map<String, Double> balances = new HashMap<>();
         if (userDoc.exists() && userDoc.contains("expert_earnings_balances")) {
             @SuppressWarnings("unchecked")
@@ -102,46 +107,33 @@ public class ExpertEarningsService {
                 }
             }
         }
-        
+
         Double currentBalance = balances.getOrDefault(currency, 0.0);
         Double newBalance = currentBalance + netEarnings;
         balances.put(currency, newBalance);
-        
+
         transaction.update(userRef, "expert_earnings_balances", balances);
-        
-        // Create earnings transaction record
-        CollectionReference earningsRef = db.collection("users").document(expertId).collection("expert_earnings");
-        DocumentReference earningDocRef = earningsRef.document();
-        
-        Map<String, Object> earningData = new HashMap<>();
-        earningData.put("type", "ORDER_EARNING");
-        earningData.put("gross_amount", amount);
-        earningData.put("platform_fee", platformFee);
-        earningData.put("amount", netEarnings);  // Net amount credited
-        earningData.put("currency", currency);
-        earningData.put("order_id", orderId);
-        earningData.put("status", "COMPLETED");
-        earningData.put("created_at", Timestamp.now());
-        earningData.put("description", description);
-        
-        transaction.set(earningDocRef, earningData);
-        
+
+        // Note: Earnings details (amount, platformFee, etc.) are stored on the order document,
+        // not in a separate expert_earnings subcollection
+
         return newBalance;
     }
 
     /**
      * Credit expert earnings using a Firestore transaction with a pre-read snapshot.
      * This version avoids reading the document again to prevent "reads before writes" errors.
+     * Only updates the balance - earnings details are stored on the order document.
      *
      * @param transaction   The Firestore transaction
-     * @param expertId      The expert's ID
+     * @param expertId      The expert's ID (for logging only)
      * @param userRef       The pre-created user document reference
      * @param userDoc       The pre-read user document snapshot
      * @param currency      The currency code
      * @param amount        The earnings amount (gross, before platform fee)
      * @param platformFee   The platform fee deducted
-     * @param orderId       The order ID for this earning
-     * @param description   Description of the earning
+     * @param orderId       The order ID for this earning (for logging only)
+     * @param description   Description of the earning (for logging only)
      * @return The new earnings balance after the update
      */
     public Double creditExpertEarningsInTransactionWithSnapshot(
@@ -149,7 +141,7 @@ public class ExpertEarningsService {
             String expertId,
             DocumentReference userRef,
             DocumentSnapshot userDoc,
-            String currency, 
+            String currency,
             Double amount,
             Double platformFee,
             String orderId,
@@ -157,7 +149,7 @@ public class ExpertEarningsService {
     ) {
         // Calculate net earnings
         Double netEarnings = amount - platformFee;
-        
+
         // Get existing balances from pre-read snapshot
         Map<String, Double> balances = new HashMap<>();
         if (userDoc.exists() && userDoc.contains("expert_earnings_balances")) {
@@ -171,83 +163,56 @@ public class ExpertEarningsService {
                 }
             }
         }
-        
+
         Double currentBalance = balances.getOrDefault(currency, 0.0);
         Double newBalance = currentBalance + netEarnings;
         balances.put(currency, newBalance);
-        
+
         transaction.update(userRef, "expert_earnings_balances", balances);
-        
-        // Create earnings transaction record
-        CollectionReference earningsRef = db.collection("users").document(expertId).collection("expert_earnings");
-        DocumentReference earningDocRef = earningsRef.document();
-        
-        Map<String, Object> earningData = new HashMap<>();
-        earningData.put("type", "ORDER_EARNING");
-        earningData.put("gross_amount", amount);
-        earningData.put("platform_fee", platformFee);
-        earningData.put("amount", netEarnings);  // Net amount credited
-        earningData.put("currency", currency);
-        earningData.put("order_id", orderId);
-        earningData.put("status", "COMPLETED");
-        earningData.put("created_at", Timestamp.now());
-        earningData.put("description", description);
-        
-        transaction.set(earningDocRef, earningData);
-        
+
+        // Note: Earnings details (amount, platformFee, etc.) are stored on the order document,
+        // not in a separate expert_earnings subcollection
+
         return newBalance;
     }
 
     /**
      * Credit expert earnings (non-transactional, use with caution).
+     * Only updates the balance - earnings details are stored on the order document.
      *
      * @param expertId    The expert's ID
      * @param currency    The currency code
      * @param amount      The earnings amount (gross, before platform fee)
      * @param platformFee The platform fee deducted
-     * @param orderId     The order ID for this earning
-     * @param description Description of the earning
+     * @param orderId     The order ID for this earning (for logging only)
+     * @param description Description of the earning (for logging only)
      * @return The new earnings balance
      */
     public Double creditExpertEarnings(
-            String expertId, 
-            String currency, 
+            String expertId,
+            String currency,
             Double amount,
             Double platformFee,
             String orderId,
             String description
     ) throws ExecutionException, InterruptedException {
         Double netEarnings = amount - platformFee;
-        
+
         DocumentReference userRef = db.collection("users").document(expertId);
-        
+
         // Use FieldValue.increment for atomic updates
         Map<String, Object> updates = new HashMap<>();
         updates.put("expert_earnings_balances." + currency, FieldValue.increment(netEarnings));
         userRef.update(updates).get();
-        
-        // Create earnings transaction record
-        CollectionReference earningsRef = db.collection("users").document(expertId).collection("expert_earnings");
-        DocumentReference earningDocRef = earningsRef.document();
-        
-        Map<String, Object> earningData = new HashMap<>();
-        earningData.put("type", "ORDER_EARNING");
-        earningData.put("gross_amount", amount);
-        earningData.put("platform_fee", platformFee);
-        earningData.put("amount", netEarnings);
-        earningData.put("currency", currency);
-        earningData.put("order_id", orderId);
-        earningData.put("status", "COMPLETED");
-        earningData.put("created_at", Timestamp.now());
-        earningData.put("description", description);
-        
-        earningDocRef.set(earningData).get();
-        
+
+        // Note: Earnings details are stored on the order document, not in a separate subcollection
+
         return getExpertEarningsBalance(expertId, currency);
     }
 
     /**
      * Record a payout to the expert (reduces earnings balance).
+     * Creates a record in the payouts subcollection.
      *
      * @param transaction   The Firestore transaction
      * @param expertId      The expert's ID
@@ -255,6 +220,7 @@ public class ExpertEarningsService {
      * @param payoutAmount  The payout amount
      * @param payoutMethod  The payout method (e.g., "BANK_TRANSFER", "UPI")
      * @param payoutRef     The payout reference ID
+     * @param notes         Optional notes about the payout
      * @return The new earnings balance after payout
      */
     public Double recordPayoutInTransaction(
@@ -263,12 +229,13 @@ public class ExpertEarningsService {
             String currency,
             Double payoutAmount,
             String payoutMethod,
-            String payoutRef
+            String payoutRef,
+            String notes
     ) throws ExecutionException, InterruptedException {
         // Update earnings balance (deduct payout amount)
         DocumentReference userRef = db.collection("users").document(expertId);
         DocumentSnapshot userDoc = transaction.get(userRef).get();
-        
+
         Map<String, Double> balances = new HashMap<>();
         if (userDoc.exists() && userDoc.contains("expert_earnings_balances")) {
             @SuppressWarnings("unchecked")
@@ -281,34 +248,103 @@ public class ExpertEarningsService {
                 }
             }
         }
-        
+
         Double currentBalance = balances.getOrDefault(currency, 0.0);
         if (currentBalance < payoutAmount) {
             throw new IllegalArgumentException("Insufficient earnings balance for payout");
         }
-        
+
         Double newBalance = currentBalance - payoutAmount;
         balances.put(currency, newBalance);
-        
+
         transaction.update(userRef, "expert_earnings_balances", balances);
-        
-        // Create payout transaction record
-        CollectionReference earningsRef = db.collection("users").document(expertId).collection("expert_earnings");
-        DocumentReference earningDocRef = earningsRef.document();
-        
-        Map<String, Object> earningData = new HashMap<>();
-        earningData.put("type", "PAYOUT");
-        earningData.put("amount", -payoutAmount);  // Negative for payout
-        earningData.put("currency", currency);
-        earningData.put("payout_method", payoutMethod);
-        earningData.put("payout_ref", payoutRef);
-        earningData.put("status", "COMPLETED");
-        earningData.put("created_at", Timestamp.now());
-        earningData.put("description", "Payout via " + payoutMethod);
-        
-        transaction.set(earningDocRef, earningData);
-        
+
+        // Create payout record in payouts subcollection
+        CollectionReference payoutsRef = db.collection("users").document(expertId).collection("payouts");
+        DocumentReference payoutDocRef = payoutsRef.document();
+
+        Map<String, Object> payoutData = new HashMap<>();
+        payoutData.put("amount", payoutAmount);
+        payoutData.put("currency", currency);
+        payoutData.put("method", payoutMethod);
+        payoutData.put("reference", payoutRef);
+        payoutData.put("status", "COMPLETED");
+        payoutData.put("created_at", Timestamp.now());
+        payoutData.put("notes", notes != null ? notes : "");
+        payoutData.put("balance_after", newBalance);
+
+        transaction.set(payoutDocRef, payoutData);
+
         return newBalance;
+    }
+
+    /**
+     * Record a payout to the expert (non-transactional version for admin use).
+     *
+     * @param expertId      The expert's ID
+     * @param currency      The currency code
+     * @param payoutAmount  The payout amount
+     * @param payoutMethod  The payout method (e.g., "BANK_TRANSFER", "UPI")
+     * @param payoutRef     The payout reference ID
+     * @param notes         Optional notes about the payout
+     * @return The payout document ID
+     */
+    public String recordPayout(
+            String expertId,
+            String currency,
+            Double payoutAmount,
+            String payoutMethod,
+            String payoutRef,
+            String notes
+    ) throws ExecutionException, InterruptedException {
+        // Run as a transaction to ensure atomicity
+        return db.runTransaction(transaction -> {
+            DocumentReference userRef = db.collection("users").document(expertId);
+            DocumentSnapshot userDoc = transaction.get(userRef).get();
+
+            // Get current balance
+            Map<String, Double> balances = new HashMap<>();
+            if (userDoc.exists() && userDoc.contains("expert_earnings_balances")) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> existingBalances = (Map<String, Object>) userDoc.get("expert_earnings_balances");
+                if (existingBalances != null) {
+                    for (Map.Entry<String, Object> entry : existingBalances.entrySet()) {
+                        if (entry.getValue() instanceof Number) {
+                            balances.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                        }
+                    }
+                }
+            }
+
+            Double currentBalance = balances.getOrDefault(currency, 0.0);
+            if (currentBalance < payoutAmount) {
+                throw new IllegalArgumentException("Insufficient earnings balance for payout. Current: " + currentBalance + ", Requested: " + payoutAmount);
+            }
+
+            Double newBalance = currentBalance - payoutAmount;
+            balances.put(currency, newBalance);
+
+            // Update balance
+            transaction.update(userRef, "expert_earnings_balances", balances);
+
+            // Create payout record
+            CollectionReference payoutsRef = db.collection("users").document(expertId).collection("payouts");
+            DocumentReference payoutDocRef = payoutsRef.document();
+
+            Map<String, Object> payoutData = new HashMap<>();
+            payoutData.put("amount", payoutAmount);
+            payoutData.put("currency", currency);
+            payoutData.put("method", payoutMethod);
+            payoutData.put("reference", payoutRef);
+            payoutData.put("status", "COMPLETED");
+            payoutData.put("created_at", Timestamp.now());
+            payoutData.put("notes", notes != null ? notes : "");
+            payoutData.put("balance_after", newBalance);
+
+            transaction.set(payoutDocRef, payoutData);
+
+            return payoutDocRef.getId();
+        }).get();
     }
 
     /**

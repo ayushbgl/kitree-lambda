@@ -984,6 +984,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return handleGetExpertBookingMetrics(userId, requestBody);
             }
 
+            // Admin endpoint for recording expert payouts
+            if ("record_expert_payout".equals(requestBody.getFunction())) {
+                return handleRecordExpertPayout(userId, requestBody);
+            }
+
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -3226,6 +3231,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     /**
      * Get aggregate booking metrics for an expert.
      * Returns total bookings, revenue, and earnings with breakdown by type.
+     * Uses Firestore aggregation queries (count, sum) for efficiency.
      * Supports date range filtering for different time periods.
      */
     private String handleGetExpertBookingMetrics(String expertId, RequestBody requestBody) throws Exception {
@@ -3237,120 +3243,131 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID required"));
         }
 
-        // Parse date range from request
+        // Parse date range from request (REQUIRED - no more "all time")
         Long startDateMillis = requestBody.getStartDate();
         Long endDateMillis = requestBody.getEndDate();
         String bookingType = requestBody.getBookingType(); // "all", "scheduled", "onDemand", "product"
 
-        com.google.cloud.Timestamp startTs = startDateMillis != null
-                ? com.google.cloud.Timestamp.ofTimeMicroseconds(startDateMillis * 1000)
-                : null;
-        com.google.cloud.Timestamp endTs = endDateMillis != null
-                ? com.google.cloud.Timestamp.ofTimeMicroseconds(endDateMillis * 1000)
-                : null;
+        if (startDateMillis == null || endDateMillis == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Date range is required"));
+        }
+
+        com.google.cloud.Timestamp startTs = com.google.cloud.Timestamp.ofTimeMicroseconds(startDateMillis * 1000);
+        com.google.cloud.Timestamp endTs = com.google.cloud.Timestamp.ofTimeMicroseconds(endDateMillis * 1000);
 
         LoggingService.info("metrics_date_range", Map.of(
-            "startDate", startTs != null ? startTs.toString() : "null",
-            "endDate", endTs != null ? endTs.toString() : "null",
+            "startDate", startTs.toString(),
+            "endDate", endTs.toString(),
             "bookingType", bookingType != null ? bookingType : "all"
         ));
 
-        // Initialize counters
-        int totalBookings = 0;
-        double totalRevenue = 0.0;
-        double totalEarnings = 0.0;
-        int scheduledCount = 0;
-        int onDemandCount = 0;
-        int productCount = 0;
         String currency = "INR"; // Default currency
 
         try {
-            // Query orders for this expert using collection group
+            // Build base query with expert_id and date filters
             Query baseQuery = this.db.collectionGroup("orders")
-                    .whereEqualTo("expert_id", expertId);
+                    .whereEqualTo("expert_id", expertId)
+                    .whereGreaterThanOrEqualTo("created_at", startTs)
+                    .whereLessThanOrEqualTo("created_at", endTs);
 
-            // Execute query and process results
-            // Note: Firestore doesn't support aggregate queries with multiple conditions
-            // so we need to fetch documents and calculate in memory
-            QuerySnapshot snapshot = baseQuery.get().get();
+            // --- COUNT QUERIES (all orders regardless of status) ---
 
-            for (QueryDocumentSnapshot doc : snapshot.getDocuments()) {
-                com.google.cloud.Timestamp createdAt = doc.getTimestamp("created_at");
-                String orderType = doc.getString("type");
-                String orderStatus = doc.getString("status");
-                Double amount = doc.getDouble("amount");
-                Double cost = doc.getDouble("cost");
-                Double expertEarningsVal = doc.getDouble("expert_earnings");
-                String orderCurrency = doc.getString("currency");
+            // On-demand count
+            long onDemandCount = 0;
+            if (bookingType == null || bookingType.equals("all") || bookingType.equals("onDemand")) {
+                Query onDemandQuery = baseQuery.whereEqualTo("type", "ON_DEMAND_CONSULTATION");
+                AggregateQuerySnapshot onDemandSnapshot = onDemandQuery.count().get().get();
+                onDemandCount = onDemandSnapshot.getCount();
+            }
 
-                // Apply date filter
-                if (startTs != null && createdAt != null && createdAt.compareTo(startTs) < 0) {
-                    continue;
+            // Product count
+            long productCount = 0;
+            if (bookingType == null || bookingType.equals("all") || bookingType.equals("product")) {
+                Query productQuery = baseQuery.whereEqualTo("type", "PRODUCT");
+                AggregateQuerySnapshot productSnapshot = productQuery.count().get().get();
+                productCount = productSnapshot.getCount();
+            }
+
+            // Scheduled count (CONSULTATION type)
+            long scheduledCount = 0;
+            if (bookingType == null || bookingType.equals("all") || bookingType.equals("scheduled")) {
+                Query scheduledQuery = baseQuery.whereEqualTo("type", "CONSULTATION");
+                AggregateQuerySnapshot scheduledSnapshot = scheduledQuery.count().get().get();
+                scheduledCount = scheduledSnapshot.getCount();
+            }
+
+            // Calculate total based on filter
+            long totalBookings;
+            if (bookingType == null || bookingType.equals("all")) {
+                totalBookings = onDemandCount + productCount + scheduledCount;
+            } else if (bookingType.equals("onDemand")) {
+                totalBookings = onDemandCount;
+            } else if (bookingType.equals("product")) {
+                totalBookings = productCount;
+            } else {
+                totalBookings = scheduledCount;
+            }
+
+            // --- REVENUE/EARNINGS QUERIES (only COMPLETED orders) ---
+
+            double totalRevenue = 0.0;
+            double totalEarnings = 0.0;
+
+            // On-demand completed: sum cost and expert_earnings
+            if (bookingType == null || bookingType.equals("all") || bookingType.equals("onDemand")) {
+                Query onDemandCompletedQuery = baseQuery
+                        .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                        .whereEqualTo("status", "COMPLETED");
+                AggregateQuerySnapshot onDemandSums = onDemandCompletedQuery
+                        .aggregate(sum("cost"), sum("expert_earnings"))
+                        .get().get();
+                Double onDemandRevenue = onDemandSums.getDouble(sum("cost"));
+                Double onDemandEarnings = onDemandSums.getDouble(sum("expert_earnings"));
+                if (onDemandRevenue != null) totalRevenue += onDemandRevenue;
+                if (onDemandEarnings != null) totalEarnings += onDemandEarnings;
+            }
+
+            // Scheduled completed (CONSULTATION type): sum amount and expert_earnings
+            if (bookingType == null || bookingType.equals("all") || bookingType.equals("scheduled")) {
+                Query scheduledCompletedQuery = baseQuery
+                        .whereEqualTo("type", "CONSULTATION")
+                        .whereEqualTo("status", "paid");
+                AggregateQuerySnapshot scheduledSums = scheduledCompletedQuery
+                        .aggregate(sum("amount"), sum("expert_earnings"))
+                        .get().get();
+                Double scheduledRevenue = scheduledSums.getDouble(sum("amount"));
+                Double scheduledEarnings = scheduledSums.getDouble(sum("expert_earnings"));
+                if (scheduledRevenue != null) totalRevenue += scheduledRevenue;
+                // For scheduled, if expert_earnings not set, use amount (no platform fee on scheduled)
+                if (scheduledEarnings != null) {
+                    totalEarnings += scheduledEarnings;
+                } else if (scheduledRevenue != null) {
+                    totalEarnings += scheduledRevenue;
                 }
-                if (endTs != null && createdAt != null && createdAt.compareTo(endTs) > 0) {
-                    continue;
-                }
+            }
 
-                // Determine booking type
-                boolean isOnDemand = "ON_DEMAND_CONSULTATION".equals(orderType);
-                boolean isProduct = "PRODUCT".equals(orderType);
-                boolean isScheduled = !isOnDemand && !isProduct; // Default to scheduled
-
-                // Apply type filter
-                if (bookingType != null && !bookingType.equals("all")) {
-                    if (bookingType.equals("scheduled") && !isScheduled) continue;
-                    if (bookingType.equals("onDemand") && !isOnDemand) continue;
-                    if (bookingType.equals("product") && !isProduct) continue;
-                }
-
-                // Only count completed/paid orders for revenue
-                boolean isPaid = "paid".equalsIgnoreCase(orderStatus) ||
-                               "COMPLETED".equalsIgnoreCase(orderStatus) ||
-                               doc.get("paymentReceivedAt") != null;
-
-                // Count booking
-                totalBookings++;
-
-                // Count by type
-                if (isOnDemand) {
-                    onDemandCount++;
-                } else if (isProduct) {
-                    productCount++;
-                } else {
-                    scheduledCount++;
-                }
-
-                // Add to revenue if paid
-                if (isPaid) {
-                    if (isOnDemand && cost != null) {
-                        totalRevenue += cost;
-                    } else if (amount != null) {
-                        totalRevenue += amount;
-                    }
-
-                    // Add expert earnings
-                    if (expertEarningsVal != null) {
-                        totalEarnings += expertEarningsVal;
-                    } else if (isOnDemand && cost != null) {
-                        // For on-demand, estimate earnings if not explicitly set
-                        // Typically 90% (10% platform fee)
-                        totalEarnings += cost * 0.90;
-                    } else if (amount != null) {
-                        // For scheduled, use amount as earnings (fees handled separately)
-                        totalEarnings += amount;
-                    }
-                }
-
-                // Get currency from first order
-                if (orderCurrency != null && currency.equals("INR")) {
-                    currency = orderCurrency;
+            // Product completed: sum amount
+            if (bookingType == null || bookingType.equals("all") || bookingType.equals("product")) {
+                Query productCompletedQuery = baseQuery
+                        .whereEqualTo("type", "PRODUCT")
+                        .whereEqualTo("status", "paid");
+                AggregateQuerySnapshot productSums = productCompletedQuery
+                        .aggregate(sum("amount"))
+                        .get().get();
+                Double productRevenue = productSums.getDouble(sum("amount"));
+                if (productRevenue != null) {
+                    totalRevenue += productRevenue;
+                    totalEarnings += productRevenue; // Products have no platform fee
                 }
             }
 
             LoggingService.info("metrics_calculated", Map.of(
                 "totalBookings", totalBookings,
                 "totalRevenue", totalRevenue,
-                "totalEarnings", totalEarnings
+                "totalEarnings", totalEarnings,
+                "onDemandCount", onDemandCount,
+                "scheduledCount", scheduledCount,
+                "productCount", productCount
             ));
 
             Map<String, Object> response = new HashMap<>();
@@ -3370,6 +3387,95 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of(
                 "success", false,
                 "errorMessage", "Failed to calculate metrics: " + e.getMessage()
+            ));
+        }
+    }
+
+    /**
+     * Admin endpoint to record a payout to an expert.
+     * Deducts from expert_earnings_balances and creates a record in payouts subcollection.
+     *
+     * Required params:
+     * - expertId: The expert's user ID
+     * - amount: The payout amount
+     * - currency: Currency code (default: INR)
+     * - method: Payout method (BANK_TRANSFER, UPI, etc.)
+     * - reference: Transaction reference ID
+     * - notes: Optional notes
+     */
+    private String handleRecordExpertPayout(String adminUserId, RequestBody requestBody) {
+        LoggingService.setFunction("record_expert_payout");
+        LoggingService.info("record_expert_payout_started");
+
+        try {
+            // Verify admin access
+            if (!isAdmin(adminUserId)) {
+                LoggingService.warn("record_expert_payout_unauthorized", Map.of("userId", adminUserId));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
+            }
+
+            // Get required parameters
+            String expertId = requestBody.getExpertId();
+            Double amount = requestBody.getAmount();
+            String currency = requestBody.getCurrency();
+            String method = requestBody.getPayoutMethod();
+            String reference = requestBody.getPayoutReference();
+            String notes = requestBody.getNotes();
+
+            // Validate required fields
+            if (expertId == null || expertId.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
+            }
+            if (amount == null || amount <= 0) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Valid amount is required"));
+            }
+            if (method == null || method.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Payout method is required"));
+            }
+            if (reference == null || reference.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Payout reference is required"));
+            }
+
+            // Default currency
+            if (currency == null || currency.isEmpty()) {
+                currency = "INR";
+            }
+
+            LoggingService.setExpertId(expertId);
+            LoggingService.info("record_expert_payout_processing", Map.of(
+                "amount", amount,
+                "currency", currency,
+                "method", method
+            ));
+
+            // Record the payout
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            String payoutId = earningsService.recordPayout(expertId, currency, amount, method, reference, notes);
+
+            // Get updated balance
+            Double newBalance = earningsService.getExpertEarningsBalance(expertId, currency);
+
+            LoggingService.info("record_expert_payout_success", Map.of(
+                "payoutId", payoutId,
+                "newBalance", newBalance
+            ));
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("payoutId", payoutId);
+            response.put("newBalance", newBalance);
+            response.put("currency", currency);
+
+            return gson.toJson(response);
+
+        } catch (IllegalArgumentException e) {
+            LoggingService.warn("record_expert_payout_validation_error", Map.of("error", e.getMessage()));
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        } catch (Exception e) {
+            LoggingService.error("record_expert_payout_error", e);
+            return gson.toJson(Map.of(
+                "success", false,
+                "errorMessage", "Failed to record payout: " + e.getMessage()
             ));
         }
     }
