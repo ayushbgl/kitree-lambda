@@ -756,11 +756,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             if ("cancel_subscription".equals(requestBody.getFunction())) {
                 try {
                     // TODO: Test authorization and add caching
-                    if (!(checkIfOrderOwnedByUser(requestBody.getRazorpaySubscriptionId(), userId) || isAdmin(userId))) {
+                    String gatewaySubscriptionId = requestBody.getGatewaySubscriptionId();
+                    if (!(checkIfOrderOwnedByUser(gatewaySubscriptionId, userId) || isAdmin(userId))) {
                         return "Not authorized";
                     }
-                    razorpay.cancel(requestBody.getRazorpaySubscriptionId());
-                    cancelSubscriptionInDb(userId, requestBody.getRazorpaySubscriptionId());
+                    razorpay.cancel(gatewaySubscriptionId);
+                    cancelSubscriptionInDb(userId, gatewaySubscriptionId);
                 } catch (RazorpayException e) {
                     throw new HandlerException(ErrorCode.CANCELLATION_FAILED_SERVER_ERROR);
                 }
@@ -2616,8 +2617,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
         }
         
-        // Create Razorpay order
-        String razorpayOrderId = razorpay.createOrder(amount, CustomerCipher.encryptCaesarCipher(userId));
+        // Create payment gateway order
+        String gatewayOrderId = razorpay.createOrder(amount, CustomerCipher.encryptCaesarCipher(userId));
 
         // Create PENDING transaction directly in expert_wallets transactions
         // This shows immediately in passbook for better UX
@@ -2628,7 +2629,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         pendingTransaction.setAmount(amount);
         pendingTransaction.setCurrency(currency);
         pendingTransaction.setStatus("PENDING");
-        pendingTransaction.setRazorpayOrderId(razorpayOrderId);
+        pendingTransaction.setGatewayOrderId(gatewayOrderId);
         pendingTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
         if (bonus > 0) {
             pendingTransaction.setBonusAmount(bonus);
@@ -2638,8 +2639,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
-        response.put("orderId", razorpayOrderId);
-        response.put("razorpayKey", razorpay.getRazorpayKey());
+        response.put("gatewayOrderId", gatewayOrderId);
+        response.put("gatewayKey", razorpay.getRazorpayKey());
+        response.put("gatewayType", "RAZORPAY");
         response.put("amount", amount);
         response.put("bonus", bonus);
         response.put("currency", currency);
@@ -2649,19 +2651,19 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     /**
-     * Verify Razorpay payment and update wallet balance.
+     * Verify payment gateway payment and update wallet balance.
      * Step 2 of the two-step recharge process.
      *
      * Finds the PENDING transaction created in step 1, updates it to COMPLETED,
      * and credits the wallet balance.
      */
     private String handleVerifyWalletRecharge(String userId, RequestBody requestBody) throws Exception {
-        String razorpayOrderId = requestBody.getRazorpayOrderId();
-        String razorpayPaymentId = requestBody.getRazorpayPaymentId();
-        String razorpaySignature = requestBody.getRazorpaySignature();
+        String gatewayOrderId = requestBody.getGatewayOrderId();
+        String gatewayPaymentId = requestBody.getGatewayPaymentId();
+        String gatewaySignature = requestBody.getGatewaySignature();
         String expertId = requestBody.getExpertId();
 
-        if (razorpayOrderId == null || razorpayPaymentId == null || razorpaySignature == null) {
+        if (gatewayOrderId == null || gatewayPaymentId == null || gatewaySignature == null) {
             return gson.toJson(Map.of("success", false, "errorMessage", "Missing payment details"));
         }
 
@@ -2670,7 +2672,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
 
         // Verify payment signature
-        if (!razorpay.verifyPayment(razorpayOrderId, razorpayPaymentId, razorpaySignature)) {
+        if (!razorpay.verifyPayment(gatewayOrderId, gatewayPaymentId, gatewaySignature)) {
             return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed"));
         }
 

@@ -503,8 +503,8 @@ public class WalletService {
         if (walletTransaction.getPaymentId() != null) {
             transactionData.put("payment_id", walletTransaction.getPaymentId());
         }
-        if (walletTransaction.getRazorpayOrderId() != null) {
-            transactionData.put("razorpay_order_id", walletTransaction.getRazorpayOrderId());
+        if (walletTransaction.getGatewayOrderId() != null) {
+            transactionData.put("gateway_order_id", walletTransaction.getGatewayOrderId());
         }
         if (walletTransaction.getOrderId() != null) {
             transactionData.put("order_id", walletTransaction.getOrderId());
