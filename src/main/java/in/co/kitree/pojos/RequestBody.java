@@ -8,10 +8,12 @@ public class RequestBody {
     private String serviceName; // To buy a service
     private String base64Image;
     private String planName; // To buy a service
-    private String razorpaySubscriptionId; // To verify payment
-    private String razorpayOrderId; // To verify payment
-    private String razorpayPaymentId; // To verify payment
-    private String razorpaySignature; // To verify payment
+
+    // Payment gateway fields (gateway-agnostic)
+    private String gatewayOrderId; // Payment gateway's order ID (for verification)
+    private String gatewayPaymentId; // Payment gateway's payment ID
+    private String gatewaySignature; // Payment gateway's signature for verification
+    private String gatewaySubscriptionId; // Payment gateway's subscription ID
     private String adminSecret;
     private String adminUid;
     private String certificateHolderName;
@@ -81,6 +83,7 @@ public class RequestBody {
     private String currency; // Currency for wallet operations (e.g., "INR", "USD")
     private String consultationType; // "audio", "video", or "chat" for on-demand consultations
     private Double additionalAmount; // For mid-consultation recharge to extend duration
+    private Boolean useWalletBalance; // Whether to use wallet balance for checkout payment
 
     // Booking metrics fields
     private Long startDate; // Start date in milliseconds for metrics filtering
@@ -206,28 +209,37 @@ public class RequestBody {
         this.serviceName = serviceName;
     }
 
-    public String getRazorpayOrderId() {
-        return razorpayOrderId;
+    // Payment gateway getters/setters
+    public String getGatewayOrderId() {
+        return gatewayOrderId;
     }
 
-    public void setRazorpayOrderId(String razorpayOrderId) {
-        this.razorpayOrderId = razorpayOrderId;
+    public void setGatewayOrderId(String gatewayOrderId) {
+        this.gatewayOrderId = gatewayOrderId;
     }
 
-    public String getRazorpayPaymentId() {
-        return razorpayPaymentId;
+    public String getGatewayPaymentId() {
+        return gatewayPaymentId;
     }
 
-    public void setRazorpayPaymentId(String razorpayPaymentId) {
-        this.razorpayPaymentId = razorpayPaymentId;
+    public void setGatewayPaymentId(String gatewayPaymentId) {
+        this.gatewayPaymentId = gatewayPaymentId;
     }
 
-    public String getRazorpaySignature() {
-        return razorpaySignature;
+    public String getGatewaySignature() {
+        return gatewaySignature;
     }
 
-    public void setRazorpaySignature(String razorpaySignature) {
-        this.razorpaySignature = razorpaySignature;
+    public void setGatewaySignature(String gatewaySignature) {
+        this.gatewaySignature = gatewaySignature;
+    }
+
+    public String getGatewaySubscriptionId() {
+        return gatewaySubscriptionId;
+    }
+
+    public void setGatewaySubscriptionId(String gatewaySubscriptionId) {
+        this.gatewaySubscriptionId = gatewaySubscriptionId;
     }
 
     public String getAdminSecret() {
@@ -244,14 +256,6 @@ public class RequestBody {
 
     public void setAdminUid(String adminUid) {
         this.adminUid = adminUid;
-    }
-
-    public String getRazorpaySubscriptionId() {
-        return razorpaySubscriptionId;
-    }
-
-    public void setRazorpaySubscriptionId(String razorpaySubscriptionId) {
-        this.razorpaySubscriptionId = razorpaySubscriptionId;
     }
 
     public RazorpayWebhookBody getRazorpayWebhookBody() {
@@ -549,6 +553,14 @@ public class RequestBody {
 
     public void setAdditionalAmount(Double additionalAmount) {
         this.additionalAmount = additionalAmount;
+    }
+
+    public Boolean getUseWalletBalance() {
+        return useWalletBalance;
+    }
+
+    public void setUseWalletBalance(Boolean useWalletBalance) {
+        this.useWalletBalance = useWalletBalance;
     }
 
     // Booking metrics getters/setters

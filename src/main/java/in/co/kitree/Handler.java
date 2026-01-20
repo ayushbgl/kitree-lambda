@@ -363,28 +363,172 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     }
                 }
 
-                Map<String, String> response = new HashMap<>();
+                // Wallet Payment Logic
+                Double finalAmount = servicePlan.getAmount();
+                String currency = servicePlan.getCurrency();
+                Double walletDeduction = 0.0;
+                Double gatewayAmount = finalAmount;
+                String paymentMethod = "GATEWAY";
+
+                if (Boolean.TRUE.equals(requestBody.getUseWalletBalance()) && finalAmount > 0) {
+                    WalletService walletService = new WalletService(this.db);
+                    Double walletBalance = walletService.getExpertWalletBalance(userId, requestBody.getExpertId(), currency);
+
+                    if (walletBalance > 0) {
+                        walletDeduction = Math.min(walletBalance, finalAmount);
+                        gatewayAmount = finalAmount - walletDeduction;
+
+                        // Round to 2 decimal places
+                        walletDeduction = Math.round(walletDeduction * 100.0) / 100.0;
+                        gatewayAmount = Math.round(gatewayAmount * 100.0) / 100.0;
+
+                        if (gatewayAmount <= 0) {
+                            paymentMethod = "WALLET_ONLY";
+                        } else {
+                            paymentMethod = "WALLET_AND_GATEWAY";
+                        }
+                    }
+                }
+
+                // Store payment breakdown in order details
+                orderDetails.put("wallet_deduction", walletDeduction);
+                orderDetails.put("gateway_amount", gatewayAmount);
+                orderDetails.put("payment_method", paymentMethod);
+
+                // Handle full wallet payment (no Razorpay needed)
+                if ("WALLET_ONLY".equals(paymentMethod)) {
+                    String orderId = UUID.randomUUID().toString();
+                    final Double finalWalletDeduction = walletDeduction;
+                    final String finalOrderId = orderId;
+                    final String finalCurrency = currency;
+                    final String finalExpertId = requestBody.getExpertId();
+
+                    WalletService walletService = new WalletService(this.db);
+                    final String[] walletTransactionIdHolder = new String[1];
+
+                    // Execute atomically in a transaction
+                    this.db.runTransaction(transaction -> {
+                        // 1. Read wallet document
+                        DocumentReference walletRef = db.collection("users").document(userId)
+                                .collection("expert_wallets").document(finalExpertId);
+                        DocumentSnapshot walletDoc = transaction.get(walletRef).get();
+
+                        // 2. Validate balance (security check - never trust client)
+                        Map<String, Double> balances = new HashMap<>();
+                        if (walletDoc.exists() && walletDoc.contains("balances")) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> existingBalances = (Map<String, Object>) walletDoc.get("balances");
+                            if (existingBalances != null) {
+                                for (Map.Entry<String, Object> entry : existingBalances.entrySet()) {
+                                    if (entry.getValue() instanceof Number) {
+                                        balances.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                                    }
+                                }
+                            }
+                        }
+                        Double currentBalance = balances.getOrDefault(finalCurrency, 0.0);
+
+                        if (currentBalance < finalWalletDeduction) {
+                            throw new IllegalStateException("Insufficient wallet balance");
+                        }
+
+                        // 3. Deduct from wallet
+                        walletService.updateExpertWalletBalanceInTransactionWithSnapshot(
+                                transaction, walletRef, walletDoc, finalCurrency, -finalWalletDeduction
+                        );
+
+                        // 4. Create wallet transaction record
+                        WalletTransaction walletTx = new WalletTransaction();
+                        walletTx.setType("ORDER_PAYMENT");
+                        walletTx.setSource("WALLET");
+                        walletTx.setAmount(-finalWalletDeduction);
+                        walletTx.setCurrency(finalCurrency);
+                        walletTx.setOrderId(finalOrderId);
+                        walletTx.setStatus("COMPLETED");
+                        walletTx.setCreatedAt(com.google.cloud.Timestamp.now());
+                        walletTx.setCategory(servicePlan.getCategory());
+
+                        String txId = walletService.createExpertWalletTransactionInTransaction(
+                                transaction, userId, finalExpertId, walletTx
+                        );
+                        walletTransactionIdHolder[0] = txId;
+
+                        // 5. Create order document with payment already received
+                        orderDetails.put("order_id", finalOrderId);
+                        orderDetails.put("wallet_transaction_id", txId);
+                        // No gateway_type for wallet-only payments (wallet is not a gateway)
+                        orderDetails.put("payment_received_at", com.google.cloud.Timestamp.now());
+
+                        DocumentReference orderRef = db.collection("users").document(userId)
+                                .collection("orders").document(finalOrderId);
+                        transaction.set(orderRef, orderDetails);
+
+                        return null;
+                    }).get();
+
+                    // Award referrals/coupons after successful transaction
+                    incrementCouponUsageCount(userId, orderId);
+                    rewardReferrer(userId, orderId);
+
+                    // Return success response
+                    Map<String, Object> response = new HashMap<>();
+                    response.put("orderId", orderId);
+                    response.put("walletDeduction", walletDeduction);
+                    response.put("walletTransactionId", walletTransactionIdHolder[0]);
+                    response.put("gatewayAmount", 0.0);
+                    response.put("totalAmount", finalAmount);
+                    response.put("paymentMethod", "WALLET_ONLY");
+                    response.put("success", true);
+                    return this.gson.toJson(response);
+                }
+
+                // Store pending wallet deduction for partial payments
+                if (walletDeduction > 0) {
+                    orderDetails.put("pending_wallet_deduction", walletDeduction);
+                }
+
+                Map<String, Object> response = new HashMap<>();
                 if (servicePlan.getCurrency().equals("INR")) {
                     if (servicePlan.isSubscription()) {
-                        String subscriptionId = razorpay.createSubscription(servicePlan.getRazorpayId(), CustomerCipher.encryptCaesarCipher(userId));
+                        // Subscriptions don't support wallet partial payment
+                        String gatewaySubscriptionId = razorpay.createSubscription(servicePlan.getRazorpayId(), CustomerCipher.encryptCaesarCipher(userId));
 
+                        // Generate our own order ID (UUID) instead of using gateway's ID
+                        String orderId = UUID.randomUUID().toString();
+
+                        orderDetails.put("order_id", orderId);
+                        orderDetails.put("gateway_subscription_id", gatewaySubscriptionId);
                         orderDetails.put("subscription", true);
-                        orderDetails.put("payment_gateway", "RAZORPAY");
-                        createOrderInDB(userId, subscriptionId, orderDetails);
-
-                        response.put("subscription_id", subscriptionId);
-                        response.put("payment_gateway", "RAZORPAY");
-                        response.put("razorpay_key", razorpay.getRazorpayKey());
-                    } else {
-                        String orderId = razorpay.createOrder(servicePlan.getAmount(), CustomerCipher.encryptCaesarCipher(userId));
-
-                        orderDetails.put("subscription", false);
-                        orderDetails.put("payment_gateway", "RAZORPAY");
+                        orderDetails.put("gateway_type", "RAZORPAY");
                         createOrderInDB(userId, orderId, orderDetails);
 
-                        response.put("order_id", orderId);
-                        response.put("payment_gateway", "RAZORPAY");
-                        response.put("razorpay_key", razorpay.getRazorpayKey());
+                        response.put("orderId", orderId);
+                        response.put("gatewaySubscriptionId", gatewaySubscriptionId);
+                        response.put("gatewayType", "RAZORPAY");
+                        response.put("gatewayKey", razorpay.getRazorpayKey());
+                    } else {
+                        // Use gatewayAmount (which accounts for wallet deduction) instead of full amount
+                        String gatewayOrderId = razorpay.createOrder(gatewayAmount, CustomerCipher.encryptCaesarCipher(userId));
+
+                        // Generate our own order ID (UUID) instead of using gateway's ID
+                        String orderId = UUID.randomUUID().toString();
+
+                        orderDetails.put("order_id", orderId);
+                        orderDetails.put("gateway_order_id", gatewayOrderId);
+                        orderDetails.put("subscription", false);
+                        orderDetails.put("gateway_type", "RAZORPAY");
+                        createOrderInDB(userId, orderId, orderDetails);
+
+                        response.put("orderId", orderId);
+                        response.put("gatewayOrderId", gatewayOrderId);
+                        response.put("gatewayType", "RAZORPAY");
+                        response.put("gatewayKey", razorpay.getRazorpayKey());
+
+                        // Include wallet payment breakdown in response
+                        response.put("walletDeduction", walletDeduction);
+                        response.put("gatewayAmount", gatewayAmount);
+                        response.put("totalAmount", finalAmount);
+                        response.put("paymentMethod", paymentMethod);
                     }
                 } else {
 //                    Map<String, String> paymentIntent = stripeService.createPaymentIntent(servicePlan.getAmount(), servicePlan.getCurrency());
@@ -392,11 +536,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 //                    String orderId = UUID.randomUUID().toString();
 //                    orderDetails.put("orderId", orderId);
 //                    orderDetails.put("subscription", false);
-//                    orderDetails.put("payment_gateway", "STRIPE");
+//                    orderDetails.put("gateway_type", "STRIPE");
 //                    createOrderInDB(userId, orderId, orderDetails);
 //
 //                    response.put("payment_intent_client_secret", paymentIntent.get("paymentIntent"));
-//                    response.put("payment_gateway", "STRIPE");
+//                    response.put("gatewayType", "STRIPE");
                 }
 
                 return this.gson.toJson(response);
@@ -474,36 +618,49 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
 
             if ("verify_payment".equals(requestBody.getFunction())) {
+                // Use generic getters that support both old (razorpay*) and new (gateway*) field names
+                String gatewaySubscriptionId = requestBody.getGatewaySubscriptionId();
+                String gatewayOrderId = requestBody.getGatewayOrderId();
+                String gatewayPaymentId = requestBody.getGatewayPaymentId();
+                String gatewaySignature = requestBody.getGatewaySignature();
 
-                if (requestBody.getRazorpaySubscriptionId() != null) { // TODO: No action here as webhooks will verify and update the status in DB
-                    if (razorpay.verifySubscription(requestBody.getRazorpaySubscriptionId())) {
-//                        verifyOrderInDB(userId, requestBody.getRazorpaySubscriptionId());
-                        incrementCouponUsageCount(userId, requestBody.getRazorpaySubscriptionId());
-                        rewardReferrer(userId, requestBody.getRazorpaySubscriptionId());
+                // For Firestore lookup, prefer orderId if provided; otherwise fall back to gateway ID (backward compatibility)
+                String firestoreOrderId = requestBody.getOrderId() != null ? requestBody.getOrderId() : gatewayOrderId;
+                String firestoreSubscriptionOrderId = requestBody.getOrderId() != null ? requestBody.getOrderId() : gatewaySubscriptionId;
+
+                if (gatewaySubscriptionId != null) { // TODO: No action here as webhooks will verify and update the status in DB
+                    if (razorpay.verifySubscription(gatewaySubscriptionId)) {
+//                        verifyOrderInDB(userId, firestoreSubscriptionOrderId);
+                        incrementCouponUsageCount(userId, firestoreSubscriptionOrderId);
+                        rewardReferrer(userId, firestoreSubscriptionOrderId);
                         return "Verified";
                     }
-                } else if (requestBody.getRazorpayOrderId() != null) {
-                    if (razorpay.verifyPayment(requestBody.getRazorpayOrderId(), requestBody.getRazorpayPaymentId(), requestBody.getRazorpaySignature())) {
+                } else if (gatewayOrderId != null) {
+                    if (razorpay.verifyPayment(gatewayOrderId, gatewayPaymentId, gatewaySignature)) {
 
                         if ("gift".equals(requestBody.getType())) {
                             // TODO: Shall we get the expert and plan id from frontend or not? Also, add validations
 
                             String expertId = requestBody.getExpertId();
                             String webinarId = requestBody.getPlanId();
-                            String orderId = requestBody.getOrderId(); // Order ID of the webinar
-                            String giftOrderId = requestBody.getRazorpayOrderId(); // Order ID of the gift within the webinar
-                            addWebinarGiftDetails(userId, expertId, webinarId, orderId, giftOrderId);
+                            String webinarOrderId = requestBody.getOrderId(); // Order ID of the webinar
+                            String giftOrderId = gatewayOrderId; // Gateway order ID of the gift within the webinar
+                            addWebinarGiftDetails(userId, expertId, webinarId, webinarOrderId, giftOrderId);
                             return "Verified";
                         }
-                        verifyOrderInDB(userId, requestBody.getRazorpayOrderId());
+
+                        // Process pending wallet deduction for partial wallet payments
+                        processWalletDeductionOnPaymentVerification(userId, firestoreOrderId);
+
+                        verifyOrderInDB(userId, firestoreOrderId);
                         NotificationService.sendNotification("f0JuQoCUQQ68I-tHqlkMxm:APA91bHZqzyL-xZG_g4qXhZyT9SP8jSh5hRJ8_21Ux9YPvcqzC7wi_tC9eKD6uZi52BndchctrXsINOmoo8A4OTn79oZkiwMeXPmcauVbgIXNEk_Qh7xFQc");
                         NotificationService.sendNotification("fdljkc67TkI6iH-obDwVHR:APA91bGrUdmUGsI-SudlhQnrGasRTgiosL46ISzeudbcoXrzpNgz1Uu0y0c0WMZHtCt0ct5UwWN9kVFx3TJRuhTuxXjuay-6otAFO1uBaJNo8nz1VOAobbc");
                         NotificationService.sendNotification("eX4C_MX0Q8e2yzwheVUx7a:APA91bFWnho4d3Mbx8EpAgJMGHzOdNzCb3O2fl3DdC1Rx92cMYZDSKIRFx2A-pR20BFUiXGL3qZMu64uGNJYzxAjOx9KG7cr-D8EIvGsOGiKI3EPWFJrU2c");
 
                         // TODO: Make the referral Async, add error handling; make it a transaction with order verification
-                        incrementCouponUsageCount(userId, requestBody.getRazorpayOrderId());
-                        rewardReferrer(userId, requestBody.getRazorpayOrderId());
-//                        fulfillDigitalOrders(userId, requestBody.getRazorpayOrderId());
+                        incrementCouponUsageCount(userId, firestoreOrderId);
+                        rewardReferrer(userId, firestoreOrderId);
+//                        fulfillDigitalOrders(userId, firestoreOrderId);
                         return "Verified";
                     }
                 } else {
@@ -1388,6 +1545,130 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private void verifyOrderInDB(String userId, String orderId) throws ExecutionException, InterruptedException {
         ApiFuture<WriteResult> future = this.db.collection("users").document(userId).collection("orders").document(orderId).update("paymentReceivedAt", new Timestamp(System.currentTimeMillis()));
         future.get();
+    }
+
+    /**
+     * Process pending wallet deduction when Razorpay payment is verified (for partial wallet payments).
+     * This method is idempotent - it checks if already processed before deducting.
+     */
+    private void processWalletDeductionOnPaymentVerification(String userId, String orderId) {
+        try {
+            // Read the order document to check for pending wallet deduction
+            DocumentSnapshot orderDoc = this.db.collection("users").document(userId)
+                    .collection("orders").document(orderId).get().get();
+
+            if (!orderDoc.exists()) {
+                System.out.println("Order not found for wallet deduction: " + orderId);
+                return;
+            }
+
+            // Check if there's a pending wallet deduction
+            Double pendingWalletDeduction = orderDoc.getDouble("pending_wallet_deduction");
+            if (pendingWalletDeduction == null || pendingWalletDeduction <= 0) {
+                // No wallet deduction pending
+                return;
+            }
+
+            // Check idempotency - if wallet_transaction_id exists, already processed
+            if (orderDoc.getString("wallet_transaction_id") != null) {
+                System.out.println("Wallet deduction already processed for order: " + orderId);
+                return;
+            }
+
+            String expertId = orderDoc.getString("expert_id");
+            String currency = orderDoc.getString("currency");
+            String category = orderDoc.getString("category");
+
+            if (expertId == null || currency == null) {
+                System.out.println("Missing expertId or currency in order: " + orderId);
+                return;
+            }
+
+            final Double finalWalletDeduction = pendingWalletDeduction;
+            final String finalExpertId = expertId;
+            final String finalCurrency = currency;
+            final String finalCategory = category;
+
+            WalletService walletService = new WalletService(this.db);
+
+            // Execute atomically in a transaction
+            this.db.runTransaction(transaction -> {
+                // 1. Read wallet document
+                DocumentReference walletRef = db.collection("users").document(userId)
+                        .collection("expert_wallets").document(finalExpertId);
+                DocumentSnapshot walletDoc = transaction.get(walletRef).get();
+
+                // 2. Re-read order document to check idempotency within transaction
+                DocumentReference orderRef = db.collection("users").document(userId)
+                        .collection("orders").document(orderId);
+                DocumentSnapshot orderDocTx = transaction.get(orderRef).get();
+
+                if (orderDocTx.getString("wallet_transaction_id") != null) {
+                    // Already processed, skip
+                    return null;
+                }
+
+                // 3. Get current wallet balance
+                Map<String, Double> balances = new HashMap<>();
+                if (walletDoc.exists() && walletDoc.contains("balances")) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> existingBalances = (Map<String, Object>) walletDoc.get("balances");
+                    if (existingBalances != null) {
+                        for (Map.Entry<String, Object> entry : existingBalances.entrySet()) {
+                            if (entry.getValue() instanceof Number) {
+                                balances.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                            }
+                        }
+                    }
+                }
+                Double currentBalance = balances.getOrDefault(finalCurrency, 0.0);
+
+                // If insufficient balance, deduct what's available (graceful degradation)
+                Double actualDeduction = Math.min(currentBalance, finalWalletDeduction);
+
+                if (actualDeduction > 0) {
+                    // 4. Deduct from wallet
+                    walletService.updateExpertWalletBalanceInTransactionWithSnapshot(
+                            transaction, walletRef, walletDoc, finalCurrency, -actualDeduction
+                    );
+
+                    // 5. Create wallet transaction record
+                    WalletTransaction walletTx = new WalletTransaction();
+                    walletTx.setType("ORDER_PAYMENT");
+                    walletTx.setSource("WALLET");
+                    walletTx.setAmount(-actualDeduction);
+                    walletTx.setCurrency(finalCurrency);
+                    walletTx.setOrderId(orderId);
+                    walletTx.setStatus("COMPLETED");
+                    walletTx.setCreatedAt(com.google.cloud.Timestamp.now());
+                    if (finalCategory != null) {
+                        walletTx.setCategory(finalCategory);
+                    }
+
+                    String txId = walletService.createExpertWalletTransactionInTransaction(
+                            transaction, userId, finalExpertId, walletTx
+                    );
+
+                    // 6. Update order with wallet transaction reference
+                    Map<String, Object> orderUpdates = new HashMap<>();
+                    orderUpdates.put("wallet_transaction_id", txId);
+                    orderUpdates.put("wallet_deduction", actualDeduction);
+                    transaction.update(orderRef, orderUpdates);
+                }
+
+                // 7. Remove pending flag
+                transaction.update(orderRef, "pending_wallet_deduction", FieldValue.delete());
+
+                return null;
+            }).get();
+
+            System.out.println("Wallet deduction processed for order: " + orderId + ", amount: " + finalWalletDeduction);
+
+        } catch (Exception e) {
+            // Log error but don't fail the payment verification
+            System.err.println("Error processing wallet deduction for order " + orderId + ": " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     private void updateSubscriptionDetails(String userId, JSONObject razorpayWebhookBody, String eventType) throws ExecutionException, InterruptedException {
