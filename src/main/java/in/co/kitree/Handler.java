@@ -1303,9 +1303,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
     }
 
-    private boolean checkIfOrderOwnedByUser(String razorpaySubscriptionId, String userId) {
+    private boolean checkIfOrderOwnedByUser(String orderId, String userId) {
         try {
-            this.db.collection("users").document(userId).collection("orders").document(razorpaySubscriptionId).get().get();
+            this.db.collection("users").document(userId).collection("orders").document(orderId).get().get();
             return true;
         } catch (Exception e) {
             return false;
@@ -2679,7 +2679,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         WalletService walletService = new WalletService(this.db);
 
         // Check if already completed (idempotency)
-        if (walletService.isRechargeOrderAlreadyCompleted(userId, expertId, razorpayOrderId)) {
+        if (walletService.isRechargeOrderAlreadyCompleted(userId, expertId, gatewayOrderId)) {
             String currency = WalletService.getDefaultCurrency();
             Double currentBalance = walletService.getExpertWalletBalance(userId, expertId, currency);
             return gson.toJson(Map.of(
@@ -2692,7 +2692,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
 
         // Find the PENDING transaction
-        Map<String, Object> pendingTx = walletService.findPendingRechargeByOrderId(userId, expertId, razorpayOrderId);
+        Map<String, Object> pendingTx = walletService.findPendingRechargeByOrderId(userId, expertId, gatewayOrderId);
         if (pendingTx == null) {
             return gson.toJson(Map.of("success", false, "errorMessage", "Recharge order not found or already processed"));
         }
@@ -2711,7 +2711,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
         // Complete the transaction - update status and credit balance
         Double newBalance = walletService.completeRechargeTransaction(
-            userId, expertId, transactionId, razorpayPaymentId, amount, bonus, currency
+            userId, expertId, transactionId, gatewayPaymentId, amount, bonus, currency
         );
 
         Map<String, Object> response = new HashMap<>();

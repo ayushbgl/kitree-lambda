@@ -554,16 +554,16 @@ public class WalletService {
      *
      * @param userId          The user's ID
      * @param expertId        The expert's ID
-     * @param razorpayOrderId The Razorpay order ID
+     * @param gatewayOrderId  The payment gateway order ID
      * @return Map containing transaction data and document ID, or null if not found
      */
-    public Map<String, Object> findPendingRechargeByOrderId(String userId, String expertId, String razorpayOrderId)
+    public Map<String, Object> findPendingRechargeByOrderId(String userId, String expertId, String gatewayOrderId)
             throws ExecutionException, InterruptedException {
         CollectionReference transactionsRef = db.collection("users").document(userId)
                 .collection("expert_wallets").document(expertId).collection("transactions");
 
         Query query = transactionsRef
-                .whereEqualTo("razorpay_order_id", razorpayOrderId)
+                .whereEqualTo("gateway_order_id", gatewayOrderId)
                 .whereEqualTo("status", "PENDING")
                 .limit(1);
 
@@ -660,16 +660,16 @@ public class WalletService {
      *
      * @param userId          The user's ID
      * @param expertId        The expert's ID
-     * @param razorpayOrderId The Razorpay order ID
+     * @param gatewayOrderId  The payment gateway order ID
      * @return true if a COMPLETED transaction exists for this order
      */
-    public boolean isRechargeOrderAlreadyCompleted(String userId, String expertId, String razorpayOrderId)
+    public boolean isRechargeOrderAlreadyCompleted(String userId, String expertId, String gatewayOrderId)
             throws ExecutionException, InterruptedException {
         CollectionReference transactionsRef = db.collection("users").document(userId)
                 .collection("expert_wallets").document(expertId).collection("transactions");
 
         Query query = transactionsRef
-                .whereEqualTo("razorpay_order_id", razorpayOrderId)
+                .whereEqualTo("gateway_order_id", gatewayOrderId)
                 .whereEqualTo("status", "COMPLETED")
                 .limit(1);
 
