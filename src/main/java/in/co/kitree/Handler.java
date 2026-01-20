@@ -618,54 +618,117 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
 
             if ("verify_payment".equals(requestBody.getFunction())) {
-                // Use generic getters that support both old (razorpay*) and new (gateway*) field names
+                // Use generic getters for gateway fields
                 String gatewaySubscriptionId = requestBody.getGatewaySubscriptionId();
                 String gatewayOrderId = requestBody.getGatewayOrderId();
                 String gatewayPaymentId = requestBody.getGatewayPaymentId();
                 String gatewaySignature = requestBody.getGatewaySignature();
+                String verificationType = requestBody.getType(); // "WALLET_RECHARGE", "gift", or null (default order)
 
-                // For Firestore lookup, prefer orderId if provided; otherwise fall back to gateway ID (backward compatibility)
-                String firestoreOrderId = requestBody.getOrderId() != null ? requestBody.getOrderId() : gatewayOrderId;
-                String firestoreSubscriptionOrderId = requestBody.getOrderId() != null ? requestBody.getOrderId() : gatewaySubscriptionId;
-
-                if (gatewaySubscriptionId != null) { // TODO: No action here as webhooks will verify and update the status in DB
+                // Handle subscription verification
+                if (gatewaySubscriptionId != null) {
                     if (razorpay.verifySubscription(gatewaySubscriptionId)) {
-//                        verifyOrderInDB(userId, firestoreSubscriptionOrderId);
+                        String firestoreSubscriptionOrderId = requestBody.getOrderId() != null ? requestBody.getOrderId() : gatewaySubscriptionId;
                         incrementCouponUsageCount(userId, firestoreSubscriptionOrderId);
                         rewardReferrer(userId, firestoreSubscriptionOrderId);
                         return "Verified";
                     }
-                } else if (gatewayOrderId != null) {
-                    if (razorpay.verifyPayment(gatewayOrderId, gatewayPaymentId, gatewaySignature)) {
-
-                        if ("gift".equals(requestBody.getType())) {
-                            // TODO: Shall we get the expert and plan id from frontend or not? Also, add validations
-
-                            String expertId = requestBody.getExpertId();
-                            String webinarId = requestBody.getPlanId();
-                            String webinarOrderId = requestBody.getOrderId(); // Order ID of the webinar
-                            String giftOrderId = gatewayOrderId; // Gateway order ID of the gift within the webinar
-                            addWebinarGiftDetails(userId, expertId, webinarId, webinarOrderId, giftOrderId);
-                            return "Verified";
-                        }
-
-                        // Process pending wallet deduction for partial wallet payments
-                        processWalletDeductionOnPaymentVerification(userId, firestoreOrderId);
-
-                        verifyOrderInDB(userId, firestoreOrderId);
-                        NotificationService.sendNotification("f0JuQoCUQQ68I-tHqlkMxm:APA91bHZqzyL-xZG_g4qXhZyT9SP8jSh5hRJ8_21Ux9YPvcqzC7wi_tC9eKD6uZi52BndchctrXsINOmoo8A4OTn79oZkiwMeXPmcauVbgIXNEk_Qh7xFQc");
-                        NotificationService.sendNotification("fdljkc67TkI6iH-obDwVHR:APA91bGrUdmUGsI-SudlhQnrGasRTgiosL46ISzeudbcoXrzpNgz1Uu0y0c0WMZHtCt0ct5UwWN9kVFx3TJRuhTuxXjuay-6otAFO1uBaJNo8nz1VOAobbc");
-                        NotificationService.sendNotification("eX4C_MX0Q8e2yzwheVUx7a:APA91bFWnho4d3Mbx8EpAgJMGHzOdNzCb3O2fl3DdC1Rx92cMYZDSKIRFx2A-pR20BFUiXGL3qZMu64uGNJYzxAjOx9KG7cr-D8EIvGsOGiKI3EPWFJrU2c");
-
-                        // TODO: Make the referral Async, add error handling; make it a transaction with order verification
-                        incrementCouponUsageCount(userId, firestoreOrderId);
-                        rewardReferrer(userId, firestoreOrderId);
-//                        fulfillDigitalOrders(userId, firestoreOrderId);
-                        return "Verified";
-                    }
-                } else {
-                    return "Can't verify!";
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Subscription verification failed"));
                 }
+
+                // Validate required fields for non-subscription payments
+                if (gatewayOrderId == null || gatewayPaymentId == null || gatewaySignature == null) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Missing payment details"));
+                }
+
+                // Verify Razorpay payment signature (common for all payment types)
+                if (!razorpay.verifyPayment(gatewayOrderId, gatewayPaymentId, gatewaySignature)) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed"));
+                }
+
+                // === WALLET RECHARGE ===
+                if ("WALLET_RECHARGE".equals(verificationType)) {
+                    String expertId = requestBody.getExpertId();
+                    if (expertId == null || expertId.isEmpty()) {
+                        return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required for wallet recharge"));
+                    }
+
+                    WalletService walletService = new WalletService(this.db);
+
+                    // Check if already completed (idempotency)
+                    if (walletService.isRechargeOrderAlreadyCompleted(userId, expertId, gatewayOrderId)) {
+                        String currency = WalletService.getDefaultCurrency();
+                        Double currentBalance = walletService.getExpertWalletBalance(userId, expertId, currency);
+                        return gson.toJson(Map.of(
+                            "success", true,
+                            "newBalance", currentBalance,
+                            "currency", currency,
+                            "expertId", expertId,
+                            "message", "Payment already processed"
+                        ));
+                    }
+
+                    // Find the PENDING transaction
+                    Map<String, Object> pendingTx = walletService.findPendingRechargeByOrderId(userId, expertId, gatewayOrderId);
+                    if (pendingTx == null) {
+                        return gson.toJson(Map.of("success", false, "errorMessage", "Recharge order not found or already processed"));
+                    }
+
+                    String transactionId = (String) pendingTx.get("_id");
+                    Double amount = pendingTx.get("amount") instanceof Number ? ((Number) pendingTx.get("amount")).doubleValue() : null;
+                    Double bonus = pendingTx.get("bonus_amount") instanceof Number ? ((Number) pendingTx.get("bonus_amount")).doubleValue() : 0.0;
+                    String currency = (String) pendingTx.get("currency");
+
+                    if (amount == null) {
+                        return gson.toJson(Map.of("success", false, "errorMessage", "Invalid transaction: amount is missing"));
+                    }
+                    if (currency == null) {
+                        currency = WalletService.getDefaultCurrency();
+                    }
+
+                    // Complete the transaction - update status and credit balance
+                    Double newBalance = walletService.completeRechargeTransaction(
+                        userId, expertId, transactionId, gatewayPaymentId, amount, bonus, currency
+                    );
+
+                    Map<String, Object> response = new HashMap<>();
+                    response.put("success", true);
+                    response.put("newBalance", newBalance);
+                    response.put("currency", currency);
+                    response.put("amountPaid", amount);
+                    response.put("expertId", expertId);
+                    if (bonus > 0) {
+                        response.put("bonusReceived", bonus);
+                    }
+                    return gson.toJson(response);
+                }
+
+                // === GIFT PAYMENT ===
+                if ("gift".equals(verificationType)) {
+                    String expertId = requestBody.getExpertId();
+                    String webinarId = requestBody.getPlanId();
+                    String webinarOrderId = requestBody.getOrderId();
+                    addWebinarGiftDetails(userId, expertId, webinarId, webinarOrderId, gatewayOrderId);
+                    return "Verified";
+                }
+
+                // === ORDER PAYMENT (default) ===
+                String firestoreOrderId = requestBody.getOrderId();
+                if (firestoreOrderId == null || firestoreOrderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
+                }
+
+                // Process pending wallet deduction for partial wallet payments
+                processWalletDeductionOnPaymentVerification(userId, firestoreOrderId);
+
+                verifyOrderInDB(userId, firestoreOrderId);
+                NotificationService.sendNotification("f0JuQoCUQQ68I-tHqlkMxm:APA91bHZqzyL-xZG_g4qXhZyT9SP8jSh5hRJ8_21Ux9YPvcqzC7wi_tC9eKD6uZi52BndchctrXsINOmoo8A4OTn79oZkiwMeXPmcauVbgIXNEk_Qh7xFQc");
+                NotificationService.sendNotification("fdljkc67TkI6iH-obDwVHR:APA91bGrUdmUGsI-SudlhQnrGasRTgiosL46ISzeudbcoXrzpNgz1Uu0y0c0WMZHtCt0ct5UwWN9kVFx3TJRuhTuxXjuay-6otAFO1uBaJNo8nz1VOAobbc");
+                NotificationService.sendNotification("eX4C_MX0Q8e2yzwheVUx7a:APA91bFWnho4d3Mbx8EpAgJMGHzOdNzCb3O2fl3DdC1Rx92cMYZDSKIRFx2A-pR20BFUiXGL3qZMu64uGNJYzxAjOx9KG7cr-D8EIvGsOGiKI3EPWFJrU2c");
+
+                incrementCouponUsageCount(userId, firestoreOrderId);
+                rewardReferrer(userId, firestoreOrderId);
+                return "Verified";
             }
 
             if ("app_startup".equals(requestBody.getFunction())) {
@@ -1100,10 +1163,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
             if ("create_wallet_recharge_order".equals(requestBody.getFunction())) {
                 return handleCreateWalletRechargeOrder(userId, requestBody);
-            }
-
-            if ("verify_wallet_recharge".equals(requestBody.getFunction())) {
-                return handleVerifyWalletRecharge(userId, requestBody);
             }
 
             // =====================================================================
@@ -2646,83 +2705,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         response.put("bonus", bonus);
         response.put("currency", currency);
         response.put("expertId", expertId);
-
-        return gson.toJson(response);
-    }
-
-    /**
-     * Verify payment gateway payment and update wallet balance.
-     * Step 2 of the two-step recharge process.
-     *
-     * Finds the PENDING transaction created in step 1, updates it to COMPLETED,
-     * and credits the wallet balance.
-     */
-    private String handleVerifyWalletRecharge(String userId, RequestBody requestBody) throws Exception {
-        String gatewayOrderId = requestBody.getGatewayOrderId();
-        String gatewayPaymentId = requestBody.getGatewayPaymentId();
-        String gatewaySignature = requestBody.getGatewaySignature();
-        String expertId = requestBody.getExpertId();
-
-        if (gatewayOrderId == null || gatewayPaymentId == null || gatewaySignature == null) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Missing payment details"));
-        }
-
-        if (expertId == null || expertId.isEmpty()) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
-        }
-
-        // Verify payment signature
-        if (!razorpay.verifyPayment(gatewayOrderId, gatewayPaymentId, gatewaySignature)) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed"));
-        }
-
-        WalletService walletService = new WalletService(this.db);
-
-        // Check if already completed (idempotency)
-        if (walletService.isRechargeOrderAlreadyCompleted(userId, expertId, gatewayOrderId)) {
-            String currency = WalletService.getDefaultCurrency();
-            Double currentBalance = walletService.getExpertWalletBalance(userId, expertId, currency);
-            return gson.toJson(Map.of(
-                "success", true,
-                "newBalance", currentBalance,
-                "currency", currency,
-                "expertId", expertId,
-                "message", "Payment already processed"
-            ));
-        }
-
-        // Find the PENDING transaction
-        Map<String, Object> pendingTx = walletService.findPendingRechargeByOrderId(userId, expertId, gatewayOrderId);
-        if (pendingTx == null) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Recharge order not found or already processed"));
-        }
-
-        String transactionId = (String) pendingTx.get("_id");
-        Double amount = pendingTx.get("amount") instanceof Number ? ((Number) pendingTx.get("amount")).doubleValue() : null;
-        Double bonus = pendingTx.get("bonus_amount") instanceof Number ? ((Number) pendingTx.get("bonus_amount")).doubleValue() : 0.0;
-        String currency = (String) pendingTx.get("currency");
-
-        if (amount == null) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Invalid transaction: amount is missing"));
-        }
-        if (currency == null) {
-            currency = WalletService.getDefaultCurrency();
-        }
-
-        // Complete the transaction - update status and credit balance
-        Double newBalance = walletService.completeRechargeTransaction(
-            userId, expertId, transactionId, gatewayPaymentId, amount, bonus, currency
-        );
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("success", true);
-        response.put("newBalance", newBalance);
-        response.put("currency", currency);
-        response.put("amountPaid", amount);
-        response.put("expertId", expertId);
-        if (bonus > 0) {
-            response.put("bonusReceived", bonus);
-        }
 
         return gson.toJson(response);
     }
