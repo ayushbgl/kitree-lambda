@@ -65,7 +65,7 @@ public class OnDemandConsultationOrder {
     // Chat session ID - only for chat consultations (future)
     private String chatSessionId;
 
-    // Dual-participant billing tracking
+    // Dual-participant billing tracking (simple single-interval)
     // When user joined the Stream call
     private Timestamp userJoinedAt;
 
@@ -74,6 +74,27 @@ public class OnDemandConsultationOrder {
 
     // When both participants were in the call together (billing starts)
     private Timestamp bothParticipantsJoinedAt;
+
+    // Interval-based billing (supports reconnections)
+    // Stream session ID for this call
+    private String streamSessionId;
+
+    // User's join/leave intervals: [{joined_at, left_at}, ...]
+    // Stored as List<Map<String, Object>> in Firestore
+    private java.util.List<java.util.Map<String, Object>> userIntervals;
+
+    // Expert's join/leave intervals: [{joined_at, left_at}, ...]
+    private java.util.List<java.util.Map<String, Object>> expertIntervals;
+
+    // Billing status: NOT_STARTED, ACTIVE, FINALIZED
+    private String billingStatus;
+
+    // Running totals for real-time billing
+    private Long totalBilledSeconds;
+    private Double totalBilledAmount;
+
+    // Timestamp of last billing event (for cron staleness check)
+    private Timestamp lastBillingEventAt;
 
     // Actual billable seconds (time when both participants were present)
     private Long billableSeconds;
@@ -163,6 +184,28 @@ public class OnDemandConsultationOrder {
 
     public Timestamp getBothParticipantsJoinedAt() { return bothParticipantsJoinedAt; }
     public void setBothParticipantsJoinedAt(Timestamp bothParticipantsJoinedAt) { this.bothParticipantsJoinedAt = bothParticipantsJoinedAt; }
+
+    // Interval-based billing getters/setters
+    public String getStreamSessionId() { return streamSessionId; }
+    public void setStreamSessionId(String streamSessionId) { this.streamSessionId = streamSessionId; }
+
+    public java.util.List<java.util.Map<String, Object>> getUserIntervals() { return userIntervals; }
+    public void setUserIntervals(java.util.List<java.util.Map<String, Object>> userIntervals) { this.userIntervals = userIntervals; }
+
+    public java.util.List<java.util.Map<String, Object>> getExpertIntervals() { return expertIntervals; }
+    public void setExpertIntervals(java.util.List<java.util.Map<String, Object>> expertIntervals) { this.expertIntervals = expertIntervals; }
+
+    public String getBillingStatus() { return billingStatus; }
+    public void setBillingStatus(String billingStatus) { this.billingStatus = billingStatus; }
+
+    public Long getTotalBilledSeconds() { return totalBilledSeconds; }
+    public void setTotalBilledSeconds(Long totalBilledSeconds) { this.totalBilledSeconds = totalBilledSeconds; }
+
+    public Double getTotalBilledAmount() { return totalBilledAmount; }
+    public void setTotalBilledAmount(Double totalBilledAmount) { this.totalBilledAmount = totalBilledAmount; }
+
+    public Timestamp getLastBillingEventAt() { return lastBillingEventAt; }
+    public void setLastBillingEventAt(Timestamp lastBillingEventAt) { this.lastBillingEventAt = lastBillingEventAt; }
 
     public Long getBillableSeconds() { return billableSeconds; }
     public void setBillableSeconds(Long billableSeconds) { this.billableSeconds = billableSeconds; }

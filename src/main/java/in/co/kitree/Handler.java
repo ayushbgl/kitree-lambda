@@ -2041,10 +2041,29 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                         // End the consultation
                         OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
                         if (order != null && "CONNECTED".equals(order.getStatus())) {
-                            // Calculate final values
-                            // Use billable seconds (time when both participants were present) for billing
+                            // Calculate final values using interval-based billing if available
                             Long totalDurationSeconds = consultationService.calculateElapsedSeconds(order);
-                            Long billableSeconds = consultationService.calculateBillableSeconds(order);
+                            Long billableSeconds;
+
+                            // Prefer interval-based calculation if intervals exist
+                            java.util.List<Map<String, Object>> userIntervalMaps = order.getUserIntervals();
+                            java.util.List<Map<String, Object>> expertIntervalMaps = order.getExpertIntervals();
+
+                            if (userIntervalMaps != null && !userIntervalMaps.isEmpty() &&
+                                expertIntervalMaps != null && !expertIntervalMaps.isEmpty()) {
+                                java.util.List<OnDemandConsultationService.ParticipantInterval> userIntervals =
+                                    consultationService.parseIntervalsFromList(userIntervalMaps);
+                                java.util.List<OnDemandConsultationService.ParticipantInterval> expertIntervals =
+                                    consultationService.parseIntervalsFromList(expertIntervalMaps);
+
+                                billableSeconds = consultationService.calculateOverlapFromIntervals(
+                                    userIntervals, expertIntervals, order.getMaxAllowedDuration());
+                                LoggingService.info("cron_using_interval_billing");
+                            } else {
+                                billableSeconds = consultationService.calculateBillableSeconds(order);
+                                LoggingService.info("cron_using_simple_billing");
+                            }
+
                             Double cost = consultationService.calculateCost(billableSeconds, order.getExpertRatePerMinute());
                             Double platformFeeAmount = consultationService.calculatePlatformFee(cost, order.getPlatformFeePercent());
                             Double expertEarnings = cost - platformFeeAmount;
@@ -3015,36 +3034,36 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
      */
     private String handleOnDemandConsultationHeartbeat(String userId, RequestBody requestBody) throws Exception {
         String orderId = requestBody.getOrderId();
-        
+
         if (orderId == null) {
             return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
         }
-        
+
         WalletService walletService = new WalletService(this.db);
         OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
-        
+
         OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
-        
+
         if (order == null) {
             return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
         }
-        
+
         if (!"CONNECTED".equals(order.getStatus())) {
             return gson.toJson(Map.of(
                 "status", "TERMINATE",
                 "reason", "NOT_CONNECTED"
             ));
         }
-        
+
         Long remainingSeconds = consultationService.calculateRemainingSeconds(order);
-        
+
         if (remainingSeconds <= 0) {
             return gson.toJson(Map.of(
                 "status", "TERMINATE",
                 "reason", "LOW_BALANCE"
             ));
         }
-        
+
         return gson.toJson(Map.of(
             "status", "CONTINUE",
             "remainingSeconds", remainingSeconds
@@ -4185,7 +4204,33 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             // Calculate duration and cost
             // Use billable seconds (time when both participants were present) for billing
             Long totalDurationSeconds = consultationService.calculateElapsedSeconds(order);
-            Long billableSeconds = consultationService.calculateBillableSeconds(order);
+            Long billableSeconds;
+
+            // Prefer interval-based calculation if intervals exist (handles reconnections)
+            java.util.List<Map<String, Object>> userIntervalMaps = order.getUserIntervals();
+            java.util.List<Map<String, Object>> expertIntervalMaps = order.getExpertIntervals();
+
+            if (userIntervalMaps != null && !userIntervalMaps.isEmpty() &&
+                expertIntervalMaps != null && !expertIntervalMaps.isEmpty()) {
+                // Use interval-based overlap calculation
+                java.util.List<OnDemandConsultationService.ParticipantInterval> userIntervals =
+                    consultationService.parseIntervalsFromList(userIntervalMaps);
+                java.util.List<OnDemandConsultationService.ParticipantInterval> expertIntervals =
+                    consultationService.parseIntervalsFromList(expertIntervalMaps);
+
+                billableSeconds = consultationService.calculateOverlapFromIntervals(
+                    userIntervals, expertIntervals, order.getMaxAllowedDuration());
+
+                LoggingService.info("using_interval_based_billing", Map.of(
+                    "userIntervalCount", userIntervals.size(),
+                    "expertIntervalCount", expertIntervals.size()
+                ));
+            } else {
+                // Fall back to simple calculation using both_participants_joined_at
+                billableSeconds = consultationService.calculateBillableSeconds(order);
+                LoggingService.info("using_simple_billing");
+            }
+
             Double cost = consultationService.calculateCost(billableSeconds, order.getExpertRatePerMinute());
             Double platformFeeAmount = consultationService.calculatePlatformFee(cost, order.getPlatformFeePercent());
             Double expertEarnings = cost - platformFeeAmount;
@@ -4450,12 +4495,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return gson.toJson(Map.of("status", "ignored", "reason", "unknown_participant"));
             }
 
-            // Update order with join timestamp
+            // Extract session ID from payload
+            String sessionId = (String) payload.get("session_id");
+
+            // Update order with join event using interval tracking
             com.google.cloud.Timestamp nowTs = com.google.cloud.Timestamp.now();
             DocumentReference orderRef = db.collection("users").document(userId)
                     .collection("orders").document(orderId);
 
-            // Use transaction to atomically update and check for both participants
+            // Use transaction to atomically update intervals and check for both participants
             Map<String, Object> result = db.runTransaction(transaction -> {
                 DocumentSnapshot orderDoc = transaction.get(orderRef).get();
                 if (!orderDoc.exists()) {
@@ -4463,31 +4511,77 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 }
 
                 Map<String, Object> updates = new HashMap<>();
-                boolean bothJoined = false;
+                boolean bothActive = false;
 
-                com.google.cloud.Timestamp userJoinedAt = orderDoc.getTimestamp("user_joined_at");
-                com.google.cloud.Timestamp expertJoinedAt = orderDoc.getTimestamp("expert_joined_at");
-                com.google.cloud.Timestamp bothJoinedAt = orderDoc.getTimestamp("both_participants_joined_at");
+                // Get existing intervals (or empty lists)
+                @SuppressWarnings("unchecked")
+                java.util.List<Map<String, Object>> userIntervals =
+                    (java.util.List<Map<String, Object>>) orderDoc.get("user_intervals");
+                @SuppressWarnings("unchecked")
+                java.util.List<Map<String, Object>> expertIntervals =
+                    (java.util.List<Map<String, Object>>) orderDoc.get("expert_intervals");
 
-                // Only update if not already set
-                if (isUser && userJoinedAt == null) {
-                    updates.put("user_joined_at", nowTs);
-                    userJoinedAt = nowTs;
-                    LoggingService.info("user_join_time_recorded");
+                if (userIntervals == null) userIntervals = new java.util.ArrayList<>();
+                if (expertIntervals == null) expertIntervals = new java.util.ArrayList<>();
+
+                // Parse intervals
+                java.util.List<OnDemandConsultationService.ParticipantInterval> parsedUserIntervals =
+                    consultationService.parseIntervalsFromList(userIntervals);
+                java.util.List<OnDemandConsultationService.ParticipantInterval> parsedExpertIntervals =
+                    consultationService.parseIntervalsFromList(expertIntervals);
+
+                // Add new interval for joining participant
+                if (isUser) {
+                    parsedUserIntervals = consultationService.addJoinEvent(parsedUserIntervals);
+                    updates.put("user_intervals", consultationService.intervalsToList(parsedUserIntervals));
+                    LoggingService.info("user_interval_added");
+
+                    // Also update simple tracking for backwards compatibility
+                    if (orderDoc.getTimestamp("user_joined_at") == null) {
+                        updates.put("user_joined_at", nowTs);
+                    }
                 }
 
-                if (isExpert && expertJoinedAt == null) {
-                    updates.put("expert_joined_at", nowTs);
-                    expertJoinedAt = nowTs;
-                    LoggingService.info("expert_join_time_recorded");
+                if (isExpert) {
+                    parsedExpertIntervals = consultationService.addJoinEvent(parsedExpertIntervals);
+                    updates.put("expert_intervals", consultationService.intervalsToList(parsedExpertIntervals));
+                    LoggingService.info("expert_interval_added");
+
+                    // Also update simple tracking for backwards compatibility
+                    if (orderDoc.getTimestamp("expert_joined_at") == null) {
+                        updates.put("expert_joined_at", nowTs);
+                    }
                 }
 
-                // Check if both have now joined and we haven't recorded it yet
-                if (userJoinedAt != null && expertJoinedAt != null && bothJoinedAt == null) {
-                    // Both participants are now in the call - this is when billing should start
-                    updates.put("both_participants_joined_at", nowTs);
-                    bothJoined = true;
-                    LoggingService.info("both_participants_joined_billing_starts");
+                // Check if both now have active intervals
+                boolean userActive = consultationService.hasActiveInterval(parsedUserIntervals);
+                boolean expertActive = consultationService.hasActiveInterval(parsedExpertIntervals);
+
+                if (userActive && expertActive) {
+                    bothActive = true;
+                    // Set billing status and both_participants_joined_at if not already set
+                    String currentBillingStatus = orderDoc.getString("billing_status");
+                    if (!"ACTIVE".equals(currentBillingStatus)) {
+                        updates.put("billing_status", "ACTIVE");
+                        updates.put("last_billing_event_at", nowTs);
+                        LoggingService.info("billing_now_active");
+                    }
+                    // Set both_participants_joined_at if not set (for backwards compatibility)
+                    if (orderDoc.getTimestamp("both_participants_joined_at") == null) {
+                        updates.put("both_participants_joined_at", nowTs);
+                    }
+                }
+
+                // Store session ID if provided
+                if (sessionId != null && orderDoc.getString("stream_session_id") == null) {
+                    updates.put("stream_session_id", sessionId);
+                }
+
+                // Update order status to CONNECTED if still INITIATED
+                String currentStatus = orderDoc.getString("status");
+                if ("INITIATED".equals(currentStatus)) {
+                    updates.put("status", "CONNECTED");
+                    updates.put("start_time", nowTs);
                 }
 
                 if (!updates.isEmpty()) {
@@ -4495,24 +4589,24 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 }
 
                 Map<String, Object> resultMap = new HashMap<>();
-                resultMap.put("bothJoined", bothJoined);
-                resultMap.put("userJoined", userJoinedAt != null);
-                resultMap.put("expertJoined", expertJoinedAt != null);
+                resultMap.put("bothActive", bothActive);
+                resultMap.put("userActive", userActive);
+                resultMap.put("expertActive", expertActive);
                 return resultMap;
             }).get();
 
-            boolean bothNowJoined = (boolean) result.get("bothJoined");
-            boolean userJoined = (boolean) result.get("userJoined");
-            boolean expertJoined = (boolean) result.get("expertJoined");
+            boolean bothActive = (boolean) result.get("bothActive");
+            boolean userActive = (boolean) result.get("userActive");
+            boolean expertActive = (boolean) result.get("expertActive");
 
             return gson.toJson(Map.of(
                 "status", "processed",
                 "order_id", orderId,
                 "participant_type", participantType,
-                "user_joined", userJoined,
-                "expert_joined", expertJoined,
-                "both_now_joined", bothNowJoined,
-                "billing_started", bothNowJoined
+                "user_active", userActive,
+                "expert_active", expertActive,
+                "both_active", bothActive,
+                "billing_active", bothActive
             ));
 
         } catch (Exception e) {
@@ -4570,13 +4664,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return gson.toJson(Map.of("status", "ignored", "reason", "not_active_on_demand"));
             }
 
-            // Extract participant info from payload for logging purposes
+            // Extract participant info from payload
             String participantType = "unknown";
+            String participantUserId = null;
             Map<String, Object> participant = (Map<String, Object>) payload.get("participant");
             if (participant != null) {
                 Map<String, Object> participantUser = (Map<String, Object>) participant.get("user");
                 if (participantUser != null) {
-                    String participantUserId = (String) participantUser.get("id");
+                    participantUserId = (String) participantUser.get("id");
                     if (participantUserId != null) {
                         if (userId != null && participantUserId.equals(userId)) {
                             participantType = "user";
@@ -4590,7 +4685,52 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     }
                 }
             }
-            
+
+            // Close the interval for the leaving participant before finalizing
+            boolean isUser = "user".equals(participantType);
+            boolean isExpert = "expert".equals(participantType);
+
+            if (isUser || isExpert) {
+                try {
+                    com.google.cloud.Timestamp nowTs = com.google.cloud.Timestamp.now();
+                    DocumentReference orderRef = db.collection("users").document(userId)
+                            .collection("orders").document(orderId);
+
+                    db.runTransaction(transaction -> {
+                        DocumentSnapshot orderDoc = transaction.get(orderRef).get();
+                        if (!orderDoc.exists()) return null;
+
+                        Map<String, Object> updates = new HashMap<>();
+
+                        // Get and close interval for the leaving participant
+                        String intervalField = isUser ? "user_intervals" : "expert_intervals";
+                        @SuppressWarnings("unchecked")
+                        java.util.List<Map<String, Object>> intervals =
+                            (java.util.List<Map<String, Object>>) orderDoc.get(intervalField);
+
+                        if (intervals != null && !intervals.isEmpty()) {
+                            java.util.List<OnDemandConsultationService.ParticipantInterval> parsedIntervals =
+                                consultationService.parseIntervalsFromList(intervals);
+                            consultationService.closeActiveInterval(parsedIntervals);
+                            updates.put(intervalField, consultationService.intervalsToList(parsedIntervals));
+                        }
+
+                        // Update last_billing_event_at for cron staleness detection
+                        updates.put("last_billing_event_at", nowTs);
+
+                        if (!updates.isEmpty()) {
+                            transaction.update(orderRef, updates);
+                        }
+                        return null;
+                    }).get();
+
+                    LoggingService.info("interval_closed_for_participant", Map.of("type", participantType));
+                } catch (Exception e) {
+                    LoggingService.error("error_closing_interval", e);
+                    // Continue with finalization even if interval close fails
+                }
+            }
+
             // For 1:1 calls, when ANY participant leaves, finalize the consultation
             // This is like WhatsApp - when either party leaves, the call ends
             LoggingService.info("finalizing_consultation_participant_left");
