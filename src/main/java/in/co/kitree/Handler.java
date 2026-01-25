@@ -1198,6 +1198,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return handleRecalculateCharge(requestBody);
             }
 
+            // Consultation summary endpoints
+            if ("generate_consultation_summary".equals(requestBody.getFunction())) {
+                return handleGenerateConsultationSummary(userId, requestBody);
+            }
+
+            if ("get_consultation_summary".equals(requestBody.getFunction())) {
+                return handleGetConsultationSummary(userId, requestBody);
+            }
+
             if ("get_active_call_for_user".equals(requestBody.getFunction())) {
                 return handleGetActiveCallForUser(userId, requestBody);
             }
@@ -3490,6 +3499,77 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
 
         return gson.toJson(response);
+    }
+
+    /**
+     * Generate consultation summary for a completed order.
+     * Uses AI analysis (currently mocked) to create structured summary.
+     */
+    private String handleGenerateConsultationSummary(String userId, RequestBody requestBody) {
+        LoggingService.setFunction("generate_consultation_summary");
+        LoggingService.setContext(userId, requestBody.getOrderId(), null);
+        LoggingService.info("generate_consultation_summary_started");
+
+        String orderId = requestBody.getOrderId();
+        if (orderId == null || orderId.isEmpty()) {
+            LoggingService.warn("generate_consultation_summary_missing_order_id");
+            return gson.toJson(Map.of(
+                "success", false,
+                "error", "order_id is required"
+            ));
+        }
+
+        ConsultationSummaryService summaryService = new ConsultationSummaryService(db, isTest());
+        ConsultationSummaryService.SummaryResult result = summaryService.generateSummary(userId, orderId);
+
+        if (result.success) {
+            LoggingService.info("generate_consultation_summary_success");
+            return gson.toJson(Map.of(
+                "success", true,
+                "summary", result.summary
+            ));
+        } else {
+            LoggingService.warn("generate_consultation_summary_failed", Map.of("error", result.errorMessage));
+            return gson.toJson(Map.of(
+                "success", false,
+                "error", result.errorMessage
+            ));
+        }
+    }
+
+    /**
+     * Get existing consultation summary for an order.
+     */
+    private String handleGetConsultationSummary(String userId, RequestBody requestBody) {
+        LoggingService.setFunction("get_consultation_summary");
+        LoggingService.setContext(userId, requestBody.getOrderId(), null);
+        LoggingService.info("get_consultation_summary_started");
+
+        String orderId = requestBody.getOrderId();
+        if (orderId == null || orderId.isEmpty()) {
+            LoggingService.warn("get_consultation_summary_missing_order_id");
+            return gson.toJson(Map.of(
+                "success", false,
+                "error", "order_id is required"
+            ));
+        }
+
+        ConsultationSummaryService summaryService = new ConsultationSummaryService(db, isTest());
+        ConsultationSummaryService.SummaryResult result = summaryService.getSummary(userId, orderId);
+
+        if (result.success) {
+            LoggingService.info("get_consultation_summary_success");
+            return gson.toJson(Map.of(
+                "success", true,
+                "summary", result.summary
+            ));
+        } else {
+            LoggingService.info("get_consultation_summary_not_found", Map.of("error", result.errorMessage));
+            return gson.toJson(Map.of(
+                "success", false,
+                "error", result.errorMessage
+            ));
+        }
     }
 
     /**

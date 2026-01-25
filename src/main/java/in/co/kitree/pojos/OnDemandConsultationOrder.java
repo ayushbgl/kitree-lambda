@@ -102,6 +102,10 @@ public class OnDemandConsultationOrder {
     // Failure reason (for FAILED orders)
     private String failureReason;
 
+    // Consultation summary (AI-generated analysis of the call)
+    // Stored as a Map with structured fields: headline, brief_summary, topics, predictions, remedies, etc.
+    private java.util.Map<String, Object> summary;
+
     public OnDemandConsultationOrder() {
         this.type = "ON_DEMAND_CONSULTATION";
     }
@@ -212,6 +216,9 @@ public class OnDemandConsultationOrder {
 
     public String getFailureReason() { return failureReason; }
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
+
+    public java.util.Map<String, Object> getSummary() { return summary; }
+    public void setSummary(java.util.Map<String, Object> summary) { this.summary = summary; }
 
     @Override
     public String toString() {

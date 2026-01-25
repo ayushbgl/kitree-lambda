@@ -721,6 +721,7 @@ public class OnDemandConsultationService {
         if (order.getPlatformFeePercent() != null) map.put("platform_fee_percent", order.getPlatformFeePercent());
         if (order.getStreamCallCid() != null) map.put("stream_call_cid", order.getStreamCallCid());
         if (order.getChatSessionId() != null) map.put("chat_session_id", order.getChatSessionId());
+        if (order.getSummary() != null) map.put("summary", order.getSummary());
 
         return map;
     }
@@ -778,6 +779,27 @@ public class OnDemandConsultationService {
         if (doc.contains("billable_seconds")) order.setBillableSeconds(doc.getLong("billable_seconds"));
         if (doc.contains("failure_reason")) order.setFailureReason(doc.getString("failure_reason"));
 
+        // Consultation summary
+        if (doc.contains("summary")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> summary = (Map<String, Object>) doc.get("summary");
+            order.setSummary(summary);
+        }
+
         return order;
+    }
+
+    /**
+     * Update order with consultation summary.
+     *
+     * @param userId The user's ID
+     * @param orderId The order ID
+     * @param summary The summary map to store
+     */
+    public void updateOrderSummary(String userId, String orderId, Map<String, Object> summary)
+            throws ExecutionException, InterruptedException {
+        DocumentReference orderRef = db.collection("users").document(userId)
+                .collection("orders").document(orderId);
+        orderRef.update("summary", summary).get();
     }
 }
