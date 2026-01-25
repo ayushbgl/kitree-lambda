@@ -24,6 +24,9 @@ dependencies {
     // Stream Chat Java SDK for server-side webhook verification
     // Note: Video webhooks use same HMAC-SHA256 mechanism as Chat webhooks
     implementation 'io.getstream:stream-chat-java:1.30.0'
+
+    // Google Gen AI SDK for Gemini API (consultation summaries)
+    implementation 'com.google.genai:google-genai:1.36.0'
     
     // Structured logging for CloudWatch
     implementation 'software.amazon.lambda:powertools-logging:1.18.0'

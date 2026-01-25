@@ -25,8 +25,10 @@ Parameters:
 
 Globals:
   Function:
-    Timeout: 120
-    MemorySize: 512
+    Timeout: 300  # 5 minutes - allows time for audio download + Gemini API processing
+    MemorySize: 1024  # Increased for audio file processing
+    EphemeralStorage:
+      Size: 1024  # 1GB temp storage for audio files
     LoggingConfig:
       LogFormat: JSON
       LogGroup: !Sub "/aws/lambda/java-lambda-${Environment}"

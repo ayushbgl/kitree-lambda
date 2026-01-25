@@ -4,12 +4,25 @@ import com.google.cloud.Timestamp;
 import com.google.cloud.firestore.Firestore;
 import in.co.kitree.pojos.OnDemandConsultationOrder;
 
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
 
 /**
- * Service for generating AI-powered consultation summaries.
- * Currently uses mock data; will integrate with LLM in future.
+ * Service for generating AI-powered consultation summaries using Gemini.
+ *
+ * Uses Firestore-based state management for retry handling:
+ * - summaryStatus: PENDING, IN_PROGRESS, COMPLETED, FAILED, SKIPPED
+ * - summaryRetryCount: Number of retry attempts
+ * - summaryLastAttempt: Timestamp of last attempt
+ * - summaryError: Last error message
  *
  * Summary schema includes:
  * - headline, brief_summary, primary_concern, sentiment
@@ -25,11 +38,26 @@ public class ConsultationSummaryService {
     private final Firestore db;
     private final OnDemandConsultationService consultationService;
     private final StreamService streamService;
+    private final GeminiService geminiService;
+
+    private static final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(30))
+            .build();
+
+    // Minimum call duration in seconds to generate summary (configurable constant)
+    public static final int MIN_DURATION_SECONDS = 120; // 2 minutes
+
+    // Maximum retries within a single invocation (Firestore handles cross-invocation retries)
+    private static final int MAX_IMMEDIATE_RETRIES = 2;
+
+    // Call type used for Stream calls
+    private static final String STREAM_CALL_TYPE = "consultation_audio";
 
     public ConsultationSummaryService(Firestore db, boolean isTest) {
         this.db = db;
         this.consultationService = new OnDemandConsultationService(db);
         this.streamService = new StreamService(isTest);
+        this.geminiService = new GeminiService(isTest);
     }
 
     /**
@@ -37,33 +65,55 @@ public class ConsultationSummaryService {
      */
     public static class SummaryResult {
         public final boolean success;
+        public final String status;  // "generated", "skipped", "error", "pending_retry", "already_processing"
         public final Map<String, Object> summary;
         public final String errorMessage;
 
-        private SummaryResult(boolean success, Map<String, Object> summary, String errorMessage) {
+        private SummaryResult(boolean success, String status, Map<String, Object> summary,
+                              String errorMessage) {
             this.success = success;
+            this.status = status;
             this.summary = summary;
             this.errorMessage = errorMessage;
         }
 
         public static SummaryResult success(Map<String, Object> summary) {
-            return new SummaryResult(true, summary, null);
+            return new SummaryResult(true, "generated", summary, null);
+        }
+
+        public static SummaryResult skipped(String reason) {
+            return new SummaryResult(true, "skipped", null, reason);
         }
 
         public static SummaryResult error(String message) {
-            return new SummaryResult(false, null, message);
+            return new SummaryResult(false, "error", null, message);
+        }
+
+        public static SummaryResult pendingRetry(String message) {
+            return new SummaryResult(false, "pending_retry", null, message);
+        }
+
+        public static SummaryResult alreadyProcessing() {
+            return new SummaryResult(false, "already_processing", null,
+                "Summary generation already in progress or completed");
         }
     }
 
     /**
      * Generate consultation summary for a completed order.
-     * Currently returns mock data; will integrate with LLM in future.
+     * Uses Gemini AI to analyze the call recording.
+     *
+     * This method uses Firestore transactions for:
+     * - Optimistic locking to prevent parallel processing
+     * - State tracking for retry handling across Lambda invocations
      *
      * @param userId  The user's ID
      * @param orderId The order ID
      * @return SummaryResult with generated summary or error
      */
     public SummaryResult generateSummary(String userId, String orderId) {
+        Path tempAudioFile = null;
+
         try {
             LoggingService.setContext(userId, orderId, null);
             LoggingService.info("generate_summary_started");
@@ -85,21 +135,266 @@ public class ConsultationSummaryService {
                 return SummaryResult.success(order.getSummary());
             }
 
-            // 4. Get recording info (stubbed for now)
-            // Future: List<StreamService.RecordingInfo> recordings = streamService.getCallRecordings(...)
+            // 4. Check current summary status
+            String currentStatus = order.getSummaryStatus();
+            if (OnDemandConsultationService.SUMMARY_STATUS_COMPLETED.equals(currentStatus)) {
+                LoggingService.info("summary_already_completed");
+                return SummaryResult.success(order.getSummary());
+            }
+            if (OnDemandConsultationService.SUMMARY_STATUS_SKIPPED.equals(currentStatus)) {
+                LoggingService.info("summary_previously_skipped");
+                return SummaryResult.skipped(order.getSummaryError());
+            }
+            if (OnDemandConsultationService.SUMMARY_STATUS_FAILED.equals(currentStatus)) {
+                LoggingService.info("summary_previously_failed");
+                return SummaryResult.error("Summary generation previously failed: " + order.getSummaryError());
+            }
 
-            // 5. Generate summary (mock for now, will call LLM in future)
-            Map<String, Object> summary = generateMockSummary(order);
+            // 5. Try to claim the order for processing (optimistic lock)
+            boolean claimed = consultationService.tryClaimSummaryGeneration(userId, orderId);
+            if (!claimed) {
+                LoggingService.info("summary_claim_failed", Map.of(
+                    "currentStatus", currentStatus != null ? currentStatus : "null"
+                ));
+                return SummaryResult.alreadyProcessing();
+            }
 
-            // 6. Store summary in order document
-            consultationService.updateOrderSummary(userId, orderId, summary);
+            LoggingService.info("summary_claimed_for_processing");
 
-            LoggingService.info("summary_generated_successfully");
+            // 6. Check call duration - skip if too short
+            Long billableSeconds = order.getBillableSeconds();
+            if (billableSeconds == null) {
+                billableSeconds = order.getDurationSeconds();
+            }
+            if (billableSeconds == null || billableSeconds < MIN_DURATION_SECONDS) {
+                String reason = "Call duration (" + (billableSeconds != null ? billableSeconds : 0) +
+                    "s) is less than minimum required (" + MIN_DURATION_SECONDS + "s)";
+                LoggingService.info("summary_skipped_short_call", Map.of(
+                    "billableSeconds", billableSeconds != null ? billableSeconds : 0,
+                    "minRequired", MIN_DURATION_SECONDS
+                ));
+                consultationService.updateSummaryStatus(userId, orderId,
+                    OnDemandConsultationService.SUMMARY_STATUS_SKIPPED, null, reason, false);
+                return SummaryResult.skipped(reason);
+            }
+
+            // 7. Verify Gemini service is configured
+            if (!geminiService.isConfigured()) {
+                String error = "Gemini service not configured";
+                LoggingService.warn("gemini_not_configured");
+                consultationService.updateSummaryStatus(userId, orderId,
+                    OnDemandConsultationService.SUMMARY_STATUS_FAILED, null, error, false);
+                return SummaryResult.error(error);
+            }
+
+            // 8. Get recordings from GetStream
+            String streamCallCid = order.getStreamCallCid();
+            if (streamCallCid == null || streamCallCid.isEmpty()) {
+                String reason = "No Stream call ID associated with order";
+                LoggingService.warn("no_stream_call_cid");
+                consultationService.updateSummaryStatus(userId, orderId,
+                    OnDemandConsultationService.SUMMARY_STATUS_SKIPPED, null, reason, false);
+                return SummaryResult.skipped(reason);
+            }
+
+            String[] callCidParts = StreamService.parseCallCid(streamCallCid);
+            if (callCidParts == null) {
+                callCidParts = new String[]{STREAM_CALL_TYPE, orderId};
+            }
+
+            List<StreamService.RecordingInfo> recordings =
+                streamService.getCallRecordings(callCidParts[0], callCidParts[1]);
+
+            if (recordings.isEmpty()) {
+                String reason = "No recordings available for this call";
+                LoggingService.info("no_recordings_found", Map.of(
+                    "callType", callCidParts[0],
+                    "callId", callCidParts[1]
+                ));
+                consultationService.updateSummaryStatus(userId, orderId,
+                    OnDemandConsultationService.SUMMARY_STATUS_SKIPPED, null, reason, false);
+                return SummaryResult.skipped(reason);
+            }
+
+            // 9. Download the first recording to temp file
+            StreamService.RecordingInfo recording = recordings.get(0);
+            LoggingService.info("downloading_recording", Map.of(
+                "filename", recording.getFilename() != null ? recording.getFilename() : "unknown",
+                "durationSeconds", recording.getDurationSeconds()
+            ));
+
+            tempAudioFile = downloadRecordingToTemp(recording.getUrl(), recording.getFilename());
+            if (tempAudioFile == null) {
+                String error = "Failed to download recording";
+                consultationService.updateSummaryStatus(userId, orderId,
+                    OnDemandConsultationService.SUMMARY_STATUS_PENDING, null, error, true);
+                return SummaryResult.pendingRetry(error);
+            }
+
+            // 10. Generate summary using Gemini with immediate retries
+            GeminiService.GeminiSummaryResult geminiResult = null;
+            int attempt = 0;
+            final long finalBillableSeconds = billableSeconds;
+
+            while (attempt < MAX_IMMEDIATE_RETRIES) {
+                attempt++;
+                LoggingService.info("gemini_attempt", Map.of("attempt", attempt));
+
+                geminiResult = geminiService.generateSummary(
+                    tempAudioFile,
+                    order.getCategory(),
+                    order.getExpertName(),
+                    finalBillableSeconds
+                );
+
+                if (geminiResult.success) {
+                    break;
+                }
+
+                if (!geminiResult.shouldRetry || attempt >= MAX_IMMEDIATE_RETRIES) {
+                    break;
+                }
+
+                // Wait before retry (exponential backoff)
+                try {
+                    Thread.sleep(1000L * attempt);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+
+            // 11. Handle Gemini result
+            if (geminiResult == null) {
+                String error = "Gemini service returned null";
+                consultationService.updateSummaryStatus(userId, orderId,
+                    OnDemandConsultationService.SUMMARY_STATUS_PENDING, null, error, true);
+                return SummaryResult.pendingRetry(error);
+            }
+
+            if (!geminiResult.success) {
+                String error = geminiResult.errorMessage != null ? geminiResult.errorMessage : "Unknown error";
+
+                if (geminiResult.shouldRetry) {
+                    LoggingService.warn("gemini_failed_will_retry", Map.of("error", error));
+                    consultationService.updateSummaryStatus(userId, orderId,
+                        OnDemandConsultationService.SUMMARY_STATUS_PENDING, null, error, true);
+                    return SummaryResult.pendingRetry(error);
+                } else {
+                    LoggingService.error("gemini_failed_permanent",
+                        new RuntimeException(error), Map.of("orderId", orderId));
+                    consultationService.updateSummaryStatus(userId, orderId,
+                        OnDemandConsultationService.SUMMARY_STATUS_FAILED, null, error, false);
+                    return SummaryResult.error(error);
+                }
+            }
+
+            Map<String, Object> summary = geminiResult.summary;
+
+            // 12. Store summary and mark as completed
+            consultationService.updateSummaryStatus(userId, orderId,
+                OnDemandConsultationService.SUMMARY_STATUS_COMPLETED, summary, null, false);
+
+            LoggingService.info("summary_generated_successfully", Map.of(
+                "hasTopics", summary.containsKey("topics"),
+                "hasPredictions", summary.containsKey("predictions"),
+                "hasRemedies", summary.containsKey("remedies")
+            ));
+
             return SummaryResult.success(summary);
 
         } catch (Exception e) {
             LoggingService.error("generate_summary_error", e, Map.of("orderId", orderId));
-            return SummaryResult.error(e.getMessage());
+
+            // Try to update status to allow retry
+            try {
+                consultationService.updateSummaryStatus(userId, orderId,
+                    OnDemandConsultationService.SUMMARY_STATUS_PENDING, null, e.getMessage(), true);
+            } catch (Exception updateEx) {
+                LoggingService.warn("failed_to_update_summary_status", Map.of(
+                    "error", updateEx.getMessage()
+                ));
+            }
+
+            return SummaryResult.pendingRetry(e.getMessage());
+
+        } finally {
+            // Always cleanup temp file
+            if (tempAudioFile != null) {
+                try {
+                    Files.deleteIfExists(tempAudioFile);
+                    LoggingService.info("temp_file_cleaned", Map.of(
+                        "path", tempAudioFile.toString()
+                    ));
+                } catch (Exception e) {
+                    LoggingService.warn("temp_file_cleanup_failed", Map.of(
+                        "path", tempAudioFile.toString(),
+                        "error", e.getMessage()
+                    ));
+                }
+            }
+        }
+    }
+
+    /**
+     * Download recording from URL to temp file in /tmp directory.
+     *
+     * @param url      Pre-signed S3 URL
+     * @param filename Original filename (for extension)
+     * @return Path to temp file, or null if download failed
+     */
+    private Path downloadRecordingToTemp(String url, String filename) {
+        try {
+            // Determine file extension
+            String extension = ".mp4";
+            if (filename != null) {
+                int lastDot = filename.lastIndexOf('.');
+                if (lastDot > 0) {
+                    extension = filename.substring(lastDot);
+                }
+            }
+
+            // Create temp file in /tmp (Lambda's writable directory)
+            Path tempFile = Files.createTempFile("recording_", extension);
+
+            LoggingService.info("downloading_to_temp", Map.of(
+                "tempPath", tempFile.toString()
+            ));
+
+            // Download file
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .GET()
+                    .timeout(Duration.ofMinutes(3))
+                    .build();
+
+            HttpResponse<InputStream> response = httpClient.send(request,
+                HttpResponse.BodyHandlers.ofInputStream());
+
+            if (response.statusCode() != 200) {
+                LoggingService.error("download_failed", null, Map.of(
+                    "statusCode", response.statusCode()
+                ));
+                Files.deleteIfExists(tempFile);
+                return null;
+            }
+
+            // Copy stream to file
+            try (InputStream inputStream = response.body()) {
+                Files.copy(inputStream, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            long fileSize = Files.size(tempFile);
+            LoggingService.info("download_complete", Map.of(
+                "sizeBytes", fileSize,
+                "sizeKB", fileSize / 1024
+            ));
+
+            return tempFile;
+
+        } catch (Exception e) {
+            LoggingService.error("download_exception", e, Map.of("url", url));
+            return null;
         }
     }
 
@@ -131,15 +426,21 @@ public class ConsultationSummaryService {
     }
 
     /**
-     * Generate summary asynchronously (fire and forget).
-     * Used after billing completion to not block the transaction.
+     * Queue an order for summary generation.
+     * Called after billing completion - sets status to PENDING for the cron job to pick up.
+     *
+     * @param userId  The user's ID
+     * @param orderId The order ID
      */
-    public void generateSummaryAsync(String userId, String orderId) {
-        // In Lambda, we run synchronously but catch errors to not fail billing
+    public void queueSummaryGeneration(String userId, String orderId) {
         try {
-            generateSummary(userId, orderId);
+            consultationService.markSummaryPending(userId, orderId);
+            LoggingService.info("summary_queued", Map.of(
+                "userId", userId,
+                "orderId", orderId
+            ));
         } catch (Exception e) {
-            LoggingService.warn("async_summary_generation_failed", Map.of(
+            LoggingService.warn("failed_to_queue_summary", Map.of(
                 "orderId", orderId,
                 "error", e.getMessage()
             ));
@@ -147,279 +448,74 @@ public class ConsultationSummaryService {
     }
 
     /**
-     * Generate mock summary based on order category.
-     * This will be replaced with actual LLM call in future.
+     * Process pending summary retries.
+     * Called by the cron job to process orders that need summary generation.
+     *
+     * @param batchSize Maximum number of orders to process in this invocation
+     * @return Map with processing results (processed, succeeded, failed counts)
      */
-    private Map<String, Object> generateMockSummary(OnDemandConsultationOrder order) {
-        Map<String, Object> summary = new HashMap<>();
+    public Map<String, Integer> processPendingSummaries(int batchSize) {
+        int processed = 0;
+        int succeeded = 0;
+        int failed = 0;
+        int skipped = 0;
 
-        // Metadata
-        summary.put("generated_at", Timestamp.now());
-        summary.put("language", "en");
+        try {
+            LoggingService.info("process_pending_summaries_started", Map.of("batchSize", batchSize));
 
-        // Get category for context-aware mock data
-        String category = order.getCategory() != null ? order.getCategory() : "HOROSCOPE";
+            List<String[]> pendingOrders = consultationService.getOrdersPendingSummaryRetry(batchSize);
 
-        // Overview
-        summary.put("headline", getMockHeadline(category));
-        summary.put("brief_summary", getMockBriefSummary(category));
-        summary.put("primary_concern", getMockPrimaryConcern(category));
-        summary.put("sentiment", "positive");
+            LoggingService.info("found_pending_summaries", Map.of("count", pendingOrders.size()));
 
-        // Important dates
-        summary.put("important_dates", getMockImportantDates());
+            for (String[] orderInfo : pendingOrders) {
+                String userId = orderInfo[0];
+                String orderId = orderInfo[1];
 
-        // Topics discussed
-        summary.put("topics", getMockTopics(category));
+                try {
+                    processed++;
+                    SummaryResult result = generateSummary(userId, orderId);
 
-        // Predictions
-        summary.put("predictions", getMockPredictions(category));
+                    switch (result.status) {
+                        case "generated":
+                            succeeded++;
+                            break;
+                        case "skipped":
+                            skipped++;
+                            break;
+                        case "already_processing":
+                            // Another instance is handling it
+                            break;
+                        default:
+                            failed++;
+                            break;
+                    }
 
-        // Remedies
-        summary.put("remedies", getMockRemedies(category));
+                } catch (Exception e) {
+                    failed++;
+                    LoggingService.error("process_pending_summary_error", e, Map.of(
+                        "userId", userId,
+                        "orderId", orderId
+                    ));
+                }
+            }
 
-        // Insights
-        summary.put("insights", getMockInsights(category));
-
-        // Follow-up recommendation
-        summary.put("follow_up", getMockFollowUp());
-
-        return summary;
-    }
-
-    private String getMockHeadline(String category) {
-        switch (category.toUpperCase()) {
-            case "TAROT":
-                return "Tarot guidance for relationship and personal growth";
-            case "NUMEROLOGY":
-                return "Numerology analysis for career opportunities";
-            case "PALMISTRY":
-                return "Palmistry reading for life path insights";
-            default:
-                return "Career guidance for upcoming job transition";
+        } catch (Exception e) {
+            LoggingService.error("process_pending_summaries_fatal_error", e);
         }
-    }
 
-    private String getMockBriefSummary(String category) {
-        switch (category.toUpperCase()) {
-            case "TAROT":
-                return "Discussed relationship dynamics and personal development path. Cards indicate positive changes ahead in emotional connections. Recommended focusing on self-care and setting healthy boundaries.";
-            case "NUMEROLOGY":
-                return "Analyzed life path number and current year influences. Numbers suggest a favorable period for career advancement starting mid-year. Advised on lucky dates for important decisions.";
-            case "PALMISTRY":
-                return "Examined major lines and mounts for life insights. Palm indicates strong intellectual abilities and upcoming travel opportunities. Discussed health precautions for coming months.";
-            default:
-                return "Discussed career change from IT to consulting. Jupiter mahadasha starting in April 2024 brings positive changes. Recommended waiting until after April for major decisions.";
-        }
-    }
+        Map<String, Integer> results = new HashMap<>();
+        results.put("processed", processed);
+        results.put("succeeded", succeeded);
+        results.put("failed", failed);
+        results.put("skipped", skipped);
 
-    private String getMockPrimaryConcern(String category) {
-        switch (category.toUpperCase()) {
-            case "TAROT":
-                return "Relationship guidance";
-            case "NUMEROLOGY":
-                return "Career timing";
-            case "PALMISTRY":
-                return "Life path clarity";
-            default:
-                return "Career change";
-        }
-    }
+        LoggingService.info("process_pending_summaries_completed", Map.of(
+            "processed", processed,
+            "succeeded", succeeded,
+            "failed", failed,
+            "skipped", skipped
+        ));
 
-    private List<Map<String, Object>> getMockImportantDates() {
-        List<Map<String, Object>> dates = new ArrayList<>();
-
-        Map<String, Object> date1 = new HashMap<>();
-        date1.put("date", "April 2024");
-        date1.put("significance", "Jupiter Mahadasha begins");
-        date1.put("is_auspicious", true);
-        dates.add(date1);
-
-        Map<String, Object> date2 = new HashMap<>();
-        date2.put("date", "May 15, 2024");
-        date2.put("significance", "Auspicious for new beginnings");
-        date2.put("is_auspicious", true);
-        dates.add(date2);
-
-        Map<String, Object> date3 = new HashMap<>();
-        date3.put("date", "July 2024");
-        date3.put("significance", "Saturn transit completion");
-        date3.put("is_auspicious", true);
-        dates.add(date3);
-
-        return dates;
-    }
-
-    private List<Map<String, Object>> getMockTopics(String category) {
-        List<Map<String, Object>> topics = new ArrayList<>();
-
-        Map<String, Object> topic1 = new HashMap<>();
-        topic1.put("id", "topic_1");
-        topic1.put("category", "career");
-        topic1.put("title", "Job Transition");
-        topic1.put("summary", "You discussed switching from IT to consulting. Current role satisfaction is low.");
-        topic1.put("expert_advice", "Wait until after April before making any major career changes.");
-        topics.add(topic1);
-
-        Map<String, Object> topic2 = new HashMap<>();
-        topic2.put("id", "topic_2");
-        topic2.put("category", "finance");
-        topic2.put("title", "Investment Planning");
-        topic2.put("summary", "Discussed investment options for next 6 months.");
-        topic2.put("expert_advice", "Avoid risky investments until Saturn transit completes in July.");
-        topics.add(topic2);
-
-        Map<String, Object> topic3 = new HashMap<>();
-        topic3.put("id", "topic_3");
-        topic3.put("category", "health");
-        topic3.put("title", "Wellness Focus");
-        topic3.put("summary", "Discussed stress management and work-life balance.");
-        topic3.put("expert_advice", "Practice morning meditation and avoid late nights.");
-        topics.add(topic3);
-
-        return topics;
-    }
-
-    private List<Map<String, Object>> getMockPredictions(String category) {
-        List<Map<String, Object>> predictions = new ArrayList<>();
-
-        Map<String, Object> pred1 = new HashMap<>();
-        pred1.put("id", "pred_1");
-        pred1.put("category", "career");
-        pred1.put("prediction_text", "Positive career growth expected after April 2024. New opportunities will arise in consulting domain.");
-        pred1.put("timeframe", "April 2024 - October 2024");
-        pred1.put("likelihood", "highly_likely");
-        pred1.put("astrological_factors", Arrays.asList("Jupiter Mahadasha", "10th house activation"));
-        predictions.add(pred1);
-
-        Map<String, Object> pred2 = new HashMap<>();
-        pred2.put("id", "pred_2");
-        pred2.put("category", "finance");
-        pred2.put("prediction_text", "Financial stability improves in second half of 2024.");
-        pred2.put("timeframe", "July 2024 onwards");
-        pred2.put("likelihood", "likely");
-        pred2.put("astrological_factors", Arrays.asList("Saturn transit completion", "2nd house Jupiter aspect"));
-        predictions.add(pred2);
-
-        Map<String, Object> pred3 = new HashMap<>();
-        pred3.put("id", "pred_3");
-        pred3.put("category", "relationships");
-        pred3.put("prediction_text", "Favorable period for family harmony and social connections.");
-        pred3.put("timeframe", "May 2024 - August 2024");
-        pred3.put("likelihood", "likely");
-        pred3.put("astrological_factors", Arrays.asList("Venus transit in 7th house"));
-        predictions.add(pred3);
-
-        return predictions;
-    }
-
-    private List<Map<String, Object>> getMockRemedies(String category) {
-        List<Map<String, Object>> remedies = new ArrayList<>();
-
-        // Mantra remedy
-        Map<String, Object> remedy1 = new HashMap<>();
-        remedy1.put("id", "remedy_1");
-        remedy1.put("type", "mantra");
-        remedy1.put("title", "Hanuman Chalisa");
-        remedy1.put("description", "Chant daily for protection and strength during transition period");
-        remedy1.put("purpose", "To strengthen Mars and gain courage");
-        remedy1.put("priority", "essential");
-        remedy1.put("timing", "Early morning after bath");
-        remedy1.put("frequency", "Daily");
-        remedy1.put("mantra_text", "Full Hanuman Chalisa");
-        remedy1.put("repetition_count", 1);
-        remedies.add(remedy1);
-
-        // Product remedy (gemstone)
-        Map<String, Object> remedy2 = new HashMap<>();
-        remedy2.put("id", "remedy_2");
-        remedy2.put("type", "product");
-        remedy2.put("title", "Yellow Sapphire Ring");
-        remedy2.put("description", "Wear a certified yellow sapphire in gold ring on index finger");
-        remedy2.put("purpose", "To strengthen Jupiter for career growth");
-        remedy2.put("priority", "recommended");
-        remedy2.put("timing", "Wear on Thursday morning");
-        remedy2.put("product_type", "gemstone");
-        Map<String, Object> productAttrs = new HashMap<>();
-        productAttrs.put("material", "Yellow Sapphire");
-        productAttrs.put("color", "Yellow");
-        productAttrs.put("metal", "Gold");
-        productAttrs.put("weight_range", "3-5 carats");
-        remedy2.put("product_attributes", productAttrs);
-        remedies.add(remedy2);
-
-        // Puja remedy
-        Map<String, Object> remedy3 = new HashMap<>();
-        remedy3.put("id", "remedy_3");
-        remedy3.put("type", "puja");
-        remedy3.put("title", "Brihaspati Puja");
-        remedy3.put("description", "Perform Jupiter puja for career blessings");
-        remedy3.put("purpose", "To appease Jupiter and enhance career prospects");
-        remedy3.put("priority", "recommended");
-        remedy3.put("timing", "Any Thursday");
-        remedy3.put("puja_type", "Brihaspati Shanti Puja");
-        remedies.add(remedy3);
-
-        // Donation remedy
-        Map<String, Object> remedy4 = new HashMap<>();
-        remedy4.put("id", "remedy_4");
-        remedy4.put("type", "donation");
-        remedy4.put("title", "Feed Brahmins");
-        remedy4.put("description", "Donate yellow items and feed Brahmins on Thursdays");
-        remedy4.put("purpose", "To strengthen Jupiter blessings");
-        remedy4.put("priority", "optional");
-        remedy4.put("timing", "Every Thursday");
-        remedy4.put("frequency", "Weekly");
-        remedies.add(remedy4);
-
-        // Lifestyle remedy
-        Map<String, Object> remedy5 = new HashMap<>();
-        remedy5.put("id", "remedy_5");
-        remedy5.put("type", "lifestyle");
-        remedy5.put("title", "Morning Meditation");
-        remedy5.put("description", "Practice 15 minutes of morning meditation facing east");
-        remedy5.put("purpose", "To calm the mind and enhance decision-making clarity");
-        remedy5.put("priority", "essential");
-        remedy5.put("timing", "Sunrise");
-        remedy5.put("frequency", "Daily");
-        remedies.add(remedy5);
-
-        return remedies;
-    }
-
-    private List<Map<String, Object>> getMockInsights(String category) {
-        List<Map<String, Object>> insights = new ArrayList<>();
-
-        Map<String, Object> insight1 = new HashMap<>();
-        insight1.put("id", "insight_1");
-        insight1.put("category", "general");
-        insight1.put("text", "Strong Jupiter influence in your chart indicates natural leadership abilities");
-        insight1.put("planetary_influence", "Jupiter in 10th house");
-        insights.add(insight1);
-
-        Map<String, Object> insight2 = new HashMap<>();
-        insight2.put("id", "insight_2");
-        insight2.put("category", "timing");
-        insight2.put("text", "Current Saturn transit is creating temporary delays, will clear by July");
-        insight2.put("planetary_influence", "Saturn transit through 4th house");
-        insights.add(insight2);
-
-        Map<String, Object> insight3 = new HashMap<>();
-        insight3.put("id", "insight_3");
-        insight3.put("category", "strength");
-        insight3.put("text", "Your chart shows excellent communication skills and analytical thinking");
-        insight3.put("planetary_influence", "Mercury in 3rd house exalted");
-        insights.add(insight3);
-
-        return insights;
-    }
-
-    private Map<String, Object> getMockFollowUp() {
-        Map<String, Object> followUp = new HashMap<>();
-        followUp.put("recommended", true);
-        followUp.put("timeframe", "After 3 months");
-        followUp.put("reason", "To review career progress after Jupiter mahadasha begins");
-        followUp.put("same_expert_recommended", true);
-        return followUp;
+        return results;
     }
 }

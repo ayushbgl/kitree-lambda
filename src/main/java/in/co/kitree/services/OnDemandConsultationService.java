@@ -786,6 +786,12 @@ public class OnDemandConsultationService {
             order.setSummary(summary);
         }
 
+        // Summary generation tracking
+        if (doc.contains("summary_status")) order.setSummaryStatus(doc.getString("summary_status"));
+        if (doc.contains("summary_retry_count")) order.setSummaryRetryCount(doc.getLong("summary_retry_count"));
+        if (doc.contains("summary_last_attempt")) order.setSummaryLastAttempt(doc.getTimestamp("summary_last_attempt"));
+        if (doc.contains("summary_error")) order.setSummaryError(doc.getString("summary_error"));
+
         return order;
     }
 
@@ -801,5 +807,238 @@ public class OnDemandConsultationService {
         DocumentReference orderRef = db.collection("users").document(userId)
                 .collection("orders").document(orderId);
         orderRef.update("summary", summary).get();
+    }
+
+    // =========================================================================
+    // SUMMARY GENERATION STATUS TRACKING
+    // =========================================================================
+
+    /**
+     * Summary generation status constants.
+     */
+    public static final String SUMMARY_STATUS_PENDING = "PENDING";
+    public static final String SUMMARY_STATUS_IN_PROGRESS = "IN_PROGRESS";
+    public static final String SUMMARY_STATUS_COMPLETED = "COMPLETED";
+    public static final String SUMMARY_STATUS_FAILED = "FAILED";
+    public static final String SUMMARY_STATUS_SKIPPED = "SKIPPED";
+
+    /**
+     * Maximum number of retry attempts for summary generation.
+     */
+    public static final int MAX_SUMMARY_RETRIES = 5;
+
+    /**
+     * Minimum time (in seconds) between retry attempts.
+     */
+    public static final int SUMMARY_RETRY_COOLDOWN_SECONDS = 300; // 5 minutes
+
+    /**
+     * Mark an order as pending summary generation.
+     * Called after billing is completed.
+     *
+     * @param userId The user's ID
+     * @param orderId The order ID
+     */
+    public void markSummaryPending(String userId, String orderId)
+            throws ExecutionException, InterruptedException {
+        DocumentReference orderRef = db.collection("users").document(userId)
+                .collection("orders").document(orderId);
+
+        Map<String, Object> updates = new HashMap<>();
+        updates.put("summary_status", SUMMARY_STATUS_PENDING);
+        updates.put("summary_retry_count", 0L);
+        updates.put("summary_last_attempt", null);
+        updates.put("summary_error", null);
+
+        orderRef.update(updates).get();
+    }
+
+    /**
+     * Try to claim an order for summary generation using optimistic locking.
+     * This prevents multiple Lambda instances from processing the same order.
+     *
+     * @param userId The user's ID
+     * @param orderId The order ID
+     * @return true if claim was successful, false if already claimed or not eligible
+     */
+    public boolean tryClaimSummaryGeneration(String userId, String orderId)
+            throws ExecutionException, InterruptedException {
+        DocumentReference orderRef = db.collection("users").document(userId)
+                .collection("orders").document(orderId);
+
+        return db.runTransaction(transaction -> {
+            DocumentSnapshot doc = transaction.get(orderRef).get();
+
+            if (!doc.exists()) {
+                return false;
+            }
+
+            String currentStatus = doc.getString("summary_status");
+
+            // Only claim if status is PENDING
+            if (!SUMMARY_STATUS_PENDING.equals(currentStatus)) {
+                return false;
+            }
+
+            // Check retry count
+            Long retryCount = doc.getLong("summary_retry_count");
+            if (retryCount != null && retryCount >= MAX_SUMMARY_RETRIES) {
+                // Max retries exceeded, mark as failed
+                transaction.update(orderRef, Map.of(
+                    "summary_status", SUMMARY_STATUS_FAILED,
+                    "summary_error", "Max retries exceeded"
+                ));
+                return false;
+            }
+
+            // Check cooldown period
+            Timestamp lastAttempt = doc.getTimestamp("summary_last_attempt");
+            if (lastAttempt != null) {
+                long secondsSinceLastAttempt =
+                    (Timestamp.now().getSeconds() - lastAttempt.getSeconds());
+                if (secondsSinceLastAttempt < SUMMARY_RETRY_COOLDOWN_SECONDS) {
+                    return false; // Still in cooldown
+                }
+            }
+
+            // Claim the order by setting status to IN_PROGRESS
+            transaction.update(orderRef, Map.of(
+                "summary_status", SUMMARY_STATUS_IN_PROGRESS,
+                "summary_last_attempt", Timestamp.now()
+            ));
+
+            return true;
+        }).get();
+    }
+
+    /**
+     * Update summary status after generation attempt.
+     *
+     * @param userId The user's ID
+     * @param orderId The order ID
+     * @param status The new status (COMPLETED, FAILED, SKIPPED, PENDING for retry)
+     * @param summary The generated summary (null if not completed)
+     * @param errorMessage Error message if failed (null otherwise)
+     * @param shouldRetry If true and status indicates failure, set to PENDING for retry
+     */
+    public void updateSummaryStatus(String userId, String orderId, String status,
+                                    Map<String, Object> summary, String errorMessage,
+                                    boolean shouldRetry)
+            throws ExecutionException, InterruptedException {
+        DocumentReference orderRef = db.collection("users").document(userId)
+                .collection("orders").document(orderId);
+
+        db.runTransaction(transaction -> {
+            DocumentSnapshot doc = transaction.get(orderRef).get();
+            if (!doc.exists()) {
+                return null;
+            }
+
+            Map<String, Object> updates = new HashMap<>();
+
+            if (SUMMARY_STATUS_COMPLETED.equals(status)) {
+                // Success - store summary
+                updates.put("summary_status", SUMMARY_STATUS_COMPLETED);
+                updates.put("summary", summary);
+                updates.put("summary_error", null);
+
+            } else if (SUMMARY_STATUS_SKIPPED.equals(status)) {
+                // Skipped (short call, no recording, etc.)
+                updates.put("summary_status", SUMMARY_STATUS_SKIPPED);
+                updates.put("summary_error", errorMessage);
+
+            } else if (shouldRetry) {
+                // Failed but should retry - increment count and set back to PENDING
+                Long currentRetryCount = doc.getLong("summary_retry_count");
+                long newRetryCount = (currentRetryCount != null ? currentRetryCount : 0) + 1;
+
+                if (newRetryCount >= MAX_SUMMARY_RETRIES) {
+                    updates.put("summary_status", SUMMARY_STATUS_FAILED);
+                    updates.put("summary_error", "Max retries exceeded. Last error: " + errorMessage);
+                } else {
+                    updates.put("summary_status", SUMMARY_STATUS_PENDING);
+                    updates.put("summary_retry_count", newRetryCount);
+                    updates.put("summary_error", errorMessage);
+                }
+
+            } else {
+                // Failed permanently
+                updates.put("summary_status", SUMMARY_STATUS_FAILED);
+                updates.put("summary_error", errorMessage);
+            }
+
+            transaction.update(orderRef, updates);
+            return null;
+        }).get();
+    }
+
+    /**
+     * Query for orders that are pending summary generation and eligible for retry.
+     * Returns orders where:
+     * - status is COMPLETED (order is done)
+     * - summaryStatus is PENDING
+     * - summaryRetryCount < MAX_SUMMARY_RETRIES
+     * - summaryLastAttempt is null or older than cooldown period
+     *
+     * @param limit Maximum number of orders to return
+     * @return List of (userId, orderId) pairs
+     */
+    public List<String[]> getOrdersPendingSummaryRetry(int limit)
+            throws ExecutionException, InterruptedException {
+        List<String[]> pendingOrders = new ArrayList<>();
+
+        // Calculate cooldown threshold
+        Timestamp cooldownThreshold = Timestamp.ofTimeSecondsAndNanos(
+            Timestamp.now().getSeconds() - SUMMARY_RETRY_COOLDOWN_SECONDS, 0);
+
+        // Query using collection group to search across all users' orders
+        // Note: This requires a composite index on (type, status, summary_status)
+        Query query = db.collectionGroup("orders")
+            .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+            .whereEqualTo("status", "COMPLETED")
+            .whereEqualTo("summary_status", SUMMARY_STATUS_PENDING)
+            .limit(limit * 2); // Fetch extra to filter by cooldown
+
+        QuerySnapshot snapshot = query.get().get();
+
+        for (QueryDocumentSnapshot doc : snapshot.getDocuments()) {
+            if (pendingOrders.size() >= limit) {
+                break;
+            }
+
+            // Check retry count
+            Long retryCount = doc.getLong("summary_retry_count");
+            if (retryCount != null && retryCount >= MAX_SUMMARY_RETRIES) {
+                continue;
+            }
+
+            // Check cooldown
+            Timestamp lastAttempt = doc.getTimestamp("summary_last_attempt");
+            if (lastAttempt != null && lastAttempt.compareTo(cooldownThreshold) > 0) {
+                continue; // Still in cooldown
+            }
+
+            // Extract userId from document path: users/{userId}/orders/{orderId}
+            String userId = doc.getReference().getParent().getParent().getId();
+            String orderId = doc.getId();
+
+            pendingOrders.add(new String[]{userId, orderId});
+        }
+
+        return pendingOrders;
+    }
+
+    /**
+     * Get count of orders pending summary generation.
+     * Useful for monitoring and alerting.
+     */
+    public int getOrdersPendingSummaryCount() throws ExecutionException, InterruptedException {
+        Query query = db.collectionGroup("orders")
+            .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+            .whereEqualTo("status", "COMPLETED")
+            .whereEqualTo("summary_status", SUMMARY_STATUS_PENDING);
+
+        AggregateQuerySnapshot snapshot = query.count().get().get();
+        return (int) snapshot.getCount();
     }
 }

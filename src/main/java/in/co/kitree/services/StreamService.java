@@ -104,6 +104,40 @@ public class StreamService {
 
         public boolean isStillInCall() { return leftAt == null; }
     }
+
+    /**
+     * Represents a call recording from Stream.
+     */
+    public static class RecordingInfo {
+        private String filename;
+        private String url;              // Pre-signed S3 URL (expires after 2 weeks)
+        private long durationSeconds;
+        private String mimeType;
+        private Instant startTime;
+        private Instant endTime;
+
+        public String getFilename() { return filename; }
+        public void setFilename(String filename) { this.filename = filename; }
+        public String getUrl() { return url; }
+        public void setUrl(String url) { this.url = url; }
+        public long getDurationSeconds() { return durationSeconds; }
+        public void setDurationSeconds(long durationSeconds) { this.durationSeconds = durationSeconds; }
+        public String getMimeType() { return mimeType; }
+        public void setMimeType(String mimeType) { this.mimeType = mimeType; }
+        public Instant getStartTime() { return startTime; }
+        public void setStartTime(Instant startTime) { this.startTime = startTime; }
+        public Instant getEndTime() { return endTime; }
+        public void setEndTime(Instant endTime) { this.endTime = endTime; }
+
+        @Override
+        public String toString() {
+            return "RecordingInfo{" +
+                    "filename='" + filename + '\'' +
+                    ", durationSeconds=" + durationSeconds +
+                    ", mimeType='" + mimeType + '\'' +
+                    '}';
+        }
+    }
     
     private final boolean isTest;
     private final String apiKey;
@@ -426,6 +460,152 @@ public class StreamService {
             e.printStackTrace();
             return StreamCallResponse.error(e.getMessage());
         }
+    }
+
+    /**
+     * Fetch call recordings from Stream Video API.
+     * GET /api/v2/video/call/{type}/{id}/recordings?api_key={apiKey}
+     *
+     * @param callType The call type (e.g., "consultation_audio")
+     * @param callId The call ID (orderId)
+     * @return List of RecordingInfo objects, or empty list if none found
+     */
+    public List<RecordingInfo> getCallRecordings(String callType, String callId) {
+        List<RecordingInfo> recordings = new ArrayList<>();
+
+        if (callType == null || callId == null) {
+            System.err.println("[StreamService] Cannot get recordings: missing callType or callId");
+            return recordings;
+        }
+
+        if (!isConfigured()) {
+            System.err.println("[StreamService] Cannot get recordings: service not configured");
+            return recordings;
+        }
+
+        try {
+            String url = String.format("%s/call/%s/%s/recordings?api_key=%s",
+                STREAM_API_BASE_URL, callType, callId, apiKey);
+
+            String authToken = createServerAuthToken();
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", authToken)
+                    .header("stream-auth-type", "jwt")
+                    .GET()
+                    .timeout(Duration.ofSeconds(15))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            int statusCode = response.statusCode();
+            System.out.println("[StreamService] Get recordings response: " + statusCode);
+
+            if (statusCode == 404) {
+                System.out.println("[StreamService] No recordings found for call: " + callType + ":" + callId);
+                return recordings;
+            }
+
+            if (statusCode != 200) {
+                System.err.println("[StreamService] Failed to get recordings: HTTP " + statusCode + " - " + response.body());
+                return recordings;
+            }
+
+            return parseRecordingsResponse(response.body());
+
+        } catch (Exception e) {
+            System.err.println("[StreamService] Error fetching recordings: " + e.getMessage());
+            e.printStackTrace();
+            return recordings;
+        }
+    }
+
+    /**
+     * Parse the recordings response from Stream API.
+     *
+     * Expected response structure:
+     * {
+     *   "recordings": [
+     *     {
+     *       "filename": "recording-123.mp4",
+     *       "url": "https://s3.../recording.mp4?signature=...",
+     *       "start_time": "2024-01-15T10:30:00Z",
+     *       "end_time": "2024-01-15T11:00:00Z"
+     *     }
+     *   ]
+     * }
+     */
+    private List<RecordingInfo> parseRecordingsResponse(String jsonBody) {
+        List<RecordingInfo> recordings = new ArrayList<>();
+
+        try {
+            JsonNode root = objectMapper.readTree(jsonBody);
+            JsonNode recordingsNode = root.path("recordings");
+
+            if (!recordingsNode.isArray()) {
+                System.out.println("[StreamService] No 'recordings' array in response");
+                return recordings;
+            }
+
+            for (JsonNode recordingNode : recordingsNode) {
+                RecordingInfo info = new RecordingInfo();
+
+                info.setFilename(recordingNode.path("filename").asText(null));
+                info.setUrl(recordingNode.path("url").asText(null));
+
+                // Parse start/end times and calculate duration
+                String startTimeStr = recordingNode.path("start_time").asText(null);
+                String endTimeStr = recordingNode.path("end_time").asText(null);
+
+                if (startTimeStr != null && !startTimeStr.isEmpty()) {
+                    try {
+                        info.setStartTime(Instant.parse(startTimeStr));
+                    } catch (Exception e) {
+                        System.err.println("[StreamService] Error parsing start_time: " + startTimeStr);
+                    }
+                }
+
+                if (endTimeStr != null && !endTimeStr.isEmpty()) {
+                    try {
+                        info.setEndTime(Instant.parse(endTimeStr));
+                    } catch (Exception e) {
+                        System.err.println("[StreamService] Error parsing end_time: " + endTimeStr);
+                    }
+                }
+
+                // Calculate duration if both times are available
+                if (info.getStartTime() != null && info.getEndTime() != null) {
+                    info.setDurationSeconds(Duration.between(info.getStartTime(), info.getEndTime()).getSeconds());
+                }
+
+                // Determine MIME type from filename or URL
+                String filename = info.getFilename();
+                if (filename != null) {
+                    if (filename.endsWith(".mp4")) {
+                        info.setMimeType("audio/mp4");
+                    } else if (filename.endsWith(".webm")) {
+                        info.setMimeType("audio/webm");
+                    } else if (filename.endsWith(".mp3")) {
+                        info.setMimeType("audio/mpeg");
+                    } else {
+                        info.setMimeType("audio/mp4"); // Default
+                    }
+                }
+
+                // Only add recordings with valid URLs
+                if (info.getUrl() != null && !info.getUrl().isEmpty()) {
+                    recordings.add(info);
+                    System.out.println("[StreamService] Found recording: " + info);
+                }
+            }
+
+        } catch (Exception e) {
+            System.err.println("[StreamService] Error parsing recordings response: " + e.getMessage());
+        }
+
+        return recordings;
     }
 
     /**

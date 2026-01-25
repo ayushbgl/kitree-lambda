@@ -341,6 +341,9 @@ public class BillingService {
                 orderUpdates.put("cost", 0.0);
                 orderUpdates.put("platform_fee_amount", 0.0);
                 orderUpdates.put("expert_earnings", 0.0);
+                // Skip summary for zero-duration calls (too short for meaningful content)
+                orderUpdates.put("summary_status", OnDemandConsultationService.SUMMARY_STATUS_SKIPPED);
+                orderUpdates.put("summary_error", "Call duration too short for summary");
                 transaction.update(orderRef, orderUpdates);
 
                 // Free expert if no other active consultations
@@ -451,6 +454,9 @@ public class BillingService {
                 orderUpdates.put("cost", finalCost);
                 orderUpdates.put("platform_fee_amount", finalPlatformFeeAmount);
                 orderUpdates.put("expert_earnings", finalExpertEarnings);
+                // Queue summary generation (will be picked up by cron job)
+                orderUpdates.put("summary_status", OnDemandConsultationService.SUMMARY_STATUS_PENDING);
+                orderUpdates.put("summary_retry_count", 0L);
                 transaction.update(orderRef, orderUpdates);
 
                 // Set consultation status back to FREE if no other active consultations

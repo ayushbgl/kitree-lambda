@@ -106,6 +106,19 @@ public class OnDemandConsultationOrder {
     // Stored as a Map with structured fields: headline, brief_summary, topics, predictions, remedies, etc.
     private java.util.Map<String, Object> summary;
 
+    // Summary generation tracking
+    // Status: PENDING, IN_PROGRESS, COMPLETED, FAILED, SKIPPED
+    private String summaryStatus;
+
+    // Number of retry attempts for summary generation
+    private Long summaryRetryCount;
+
+    // Timestamp of last summary generation attempt
+    private Timestamp summaryLastAttempt;
+
+    // Last error message from summary generation (for debugging)
+    private String summaryError;
+
     public OnDemandConsultationOrder() {
         this.type = "ON_DEMAND_CONSULTATION";
     }
@@ -219,6 +232,18 @@ public class OnDemandConsultationOrder {
 
     public java.util.Map<String, Object> getSummary() { return summary; }
     public void setSummary(java.util.Map<String, Object> summary) { this.summary = summary; }
+
+    public String getSummaryStatus() { return summaryStatus; }
+    public void setSummaryStatus(String summaryStatus) { this.summaryStatus = summaryStatus; }
+
+    public Long getSummaryRetryCount() { return summaryRetryCount; }
+    public void setSummaryRetryCount(Long summaryRetryCount) { this.summaryRetryCount = summaryRetryCount; }
+
+    public Timestamp getSummaryLastAttempt() { return summaryLastAttempt; }
+    public void setSummaryLastAttempt(Timestamp summaryLastAttempt) { this.summaryLastAttempt = summaryLastAttempt; }
+
+    public String getSummaryError() { return summaryError; }
+    public void setSummaryError(String summaryError) { this.summaryError = summaryError; }
 
     @Override
     public String toString() {

@@ -2519,12 +2519,42 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             LoggingService.error("orphaned_busy_expert_cleanup_error", e);
         }
 
+        // =====================================================================
+        // PROCESS PENDING SUMMARY GENERATIONS
+        // =====================================================================
+        int summariesProcessed = 0;
+        int summariesSucceeded = 0;
+        int summariesFailed = 0;
+        int summariesSkipped = 0;
+
+        try {
+            LoggingService.setFunction("process_pending_summaries");
+            ConsultationSummaryService summaryService = new ConsultationSummaryService(db, isTest());
+
+            // Process up to 5 summaries per cron run to avoid timeout
+            // Each summary can take 30-60 seconds to process
+            Map<String, Integer> summaryResults = summaryService.processPendingSummaries(5);
+
+            summariesProcessed = summaryResults.getOrDefault("processed", 0);
+            summariesSucceeded = summaryResults.getOrDefault("succeeded", 0);
+            summariesFailed = summaryResults.getOrDefault("failed", 0);
+            summariesSkipped = summaryResults.getOrDefault("skipped", 0);
+
+        } catch (Exception e) {
+            LoggingService.error("process_pending_summaries_error", e);
+        }
+
+        LoggingService.setFunction("auto_terminate_consultations");
         LoggingService.info("auto_terminate_job_completed", Map.of(
             "terminatedCount", terminatedCount,
             "failedInitiatedCount", failedInitiatedCount,
             "singleParticipantEndedCount", singleParticipantEndedCount,
             "freedExpertsCount", freedExpertsCount,
-            "errorCount", errorCount
+            "errorCount", errorCount,
+            "summariesProcessed", summariesProcessed,
+            "summariesSucceeded", summariesSucceeded,
+            "summariesFailed", summariesFailed,
+            "summariesSkipped", summariesSkipped
         ));
         return gson.toJson(Map.of(
             "success", true,
@@ -2532,7 +2562,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             "failedInitiatedCount", failedInitiatedCount,
             "singleParticipantEndedCount", singleParticipantEndedCount,
             "freedExpertsCount", freedExpertsCount,
-            "errorCount", errorCount
+            "errorCount", errorCount,
+            "summariesProcessed", summariesProcessed,
+            "summariesSucceeded", summariesSucceeded,
+            "summariesFailed", summariesFailed,
+            "summariesSkipped", summariesSkipped
         ));
     }
 
