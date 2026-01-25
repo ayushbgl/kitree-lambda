@@ -257,16 +257,18 @@ public class GeminiService {
 
     /**
      * Build the prompt for summary generation.
+     * Supports flexible content blocks for different consultation types.
      */
     private String buildSummaryPrompt(String category, String expertName, long durationSeconds) {
         String categoryContext = getCategoryContext(category);
         int durationMinutes = (int) (durationSeconds / 60);
 
         return String.format("""
-            You are analyzing an astrology consultation audio recording between a user and an expert.
+            You are analyzing a spiritual consultation audio recording between a user and an expert.
+            The consultation may cover multiple spiritual domains (astrology, tarot, numerology, etc.) - treat it as a unified, blended experience.
 
             **Consultation Context:**
-            - Category: %s
+            - Primary Category: %s
             - Expert Name: %s
             - Duration: approximately %d minutes
 
@@ -275,26 +277,59 @@ public class GeminiService {
 
             **Instructions:**
             1. Listen to the entire audio recording carefully
-            2. Identify the user's primary concern and questions they asked
-            3. Extract all predictions, important dates, and remedies mentioned by the expert
-            4. Categorize topics discussed (career, finance, health, relationships, spirituality, family, education, travel)
-            5. Assess the overall sentiment of the consultation (positive, neutral, negative, or mixed)
-            6. Note any follow-up recommendations made by the expert
+            2. Identify the user's primary concern and questions asked
+            3. Extract ALL meaningful content into content_blocks with appropriate display_types
+            4. The summary should feel like a natural, unified reading - NOT sectioned by category
+            5. Assess the overall sentiment (positive, neutral, negative, mixed)
+
+            **Content Block Types (display_type):**
+            Use these display_type values based on what content is being conveyed:
+            - "text": General text, summaries, explanations
+            - "prediction": Future predictions with timeframe and likelihood
+            - "date_highlight": Important dates with significance and auspiciousness
+            - "remedy_mantra": Mantras with text, repetitions, timing
+            - "remedy_product": Product recommendations (crystals, yantras, etc.)
+            - "remedy_ritual": Pujas, rituals, donations
+            - "remedy_lifestyle": Lifestyle changes, dos/don'ts
+            - "tarot_card": Tarot card drawn (use card_id like "major_fool", "cups_ace", "swords_king")
+            - "planetary_info": Planet positions, transits, dashas
+            - "numerology_number": Important numbers with meanings
+            - "vastu_direction": Directional/placement guidance
+            - "chakra_info": Chakra-related insights
+            - "energy_reading": Reiki/energy observations
+            - "insight": General spiritual insights
+            - "quote": Notable expert quotes to highlight
+
+            **Product Recommendations (IMPORTANT):**
+            When the expert recommends a physical product (gemstone, crystal, yantra, bracelet, pendant, mala, rudraksha), extract these attributes:
+            - product_attributes.material: ["rose_quartz", "blue_sapphire", "amethyst", "citrine", "tiger_eye", "rudraksha", etc.]
+            - product_attributes.product_type: "bracelet", "pendant", "ring", "mala", "yantra", "statue", null for any
+            - product_attributes.planets: ["saturn", "venus", "jupiter", "mars", "mercury", "sun", "moon", "rahu", "ketu"]
+            - product_attributes.purpose: ["love", "career", "protection", "health", "wealth", "peace", "clarity"]
+            - product_attributes.chakras: ["root", "sacral", "solar_plexus", "heart", "throat", "third_eye", "crown"]
+            - product_attributes.color: ["blue", "pink", "green", "yellow", "red", "white", "black", "purple"]
+            - expert_quote: Exact quote of what the expert said about this product
+
+            **Tarot Card IDs (if tarot reading):**
+            Use these exact card_id formats:
+            - Major Arcana: "major_fool", "major_magician", "major_high_priestess", "major_empress", "major_emperor", "major_hierophant", "major_lovers", "major_chariot", "major_strength", "major_hermit", "major_wheel", "major_justice", "major_hanged_man", "major_death", "major_temperance", "major_devil", "major_tower", "major_star", "major_moon", "major_sun", "major_judgement", "major_world"
+            - Minor Arcana: "{suit}_{rank}" like "cups_ace", "wands_two", "swords_queen", "pentacles_king"
+            - Include position (e.g., "past", "present", "future", "outcome") and is_reversed if mentioned
 
             **Output Requirements:**
             - Output ONLY valid JSON matching the schema
-            - All dates should be in "Month YYYY" or "Month DD, YYYY" format
-            - Remedy types must be one of: mantra, product, puja, donation, lifestyle
-            - Likelihood values: highly_likely, likely, possible, unlikely
-            - Priority values: essential, recommended, optional
-            - If a section has no relevant content, use an empty array [] or appropriate null
-            - Do not include any markdown formatting, only raw JSON
-            - Be concise but comprehensive
+            - All dates in "Month YYYY" or "Month DD, YYYY" format
+            - Each content_block needs: id (unique), display_type, category, title, content (main text)
+            - Add type-specific fields based on display_type (see schema)
+            - If a section has no content, use empty array []
+            - Be concise but comprehensive - capture all meaningful information
+            - Blend insights naturally - don't artificially separate by consultation type
 
-            **Important Notes:**
-            - If the audio is unclear or mostly silent, return minimal data with what you can extract
+            **Important:**
+            - If audio is unclear, return minimal data with what you can extract
             - Focus on actionable insights and specific predictions
-            - Preserve the expert's specific advice and recommendations accurately
+            - Preserve expert's exact advice and product recommendations
+            - For product remedies, always include the expert_quote of what they said
             """,
             category != null ? category : "HOROSCOPE",
             expertName != null ? expertName : "Expert",
@@ -312,8 +347,9 @@ public class GeminiService {
         return switch (category.toUpperCase()) {
             case "TAROT" -> """
                 This is a Tarot reading consultation. Pay attention to:
-                - Card names and their interpretations
-                - Spread positions and their meanings
+                - Card names and their interpretations (use exact card_id format)
+                - Spread positions (past, present, future, outcome, etc.)
+                - Whether cards are reversed or upright
                 - Symbolic messages and guidance
                 - Future possibilities revealed by the cards
                 """;
@@ -323,6 +359,7 @@ public class GeminiService {
                 - Lucky numbers and dates
                 - Name analysis and vibrations
                 - Yearly/monthly predictions based on numbers
+                - Number-based remedies and recommendations
                 """;
             case "PALMISTRY" -> """
                 This is a Palmistry reading consultation. Pay attention to:
@@ -330,13 +367,24 @@ public class GeminiService {
                 - Mounts and their significance
                 - Hand shape analysis
                 - Predictions based on palm features
+                - Any recommended remedies based on palm reading
                 """;
             case "VASTU" -> """
                 This is a Vastu consultation. Pay attention to:
-                - Directional recommendations
+                - Directional recommendations (use vastu_direction display_type)
                 - Room placements and corrections
                 - Remedial measures for Vastu defects
                 - Auspicious placements for prosperity
+                - Specific objects to place or remove
+                """;
+            case "REIKI", "ENERGY", "HEALING" -> """
+                This is a Reiki/Energy healing consultation. Pay attention to:
+                - Chakra observations and blockages
+                - Energy flow assessments
+                - Healing techniques recommended
+                - Spiritual guidance and affirmations
+                - Any crystals or tools recommended for energy work
+                - Meditation or visualization practices suggested
                 """;
             default -> """
                 This is an astrological horoscope consultation. Pay attention to:
@@ -345,17 +393,140 @@ public class GeminiService {
                 - House placements and their significance
                 - Transit effects and timing predictions
                 - Yogas and doshas mentioned
+                - Gemstone and remedy recommendations with specific materials
                 """;
         };
     }
 
     /**
      * Build the JSON response schema for structured output.
+     * Uses flexible content_blocks approach to support various consultation types.
      */
     private Schema buildResponseSchema() {
+        // Product attributes schema for remedy product matching
+        Schema productAttributesSchema = Schema.builder()
+            .type("object")
+            .properties(Map.of(
+                "material", Schema.builder()
+                    .type("array")
+                    .items(Schema.builder().type("string").build())
+                    .build(),
+                "product_type", Schema.builder().type("string").build(),
+                "color", Schema.builder()
+                    .type("array")
+                    .items(Schema.builder().type("string").build())
+                    .build(),
+                "purpose", Schema.builder()
+                    .type("array")
+                    .items(Schema.builder().type("string").build())
+                    .build(),
+                "planets", Schema.builder()
+                    .type("array")
+                    .items(Schema.builder().type("string").build())
+                    .build(),
+                "chakras", Schema.builder()
+                    .type("array")
+                    .items(Schema.builder().type("string").build())
+                    .build()
+            ))
+            .build();
+
+        // Flexible content block schema
+        Schema contentBlockSchema = Schema.builder()
+            .type("object")
+            .properties(Map.ofEntries(
+                // Common fields for all blocks
+                Map.entry("id", Schema.builder().type("string").build()),
+                Map.entry("display_type", Schema.builder()
+                    .type("string")
+                    .enum_(List.of(
+                        "text", "prediction", "date_highlight",
+                        "remedy_mantra", "remedy_product", "remedy_ritual", "remedy_lifestyle",
+                        "tarot_card", "planetary_info", "numerology_number",
+                        "vastu_direction", "chakra_info", "energy_reading",
+                        "insight", "quote"
+                    ))
+                    .build()),
+                Map.entry("category", Schema.builder().type("string").build()),
+                Map.entry("title", Schema.builder().type("string").build()),
+                Map.entry("content", Schema.builder().type("string").build()),
+
+                // Prediction fields
+                Map.entry("timeframe", Schema.builder().type("string").build()),
+                Map.entry("likelihood", Schema.builder()
+                    .type("string")
+                    .enum_(List.of("highly_likely", "likely", "possible", "unlikely"))
+                    .build()),
+                Map.entry("astrological_factors", Schema.builder()
+                    .type("array")
+                    .items(Schema.builder().type("string").build())
+                    .build()),
+
+                // Date highlight fields
+                Map.entry("date", Schema.builder().type("string").build()),
+                Map.entry("is_auspicious", Schema.builder().type("boolean").build()),
+
+                // Remedy common fields
+                Map.entry("priority", Schema.builder()
+                    .type("string")
+                    .enum_(List.of("essential", "recommended", "optional"))
+                    .build()),
+                Map.entry("timing", Schema.builder().type("string").build()),
+                Map.entry("frequency", Schema.builder().type("string").build()),
+                Map.entry("expert_quote", Schema.builder().type("string").build()),
+
+                // Mantra-specific
+                Map.entry("mantra_text", Schema.builder().type("string").build()),
+                Map.entry("repetition_count", Schema.builder().type("integer").build()),
+
+                // Product-specific (for matching)
+                Map.entry("product_attributes", productAttributesSchema),
+
+                // Ritual/Puja specific
+                Map.entry("ritual_type", Schema.builder().type("string").build()),
+                Map.entry("donation_recipient", Schema.builder().type("string").build()),
+                Map.entry("donation_items", Schema.builder()
+                    .type("array")
+                    .items(Schema.builder().type("string").build())
+                    .build()),
+
+                // Tarot card fields
+                Map.entry("card_id", Schema.builder().type("string").build()),
+                Map.entry("position", Schema.builder().type("string").build()),
+                Map.entry("is_reversed", Schema.builder().type("boolean").build()),
+                Map.entry("card_meaning", Schema.builder().type("string").build()),
+
+                // Planetary info fields
+                Map.entry("planet", Schema.builder().type("string").build()),
+                Map.entry("house", Schema.builder().type("integer").build()),
+                Map.entry("sign", Schema.builder().type("string").build()),
+                Map.entry("dasha_period", Schema.builder().type("string").build()),
+                Map.entry("transit_effect", Schema.builder().type("string").build()),
+
+                // Numerology fields
+                Map.entry("number", Schema.builder().type("integer").build()),
+                Map.entry("number_type", Schema.builder().type("string").build()),
+
+                // Vastu fields
+                Map.entry("direction", Schema.builder().type("string").build()),
+                Map.entry("room", Schema.builder().type("string").build()),
+                Map.entry("placement_item", Schema.builder().type("string").build()),
+
+                // Chakra/Energy fields
+                Map.entry("chakra", Schema.builder().type("string").build()),
+                Map.entry("energy_state", Schema.builder().type("string").build()),
+
+                // Quote fields
+                Map.entry("speaker", Schema.builder().type("string").build())
+            ))
+            .required(List.of("id", "display_type", "content"))
+            .build();
+
+        // Main schema
         return Schema.builder()
             .type("object")
             .properties(Map.ofEntries(
+                // Core summary fields
                 Map.entry("headline", Schema.builder().type("string").build()),
                 Map.entry("brief_summary", Schema.builder().type("string").build()),
                 Map.entry("primary_concern", Schema.builder().type("string").build()),
@@ -363,85 +534,24 @@ public class GeminiService {
                     .type("string")
                     .enum_(List.of("positive", "neutral", "negative", "mixed"))
                     .build()),
-                Map.entry("important_dates", Schema.builder()
+
+                // Consultation types detected (for multi-type blending)
+                Map.entry("consultation_types", Schema.builder()
                     .type("array")
                     .items(Schema.builder()
-                        .type("object")
-                        .properties(Map.of(
-                            "date", Schema.builder().type("string").build(),
-                            "significance", Schema.builder().type("string").build(),
-                            "is_auspicious", Schema.builder().type("boolean").build()
-                        ))
+                        .type("string")
+                        .enum_(List.of("astrology", "tarot", "numerology", "palmistry",
+                            "vastu", "reiki", "energy_healing", "general"))
                         .build())
                     .build()),
-                Map.entry("topics", Schema.builder()
+
+                // Flexible content blocks
+                Map.entry("content_blocks", Schema.builder()
                     .type("array")
-                    .items(Schema.builder()
-                        .type("object")
-                        .properties(Map.of(
-                            "id", Schema.builder().type("string").build(),
-                            "category", Schema.builder().type("string").build(),
-                            "title", Schema.builder().type("string").build(),
-                            "summary", Schema.builder().type("string").build(),
-                            "expert_advice", Schema.builder().type("string").build()
-                        ))
-                        .build())
+                    .items(contentBlockSchema)
                     .build()),
-                Map.entry("predictions", Schema.builder()
-                    .type("array")
-                    .items(Schema.builder()
-                        .type("object")
-                        .properties(Map.of(
-                            "id", Schema.builder().type("string").build(),
-                            "category", Schema.builder().type("string").build(),
-                            "prediction_text", Schema.builder().type("string").build(),
-                            "timeframe", Schema.builder().type("string").build(),
-                            "likelihood", Schema.builder().type("string").build(),
-                            "astrological_factors", Schema.builder()
-                                .type("array")
-                                .items(Schema.builder().type("string").build())
-                                .build()
-                        ))
-                        .build())
-                    .build()),
-                Map.entry("remedies", Schema.builder()
-                    .type("array")
-                    .items(Schema.builder()
-                        .type("object")
-                        .properties(Map.ofEntries(
-                            Map.entry("id", Schema.builder().type("string").build()),
-                            Map.entry("type", Schema.builder()
-                                .type("string")
-                                .enum_(List.of("mantra", "product", "puja", "donation", "lifestyle"))
-                                .build()),
-                            Map.entry("title", Schema.builder().type("string").build()),
-                            Map.entry("description", Schema.builder().type("string").build()),
-                            Map.entry("purpose", Schema.builder().type("string").build()),
-                            Map.entry("priority", Schema.builder()
-                                .type("string")
-                                .enum_(List.of("essential", "recommended", "optional"))
-                                .build()),
-                            Map.entry("timing", Schema.builder().type("string").build()),
-                            Map.entry("frequency", Schema.builder().type("string").build()),
-                            Map.entry("mantra_text", Schema.builder().type("string").build()),
-                            Map.entry("repetition_count", Schema.builder().type("integer").build()),
-                            Map.entry("product_type", Schema.builder().type("string").build()),
-                            Map.entry("puja_type", Schema.builder().type("string").build())
-                        ))
-                        .build())
-                    .build()),
-                Map.entry("insights", Schema.builder()
-                    .type("array")
-                    .items(Schema.builder()
-                        .type("object")
-                        .properties(Map.of(
-                            "id", Schema.builder().type("string").build(),
-                            "category", Schema.builder().type("string").build(),
-                            "text", Schema.builder().type("string").build(),
-                            "planetary_influence", Schema.builder().type("string").build()
-                        ))
-                        .build())
-                    .build()),
+
+                // Follow-up recommendation
                 Map.entry("follow_up", Schema.builder()
                     .type("object")
                     .properties(Map.of(
@@ -452,7 +562,7 @@ public class GeminiService {
                     ))
                     .build())
             ))
-            .required(List.of("headline", "brief_summary", "sentiment"))
+            .required(List.of("headline", "brief_summary", "sentiment", "content_blocks"))
             .build();
     }
 

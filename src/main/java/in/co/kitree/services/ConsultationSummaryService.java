@@ -2,7 +2,9 @@ package in.co.kitree.services;
 
 import com.google.cloud.Timestamp;
 import com.google.cloud.firestore.Firestore;
+import in.co.kitree.pojos.MatchedProduct;
 import in.co.kitree.pojos.OnDemandConsultationOrder;
+import in.co.kitree.pojos.RemedyAttributes;
 
 import java.io.InputStream;
 import java.net.URI;
@@ -18,20 +20,28 @@ import java.util.*;
 /**
  * Service for generating AI-powered consultation summaries using Gemini.
  *
+ * Supports multiple consultation types: astrology, tarot, numerology, palmistry, vastu, reiki.
+ * Uses flexible content_blocks schema to handle varying content types.
+ *
  * Uses Firestore-based state management for retry handling:
  * - summaryStatus: PENDING, IN_PROGRESS, COMPLETED, FAILED, SKIPPED
  * - summaryRetryCount: Number of retry attempts
  * - summaryLastAttempt: Timestamp of last attempt
  * - summaryError: Last error message
  *
- * Summary schema includes:
+ * Summary schema:
  * - headline, brief_summary, primary_concern, sentiment
- * - important_dates: array of {date, significance, is_auspicious}
- * - topics: array of {id, category, title, summary, expert_advice}
- * - predictions: array of {id, category, prediction_text, timeframe, likelihood, astrological_factors}
- * - remedies: array of {id, type, title, description, purpose, priority, timing, frequency, ...type-specific fields}
- * - insights: array of {id, category, text, planetary_influence}
+ * - consultation_types: array of detected types (astrology, tarot, numerology, etc.)
+ * - content_blocks: array of flexible blocks with display_type determining rendering
+ *   - Common: id, display_type, category, title, content
+ *   - Type-specific fields based on display_type (prediction, remedy_product, tarot_card, etc.)
+ *   - remedy_product blocks include matched_products array (from ProductMatchingService)
  * - follow_up: {recommended, timeframe, reason, same_expert_recommended}
+ *
+ * Product Matching:
+ * - remedy_product blocks have product_attributes extracted by Gemini
+ * - MockProductMatchingService (swappable for VectorProductMatchingService) finds catalog matches
+ * - Matched products are added as matched_products array to each remedy block
  */
 public class ConsultationSummaryService {
 
@@ -39,6 +49,7 @@ public class ConsultationSummaryService {
     private final OnDemandConsultationService consultationService;
     private final StreamService streamService;
     private final GeminiService geminiService;
+    private final ProductMatchingService productMatchingService;
 
     private static final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(30))
@@ -58,6 +69,8 @@ public class ConsultationSummaryService {
         this.consultationService = new OnDemandConsultationService(db);
         this.streamService = new StreamService(isTest);
         this.geminiService = new GeminiService(isTest);
+        // Using MockProductMatchingService for now - can be swapped for VectorProductMatchingService later
+        this.productMatchingService = new MockProductMatchingService();
     }
 
     /**
@@ -291,14 +304,23 @@ public class ConsultationSummaryService {
 
             Map<String, Object> summary = geminiResult.summary;
 
-            // 12. Store summary and mark as completed
+            // 12. Process product recommendations and match to catalog
+            int matchedProducts = processProductRecommendations(summary);
+            if (matchedProducts > 0) {
+                LoggingService.info("products_matched", Map.of(
+                    "matchedRemedyCount", matchedProducts
+                ));
+            }
+
+            // 13. Store summary and mark as completed
             consultationService.updateSummaryStatus(userId, orderId,
                 OnDemandConsultationService.SUMMARY_STATUS_COMPLETED, summary, null, false);
 
             LoggingService.info("summary_generated_successfully", Map.of(
-                "hasTopics", summary.containsKey("topics"),
-                "hasPredictions", summary.containsKey("predictions"),
-                "hasRemedies", summary.containsKey("remedies")
+                "hasContentBlocks", summary.containsKey("content_blocks"),
+                "contentBlockCount", summary.containsKey("content_blocks") ?
+                    ((List<?>) summary.get("content_blocks")).size() : 0,
+                "hasFollowUp", summary.containsKey("follow_up")
             ));
 
             return SummaryResult.success(summary);
@@ -517,5 +539,191 @@ public class ConsultationSummaryService {
         ));
 
         return results;
+    }
+
+    /**
+     * Process content_blocks and match product recommendations to catalog.
+     * Finds remedy_product blocks and adds matched_products array to each.
+     *
+     * @param summary The summary map from Gemini
+     * @return Number of remedy blocks that got product matches
+     */
+    @SuppressWarnings("unchecked")
+    private int processProductRecommendations(Map<String, Object> summary) {
+        if (summary == null) return 0;
+
+        Object contentBlocksObj = summary.get("content_blocks");
+        if (!(contentBlocksObj instanceof List)) {
+            return 0;
+        }
+
+        List<Map<String, Object>> contentBlocks = (List<Map<String, Object>>) contentBlocksObj;
+        int matchedCount = 0;
+
+        for (Map<String, Object> block : contentBlocks) {
+            String displayType = (String) block.get("display_type");
+
+            // Only process remedy_product blocks
+            if (!"remedy_product".equals(displayType)) {
+                continue;
+            }
+
+            try {
+                // Extract product_attributes from the block
+                Object attrsObj = block.get("product_attributes");
+                RemedyAttributes attributes;
+
+                if (attrsObj instanceof Map) {
+                    Map<String, Object> attrsMap = (Map<String, Object>) attrsObj;
+                    // Wrap in the expected structure for fromMap
+                    Map<String, Object> wrapperMap = new HashMap<>();
+                    wrapperMap.put("remedy_type", "product");
+                    wrapperMap.put("specificity", determineSpecificity(attrsMap));
+                    wrapperMap.put("product_attributes", attrsMap);
+                    wrapperMap.put("expert_quote", block.get("expert_quote"));
+                    attributes = RemedyAttributes.fromMap(wrapperMap);
+                } else {
+                    // No product_attributes, try to match by title/content
+                    String title = (String) block.get("title");
+                    String content = (String) block.get("content");
+                    attributes = inferAttributesFromText(title, content);
+                }
+
+                if (attributes == null) {
+                    continue;
+                }
+
+                // Find matching products
+                List<MatchedProduct> matchedProducts = productMatchingService.findMatchingProducts(attributes);
+
+                if (!matchedProducts.isEmpty()) {
+                    // Convert matched products to list of maps for JSON serialization
+                    List<Map<String, Object>> productMaps = new ArrayList<>();
+                    for (MatchedProduct product : matchedProducts) {
+                        productMaps.add(product.toMap());
+                    }
+                    block.put("matched_products", productMaps);
+                    matchedCount++;
+
+                    LoggingService.info("remedy_products_matched", Map.of(
+                        "blockId", block.get("id") != null ? block.get("id") : "unknown",
+                        "productCount", matchedProducts.size()
+                    ));
+                }
+
+            } catch (Exception e) {
+                LoggingService.warn("product_matching_error", Map.of(
+                    "blockId", block.get("id") != null ? block.get("id") : "unknown",
+                    "error", e.getMessage()
+                ));
+            }
+        }
+
+        return matchedCount;
+    }
+
+    /**
+     * Determine specificity level based on product attributes.
+     */
+    @SuppressWarnings("unchecked")
+    private String determineSpecificity(Map<String, Object> attrs) {
+        if (attrs == null) return "general";
+
+        // Check for exact material match
+        Object material = attrs.get("material");
+        if (material instanceof List && !((List<?>) material).isEmpty()) {
+            return "exact";
+        }
+
+        // Check for planetary association
+        Object planets = attrs.get("planets");
+        if (planets instanceof List && !((List<?>) planets).isEmpty()) {
+            return "planetary";
+        }
+
+        // Check for purpose/category
+        Object purpose = attrs.get("purpose");
+        if (purpose instanceof List && !((List<?>) purpose).isEmpty()) {
+            return "attribute";
+        }
+
+        // Check for product type
+        if (attrs.get("product_type") != null) {
+            return "category";
+        }
+
+        return "general";
+    }
+
+    /**
+     * Infer product attributes from text when Gemini didn't extract structured attributes.
+     */
+    private RemedyAttributes inferAttributesFromText(String title, String content) {
+        if (title == null && content == null) return null;
+
+        String text = ((title != null ? title : "") + " " + (content != null ? content : "")).toLowerCase();
+
+        RemedyAttributes.Builder builder = RemedyAttributes.builder()
+            .remedyType("product")
+            .specificity("general");
+
+        // Try to infer material from common crystal/gemstone names
+        List<String> materials = new ArrayList<>();
+        if (text.contains("rose quartz")) materials.add("rose_quartz");
+        if (text.contains("blue sapphire") || text.contains("neelam")) materials.add("blue_sapphire");
+        if (text.contains("amethyst")) materials.add("amethyst");
+        if (text.contains("citrine")) materials.add("citrine");
+        if (text.contains("tiger eye") || text.contains("tiger's eye")) materials.add("tiger_eye");
+        if (text.contains("clear quartz") || text.contains("crystal quartz")) materials.add("clear_quartz");
+        if (text.contains("black tourmaline")) materials.add("black_tourmaline");
+        if (text.contains("rudraksha")) materials.add("rudraksha");
+        if (text.contains("emerald") || text.contains("panna")) materials.add("emerald");
+        if (text.contains("pearl") || text.contains("moti")) materials.add("pearl");
+        if (text.contains("coral") || text.contains("moonga")) materials.add("coral");
+        if (text.contains("yellow sapphire") || text.contains("pukhraj")) materials.add("yellow_sapphire");
+
+        if (!materials.isEmpty()) {
+            builder.material(materials);
+            builder.specificity("exact");
+        }
+
+        // Try to infer product type
+        if (text.contains("bracelet")) builder.productType("bracelet");
+        else if (text.contains("pendant")) builder.productType("pendant");
+        else if (text.contains("ring")) builder.productType("ring");
+        else if (text.contains("mala")) builder.productType("mala");
+
+        // Try to infer planets
+        List<String> planets = new ArrayList<>();
+        if (text.contains("saturn") || text.contains("shani")) planets.add("saturn");
+        if (text.contains("venus") || text.contains("shukra")) planets.add("venus");
+        if (text.contains("jupiter") || text.contains("guru") || text.contains("brihaspati")) planets.add("jupiter");
+        if (text.contains("mars") || text.contains("mangal")) planets.add("mars");
+        if (text.contains("mercury") || text.contains("budh")) planets.add("mercury");
+        if (text.contains("sun") || text.contains("surya")) planets.add("sun");
+        if (text.contains("moon") || text.contains("chandra")) planets.add("moon");
+        if (text.contains("rahu")) planets.add("rahu");
+        if (text.contains("ketu")) planets.add("ketu");
+
+        if (!planets.isEmpty()) {
+            builder.planets(planets);
+            if (materials.isEmpty()) builder.specificity("planetary");
+        }
+
+        // Try to infer purpose
+        List<String> purposes = new ArrayList<>();
+        if (text.contains("love") || text.contains("relationship") || text.contains("marriage")) purposes.add("love");
+        if (text.contains("career") || text.contains("job") || text.contains("business")) purposes.add("career");
+        if (text.contains("protection") || text.contains("evil eye") || text.contains("negative")) purposes.add("protection");
+        if (text.contains("health") || text.contains("healing")) purposes.add("health");
+        if (text.contains("wealth") || text.contains("money") || text.contains("prosperity")) purposes.add("wealth");
+        if (text.contains("peace") || text.contains("calm") || text.contains("stress")) purposes.add("peace");
+
+        if (!purposes.isEmpty()) {
+            builder.purpose(purposes);
+            if (materials.isEmpty() && planets.isEmpty()) builder.specificity("attribute");
+        }
+
+        return builder.build();
     }
 }
