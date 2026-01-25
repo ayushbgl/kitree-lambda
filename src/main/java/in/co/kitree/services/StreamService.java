@@ -15,18 +15,95 @@ import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 
 /**
  * Service for interacting with Stream Video API and verifying webhooks.
  * Handles webhook signature verification and Stream API calls.
  */
 public class StreamService {
-    
+
     private static final String STREAM_API_BASE_URL = "https://video.stream-io-api.com/api/v2/video";
     private static final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
+    private static final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * Response object containing call details from Stream API.
+     */
+    public static class StreamCallResponse {
+        private String callId;
+        private String callType;
+        private String status; // "ended", "active", etc.
+        private Instant createdAt;
+        private Instant endedAt;
+        private StreamSession session;
+        private String errorMessage;
+
+        public String getCallId() { return callId; }
+        public void setCallId(String callId) { this.callId = callId; }
+        public String getCallType() { return callType; }
+        public void setCallType(String callType) { this.callType = callType; }
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
+        public Instant getCreatedAt() { return createdAt; }
+        public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+        public Instant getEndedAt() { return endedAt; }
+        public void setEndedAt(Instant endedAt) { this.endedAt = endedAt; }
+        public StreamSession getSession() { return session; }
+        public void setSession(StreamSession session) { this.session = session; }
+        public String getErrorMessage() { return errorMessage; }
+        public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+
+        public boolean hasError() { return errorMessage != null && !errorMessage.isEmpty(); }
+
+        public static StreamCallResponse error(String message) {
+            StreamCallResponse response = new StreamCallResponse();
+            response.setErrorMessage(message);
+            return response;
+        }
+    }
+
+    /**
+     * Represents a call session with participant data.
+     */
+    public static class StreamSession {
+        private String sessionId;
+        private Instant startedAt;
+        private Instant endedAt;
+        private List<StreamParticipant> participants = new ArrayList<>();
+
+        public String getSessionId() { return sessionId; }
+        public void setSessionId(String sessionId) { this.sessionId = sessionId; }
+        public Instant getStartedAt() { return startedAt; }
+        public void setStartedAt(Instant startedAt) { this.startedAt = startedAt; }
+        public Instant getEndedAt() { return endedAt; }
+        public void setEndedAt(Instant endedAt) { this.endedAt = endedAt; }
+        public List<StreamParticipant> getParticipants() { return participants; }
+        public void setParticipants(List<StreamParticipant> participants) { this.participants = participants; }
+    }
+
+    /**
+     * Represents a participant in a call session with join/leave timestamps.
+     */
+    public static class StreamParticipant {
+        private String oderId;
+        private Instant joinedAt;
+        private Instant leftAt; // null if still in call
+
+        public String getUserId() { return oderId; }
+        public void setUserId(String oderId) { this.oderId = oderId; }
+        public Instant getJoinedAt() { return joinedAt; }
+        public void setJoinedAt(Instant joinedAt) { this.joinedAt = joinedAt; }
+        public Instant getLeftAt() { return leftAt; }
+        public void setLeftAt(Instant leftAt) { this.leftAt = leftAt; }
+
+        public boolean isStillInCall() { return leftAt == null; }
+    }
     
     private final boolean isTest;
     private final String apiKey;
@@ -289,9 +366,215 @@ public class StreamService {
     }
     
     /**
+     * Fetch call details from Stream Video API.
+     * GET /api/v2/video/call/{type}/{id}?api_key={apiKey}
+     *
+     * The call object includes a 'session' field with participant data:
+     * - session.participants[]: Array of participants
+     * - Each participant has: user_id, joined_at, left_at
+     *
+     * @param callType The call type (e.g., "consultation_video", "consultation_audio")
+     * @param callId The call ID (orderId)
+     * @return StreamCallResponse with call and session details, or error response
+     */
+    public StreamCallResponse getCallDetails(String callType, String callId) {
+        if (callType == null || callId == null) {
+            return StreamCallResponse.error("Missing callType or callId");
+        }
+
+        if (!isConfigured()) {
+            return StreamCallResponse.error("StreamService not configured");
+        }
+
+        try {
+            // Stream Video API endpoint to get call details
+            // GET /video/call/{type}/{id}
+            String url = String.format("%s/call/%s/%s?api_key=%s",
+                STREAM_API_BASE_URL, callType, callId, apiKey);
+
+            // Create JWT token for API authentication
+            String authToken = createServerAuthToken();
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", authToken)
+                    .header("stream-auth-type", "jwt")
+                    .GET()
+                    .timeout(Duration.ofSeconds(15))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            int statusCode = response.statusCode();
+            System.out.println("[StreamService] Get call details response: " + statusCode);
+
+            if (statusCode == 404) {
+                return StreamCallResponse.error("Call not found: " + callType + ":" + callId);
+            }
+
+            if (statusCode != 200) {
+                System.err.println("[StreamService] Failed to get call details: HTTP " + statusCode + " - " + response.body());
+                return StreamCallResponse.error("HTTP " + statusCode);
+            }
+
+            // Parse response JSON
+            return parseCallResponse(response.body(), callType, callId);
+
+        } catch (Exception e) {
+            System.err.println("[StreamService] Error fetching call details: " + e.getMessage());
+            e.printStackTrace();
+            return StreamCallResponse.error(e.getMessage());
+        }
+    }
+
+    /**
+     * Parse the JSON response from Stream API into StreamCallResponse.
+     *
+     * Expected response structure:
+     * {
+     *   "call": {
+     *     "id": "order-123",
+     *     "type": "consultation_video",
+     *     "created_at": "2024-01-15T10:30:45.123Z",
+     *     "ended_at": "2024-01-15T11:00:00.000Z",
+     *     "session": {
+     *       "id": "session-uuid",
+     *       "started_at": "...",
+     *       "ended_at": "...",
+     *       "participants": [
+     *         {"user_id": "user1", "joined_at": "...", "left_at": "..."},
+     *         {"user_id": "expert1", "joined_at": "...", "left_at": "..."}
+     *       ]
+     *     }
+     *   }
+     * }
+     */
+    private StreamCallResponse parseCallResponse(String jsonBody, String callType, String callId) {
+        try {
+            JsonNode root = objectMapper.readTree(jsonBody);
+            JsonNode callNode = root.path("call");
+
+            if (callNode.isMissingNode()) {
+                return StreamCallResponse.error("No 'call' field in response");
+            }
+
+            StreamCallResponse response = new StreamCallResponse();
+            response.setCallId(callNode.path("id").asText(callId));
+            response.setCallType(callNode.path("type").asText(callType));
+
+            // Parse timestamps
+            String createdAt = callNode.path("created_at").asText(null);
+            if (createdAt != null && !createdAt.isEmpty()) {
+                response.setCreatedAt(Instant.parse(createdAt));
+            }
+
+            String endedAt = callNode.path("ended_at").asText(null);
+            if (endedAt != null && !endedAt.isEmpty()) {
+                response.setEndedAt(Instant.parse(endedAt));
+            }
+
+            // Determine status based on ended_at
+            response.setStatus(response.getEndedAt() != null ? "ended" : "active");
+
+            // Parse session if present
+            JsonNode sessionNode = callNode.path("session");
+            if (!sessionNode.isMissingNode() && !sessionNode.isNull()) {
+                response.setSession(parseSession(sessionNode));
+            }
+
+            return response;
+
+        } catch (Exception e) {
+            System.err.println("[StreamService] Error parsing call response: " + e.getMessage());
+            return StreamCallResponse.error("Parse error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Parse a session node from the API response.
+     */
+    private StreamSession parseSession(JsonNode sessionNode) {
+        StreamSession session = new StreamSession();
+
+        session.setSessionId(sessionNode.path("id").asText(null));
+
+        String startedAt = sessionNode.path("started_at").asText(null);
+        if (startedAt != null && !startedAt.isEmpty()) {
+            try {
+                session.setStartedAt(Instant.parse(startedAt));
+            } catch (Exception e) {
+                System.err.println("[StreamService] Error parsing session started_at: " + startedAt);
+            }
+        }
+
+        String endedAt = sessionNode.path("ended_at").asText(null);
+        if (endedAt != null && !endedAt.isEmpty()) {
+            try {
+                session.setEndedAt(Instant.parse(endedAt));
+            } catch (Exception e) {
+                System.err.println("[StreamService] Error parsing session ended_at: " + endedAt);
+            }
+        }
+
+        // Parse participants
+        JsonNode participantsNode = sessionNode.path("participants");
+        if (participantsNode.isArray()) {
+            List<StreamParticipant> participants = new ArrayList<>();
+            for (JsonNode participantNode : participantsNode) {
+                StreamParticipant participant = parseParticipant(participantNode);
+                if (participant != null) {
+                    participants.add(participant);
+                }
+            }
+            session.setParticipants(participants);
+        }
+
+        return session;
+    }
+
+    /**
+     * Parse a participant node from the API response.
+     */
+    private StreamParticipant parseParticipant(JsonNode participantNode) {
+        StreamParticipant participant = new StreamParticipant();
+
+        // Try different field names for user ID
+        String oderId = participantNode.path("user_id").asText(null);
+        if (oderId == null || oderId.isEmpty()) {
+            oderId = participantNode.path("user").path("id").asText(null);
+        }
+        if (oderId == null || oderId.isEmpty()) {
+            return null; // Skip participants without user ID
+        }
+        participant.setUserId(oderId);
+
+        // Parse timestamps
+        String joinedAt = participantNode.path("joined_at").asText(null);
+        if (joinedAt != null && !joinedAt.isEmpty()) {
+            try {
+                participant.setJoinedAt(Instant.parse(joinedAt));
+            } catch (Exception e) {
+                System.err.println("[StreamService] Error parsing participant joined_at: " + joinedAt);
+            }
+        }
+
+        String leftAt = participantNode.path("left_at").asText(null);
+        if (leftAt != null && !leftAt.isEmpty()) {
+            try {
+                participant.setLeftAt(Instant.parse(leftAt));
+            } catch (Exception e) {
+                System.err.println("[StreamService] Error parsing participant left_at: " + leftAt);
+            }
+        }
+
+        return participant;
+    }
+
+    /**
      * Parse a call CID into type and id components.
      * Call CID format: {type}:{id}
-     * 
+     *
      * @param callCid The full call CID (e.g., "consultation_video:abc123")
      * @return Array with [type, id] or null if invalid format
      */

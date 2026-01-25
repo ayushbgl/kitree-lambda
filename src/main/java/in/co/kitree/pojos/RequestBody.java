@@ -100,6 +100,9 @@ public class RequestBody {
     private Map<String, Double> feeByType; // Fee by order type (e.g., "CONSULTATION": 10.0, "ON_DEMAND_CONSULTATION": 15.0)
     private Map<String, Double> feeByCategory; // Fee by category (e.g., "HOROSCOPE": 10.0, "TAROT": 12.0)
 
+    // Billing recalculation fields
+    private String callCid; // Stream call CID for recalculate_charge function (format: {type}:{id})
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -636,5 +639,14 @@ public class RequestBody {
 
     public void setFeeByCategory(Map<String, Double> feeByCategory) {
         this.feeByCategory = feeByCategory;
+    }
+
+    // Billing recalculation getters/setters
+    public String getCallCid() {
+        return callCid;
+    }
+
+    public void setCallCid(String callCid) {
+        this.callCid = callCid;
     }
 }
