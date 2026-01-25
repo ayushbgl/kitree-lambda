@@ -103,6 +103,21 @@ public class RequestBody {
     // Billing recalculation fields
     private String callCid; // Stream call CID for recalculate_charge function (format: {type}:{id})
 
+    // Product ecommerce fields
+    private String productId; // Platform product ID
+    private Integer quantity; // Quantity of product to order
+    private String trackingNumber; // Shipping tracking number
+    private String newStatus; // New order status for updates
+    private Double sellerPriceInr; // Seller's price for a product
+    private Boolean isWhiteLabel; // Whether to use white-label (no platform branding)
+    private String shippingMode; // "PLATFORM" or "SELF"
+    private Double selfShippingCostInr; // Seller's shipping cost for self-shipping
+    private Integer selfStockQuantity; // Seller's inventory count for self-shipping
+    private String customDescription; // Seller's custom product description
+    private Boolean isEnabled; // Whether product is enabled for selling
+    private String statusFilter; // Filter orders by status
+    private List<PlatformProduct> productsToSeed; // Products to seed into platform catalog
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -648,5 +663,110 @@ public class RequestBody {
 
     public void setCallCid(String callCid) {
         this.callCid = callCid;
+    }
+
+    // Product ecommerce getters/setters
+    public String getProductId() {
+        return productId;
+    }
+
+    public void setProductId(String productId) {
+        this.productId = productId;
+    }
+
+    public Integer getQuantity() {
+        return quantity;
+    }
+
+    public void setQuantity(Integer quantity) {
+        this.quantity = quantity;
+    }
+
+    public String getTrackingNumber() {
+        return trackingNumber;
+    }
+
+    public void setTrackingNumber(String trackingNumber) {
+        this.trackingNumber = trackingNumber;
+    }
+
+    public String getNewStatus() {
+        return newStatus;
+    }
+
+    public void setNewStatus(String newStatus) {
+        this.newStatus = newStatus;
+    }
+
+    public Double getSellerPriceInr() {
+        return sellerPriceInr;
+    }
+
+    public void setSellerPriceInr(Double sellerPriceInr) {
+        this.sellerPriceInr = sellerPriceInr;
+    }
+
+    public Boolean getIsWhiteLabel() {
+        return isWhiteLabel;
+    }
+
+    public void setIsWhiteLabel(Boolean isWhiteLabel) {
+        this.isWhiteLabel = isWhiteLabel;
+    }
+
+    public String getShippingMode() {
+        return shippingMode;
+    }
+
+    public void setShippingMode(String shippingMode) {
+        this.shippingMode = shippingMode;
+    }
+
+    public Double getSelfShippingCostInr() {
+        return selfShippingCostInr;
+    }
+
+    public void setSelfShippingCostInr(Double selfShippingCostInr) {
+        this.selfShippingCostInr = selfShippingCostInr;
+    }
+
+    public Integer getSelfStockQuantity() {
+        return selfStockQuantity;
+    }
+
+    public void setSelfStockQuantity(Integer selfStockQuantity) {
+        this.selfStockQuantity = selfStockQuantity;
+    }
+
+    public String getCustomDescription() {
+        return customDescription;
+    }
+
+    public void setCustomDescription(String customDescription) {
+        this.customDescription = customDescription;
+    }
+
+    public Boolean getIsEnabled() {
+        return isEnabled;
+    }
+
+    public void setIsEnabled(Boolean isEnabled) {
+        this.isEnabled = isEnabled;
+    }
+
+    public String getStatusFilter() {
+        return statusFilter;
+    }
+
+    public void setStatusFilter(String statusFilter) {
+        this.statusFilter = statusFilter;
+    }
+
+    public List<PlatformProduct> getProductsToSeed() {
+        return productsToSeed;
+    }
+
+    public void setProductsToSeed(List<PlatformProduct> productsToSeed) {
+        this.productsToSeed = productsToSeed;
     }
 }

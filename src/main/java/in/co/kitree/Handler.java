@@ -1230,6 +1230,73 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return handleGetExpertPlatformFee(userId, requestBody);
             }
 
+            // ============= Product Ecommerce Endpoints =============
+
+            // Get all active platform products (public catalog)
+            if ("get_platform_products".equals(requestBody.getFunction())) {
+                return handleGetPlatformProducts(requestBody);
+            }
+
+            // Get expert's product configurations (for seller dashboard)
+            if ("get_expert_products".equals(requestBody.getFunction())) {
+                return handleGetExpertProducts(userId, requestBody);
+            }
+
+            // Update expert's product configuration (enable/disable, pricing, shipping)
+            if ("update_expert_product".equals(requestBody.getFunction())) {
+                return handleUpdateExpertProduct(userId, requestBody);
+            }
+
+            // Get expert's enabled products for storefront (public)
+            if ("get_expert_storefront".equals(requestBody.getFunction())) {
+                return handleGetExpertStorefront(requestBody);
+            }
+
+            // Create product order (buy product)
+            if ("buy_product".equals(requestBody.getFunction())) {
+                return handleBuyProduct(userId, requestBody);
+            }
+
+            // Verify product order payment
+            if ("verify_product_payment".equals(requestBody.getFunction())) {
+                return handleVerifyProductPayment(userId, requestBody);
+            }
+
+            // Get user's product orders
+            if ("get_user_product_orders".equals(requestBody.getFunction())) {
+                return handleGetUserProductOrders(userId);
+            }
+
+            // Get expert's product orders (for seller dashboard)
+            if ("get_expert_product_orders".equals(requestBody.getFunction())) {
+                return handleGetExpertProductOrders(userId, requestBody);
+            }
+
+            // Get platform shipping orders (admin dashboard)
+            if ("get_platform_shipping_orders".equals(requestBody.getFunction())) {
+                return handleGetPlatformShippingOrders(userId);
+            }
+
+            // Update product order status (admin/expert)
+            if ("update_product_order_status".equals(requestBody.getFunction())) {
+                return handleUpdateProductOrderStatus(userId, requestBody);
+            }
+
+            // Cancel product order
+            if ("cancel_product_order".equals(requestBody.getFunction())) {
+                return handleCancelProductOrder(userId, requestBody);
+            }
+
+            // Admin: Seed platform products
+            if ("seed_platform_products".equals(requestBody.getFunction())) {
+                return handleSeedPlatformProducts(userId, requestBody);
+            }
+
+            // Admin: Upsert platform product
+            if ("admin_upsert_product".equals(requestBody.getFunction())) {
+                return handleAdminUpsertProduct(userId, requestBody);
+            }
+
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -4880,6 +4947,388 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             LoggingService.error("stream_participant_left_error", e);
             String errorMessage = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             return gson.toJson(Map.of("error", "Error processing participant left", "message", errorMessage));
+        }
+    }
+
+    // ============= Product Ecommerce Handler Methods =============
+
+    /**
+     * Get all active platform products.
+     */
+    private String handleGetPlatformProducts(RequestBody requestBody) {
+        try {
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            List<PlatformProduct> products;
+
+            String category = requestBody.getCategory();
+            String productType = requestBody.getType();
+
+            if (category != null && !category.isEmpty()) {
+                products = catalogService.getProductsByCategory(category);
+            } else if (productType != null && !productType.isEmpty()) {
+                products = catalogService.getProductsByType(productType);
+            } else {
+                products = catalogService.getActiveProducts();
+            }
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("products", products);
+            return gson.toJson(response);
+        } catch (Exception e) {
+            LoggingService.error("get_platform_products_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Get expert's product configurations.
+     */
+    private String handleGetExpertProducts(String userId, RequestBody requestBody) {
+        try {
+            String expertId = requestBody.getExpertId() != null ? requestBody.getExpertId() : userId;
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+
+            List<ExpertProductConfig> configs = expertProductService.getExpertProductsWithDetails(expertId);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("products", configs);
+            return gson.toJson(response);
+        } catch (Exception e) {
+            LoggingService.error("get_expert_products_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Update expert's product configuration.
+     */
+    private String handleUpdateExpertProduct(String userId, RequestBody requestBody) {
+        try {
+            if (requestBody.getProductId() == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Product ID is required"));
+            }
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+
+            ExpertProductConfig config = new ExpertProductConfig();
+            config.setProductId(requestBody.getProductId());
+            config.setExpertId(userId);
+
+            if (requestBody.getIsEnabled() != null) {
+                config.setEnabled(requestBody.getIsEnabled());
+            }
+            if (requestBody.getSellerPriceInr() != null) {
+                config.setSellerPriceInr(requestBody.getSellerPriceInr());
+            }
+            if (requestBody.getIsWhiteLabel() != null) {
+                config.setWhiteLabel(requestBody.getIsWhiteLabel());
+            }
+            if (requestBody.getShippingMode() != null) {
+                config.setShippingMode(requestBody.getShippingMode());
+            }
+            if (requestBody.getSelfShippingCostInr() != null) {
+                config.setSelfShippingCostInr(requestBody.getSelfShippingCostInr());
+            }
+            if (requestBody.getSelfStockQuantity() != null) {
+                config.setSelfStockQuantity(requestBody.getSelfStockQuantity());
+            }
+            if (requestBody.getCustomDescription() != null) {
+                config.setCustomDescription(requestBody.getCustomDescription());
+            }
+
+            expertProductService.updateProductConfig(userId, config);
+
+            return gson.toJson(Map.of("success", true));
+        } catch (Exception e) {
+            LoggingService.error("update_expert_product_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Get expert's enabled products for storefront (public).
+     */
+    private String handleGetExpertStorefront(RequestBody requestBody) {
+        try {
+            if (requestBody.getExpertId() == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
+            }
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+
+            List<ExpertProductConfig> enabledProducts = expertProductService.getExpertEnabledProducts(requestBody.getExpertId());
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("products", enabledProducts);
+            return gson.toJson(response);
+        } catch (Exception e) {
+            LoggingService.error("get_expert_storefront_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Create product order (buy product).
+     */
+    private String handleBuyProduct(String userId, RequestBody requestBody) {
+        try {
+            if (requestBody.getExpertId() == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
+            }
+            if (requestBody.getProductId() == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Product ID is required"));
+            }
+
+            int quantity = requestBody.getQuantity() != null ? requestBody.getQuantity() : 1;
+            if (quantity < 1) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Quantity must be at least 1"));
+            }
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+
+            Map<String, Object> orderResult = orderService.createOrder(
+                userId,
+                requestBody.getExpertId(),
+                requestBody.getProductId(),
+                quantity,
+                requestBody.getAddress(),
+                requestBody.getCouponCode()
+            );
+
+            // Create Razorpay order for payment
+            Double amount = (Double) orderResult.get("amount");
+            String orderId = (String) orderResult.get("orderId");
+
+            if (amount != null && amount > 0) {
+                try {
+                    // Encrypt userId for Razorpay notes
+                    String encryptedCustomerId = CustomerCipher.encryptCaesarCipher(userId);
+                    String razorpayOrderId = razorpay.createOrder(amount, encryptedCustomerId);
+                    orderResult.put("razorpayOrderId", razorpayOrderId);
+                } catch (RazorpayException e) {
+                    LoggingService.error("razorpay_order_creation_failed", e);
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Failed to create payment order"));
+                }
+            }
+
+            return gson.toJson(orderResult);
+        } catch (Exception e) {
+            LoggingService.error("buy_product_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Verify product order payment.
+     */
+    private String handleVerifyProductPayment(String userId, RequestBody requestBody) {
+        try {
+            if (requestBody.getOrderId() == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
+            }
+
+            // Verify Razorpay payment signature
+            if (requestBody.getGatewayOrderId() != null && requestBody.getGatewayPaymentId() != null && requestBody.getGatewaySignature() != null) {
+                boolean isValid = razorpay.verifyPayment(
+                    requestBody.getGatewayOrderId(),
+                    requestBody.getGatewayPaymentId(),
+                    requestBody.getGatewaySignature()
+                );
+                if (!isValid) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed"));
+                }
+            }
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+
+            orderService.verifyOrderPayment(userId, requestBody.getOrderId());
+
+            return gson.toJson(Map.of("success", true, "orderId", requestBody.getOrderId()));
+        } catch (Exception e) {
+            LoggingService.error("verify_product_payment_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Get user's product orders.
+     */
+    private String handleGetUserProductOrders(String userId) {
+        try {
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+
+            List<Map<String, Object>> orders = orderService.getUserProductOrders(userId);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("orders", orders);
+            return gson.toJson(response);
+        } catch (Exception e) {
+            LoggingService.error("get_user_product_orders_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Get expert's product orders.
+     */
+    private String handleGetExpertProductOrders(String userId, RequestBody requestBody) {
+        try {
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+
+            List<Map<String, Object>> orders = orderService.getExpertProductOrders(userId, requestBody.getStatusFilter());
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("orders", orders);
+            return gson.toJson(response);
+        } catch (Exception e) {
+            LoggingService.error("get_expert_product_orders_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Get platform shipping orders (admin).
+     */
+    private String handleGetPlatformShippingOrders(String userId) {
+        try {
+            // TODO: Add admin check
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+
+            List<Map<String, Object>> orders = orderService.getPlatformShippingOrders();
+            Map<String, Object> stats = orderService.getOrderStatistics();
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("orders", orders);
+            response.put("statistics", stats);
+            return gson.toJson(response);
+        } catch (Exception e) {
+            LoggingService.error("get_platform_shipping_orders_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Update product order status.
+     */
+    private String handleUpdateProductOrderStatus(String userId, RequestBody requestBody) {
+        try {
+            if (requestBody.getOrderId() == null || requestBody.getUserId() == null || requestBody.getNewStatus() == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Order ID, User ID, and new status are required"));
+            }
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+
+            orderService.updateOrderStatus(
+                requestBody.getUserId(),
+                requestBody.getOrderId(),
+                requestBody.getNewStatus(),
+                requestBody.getTrackingNumber(),
+                userId
+            );
+
+            return gson.toJson(Map.of("success", true));
+        } catch (Exception e) {
+            LoggingService.error("update_product_order_status_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Cancel product order.
+     */
+    private String handleCancelProductOrder(String userId, RequestBody requestBody) {
+        try {
+            if (requestBody.getOrderId() == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
+            }
+
+            String targetUserId = requestBody.getUserId() != null ? requestBody.getUserId() : userId;
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+
+            orderService.cancelOrder(
+                targetUserId,
+                requestBody.getOrderId(),
+                userId,
+                requestBody.getNotes()
+            );
+
+            return gson.toJson(Map.of("success", true));
+        } catch (Exception e) {
+            LoggingService.error("cancel_product_order_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Admin: Seed platform products.
+     */
+    private String handleSeedPlatformProducts(String userId, RequestBody requestBody) {
+        try {
+            // TODO: Add admin check
+            if (requestBody.getProductsToSeed() == null || requestBody.getProductsToSeed().isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Products to seed are required"));
+            }
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            int count = catalogService.seedProducts(requestBody.getProductsToSeed());
+
+            return gson.toJson(Map.of("success", true, "count", count));
+        } catch (Exception e) {
+            LoggingService.error("seed_platform_products_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Admin: Upsert platform product.
+     */
+    private String handleAdminUpsertProduct(String userId, RequestBody requestBody) {
+        try {
+            // TODO: Add admin check
+            if (requestBody.getProductsToSeed() == null || requestBody.getProductsToSeed().isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Product data is required"));
+            }
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            PlatformProduct product = requestBody.getProductsToSeed().get(0);
+            catalogService.upsertProduct(product);
+
+            return gson.toJson(Map.of("success", true, "productId", product.getProductId()));
+        } catch (Exception e) {
+            LoggingService.error("admin_upsert_product_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
         }
     }
 }
