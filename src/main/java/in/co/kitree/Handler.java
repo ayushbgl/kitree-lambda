@@ -5130,6 +5130,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     /**
      * Verify product order payment.
+     * SECURITY: Payment signature verification is MANDATORY - never skip this check.
      */
     private String handleVerifyProductPayment(String userId, RequestBody requestBody) {
         try {
@@ -5137,16 +5138,30 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
             }
 
-            // Verify Razorpay payment signature
-            if (requestBody.getGatewayOrderId() != null && requestBody.getGatewayPaymentId() != null && requestBody.getGatewaySignature() != null) {
-                boolean isValid = razorpay.verifyPayment(
-                    requestBody.getGatewayOrderId(),
-                    requestBody.getGatewayPaymentId(),
-                    requestBody.getGatewaySignature()
-                );
-                if (!isValid) {
-                    return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed"));
-                }
+            // SECURITY: All payment gateway fields are REQUIRED - never process without verification
+            if (requestBody.getGatewayOrderId() == null ||
+                requestBody.getGatewayPaymentId() == null ||
+                requestBody.getGatewaySignature() == null) {
+                LoggingService.warn("verify_product_payment_missing_gateway_fields", Map.of(
+                    "userId", userId,
+                    "orderId", requestBody.getOrderId()
+                ));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Payment gateway details are required for verification"));
+            }
+
+            // Verify Razorpay payment signature - MANDATORY check
+            boolean isValid = razorpay.verifyPayment(
+                requestBody.getGatewayOrderId(),
+                requestBody.getGatewayPaymentId(),
+                requestBody.getGatewaySignature()
+            );
+            if (!isValid) {
+                LoggingService.warn("verify_product_payment_invalid_signature", Map.of(
+                    "userId", userId,
+                    "orderId", requestBody.getOrderId(),
+                    "gatewayOrderId", requestBody.getGatewayOrderId()
+                ));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed - invalid signature"));
             }
 
             ProductCatalogService catalogService = new ProductCatalogService(db);
@@ -5187,14 +5202,27 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     /**
      * Get expert's product orders.
+     * SECURITY: User can only access their own orders (as expert).
+     * The userId from the authenticated token is used as expertId.
      */
     private String handleGetExpertProductOrders(String userId, RequestBody requestBody) {
         try {
+            // SECURITY: Verify the user is actually an expert by checking if they have store_details
+            // This prevents non-experts from querying orders with an arbitrary expert_id
+            DocumentReference storeRef = db.collection("users").document(userId).collection("public").document("store_details");
+            DocumentSnapshot storeDoc = storeRef.get().get();
+
+            if (!storeDoc.exists()) {
+                LoggingService.warn("get_expert_product_orders_not_expert", Map.of("userId", userId));
+                return gson.toJson(Map.of("success", false, "errorMessage", "User is not registered as an expert"));
+            }
+
             ProductCatalogService catalogService = new ProductCatalogService(db);
             ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
             ExpertEarningsService earningsService = new ExpertEarningsService(db);
             ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
 
+            // Use authenticated userId as expertId - user can only see their own orders
             List<Map<String, Object>> orders = orderService.getExpertProductOrders(userId, requestBody.getStatusFilter());
 
             Map<String, Object> response = new HashMap<>();
@@ -5209,10 +5237,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     /**
      * Get platform shipping orders (admin).
+     * SECURITY: Admin-only endpoint for viewing all platform shipping orders.
      */
     private String handleGetPlatformShippingOrders(String userId) {
         try {
-            // TODO: Add admin check
+            // SECURITY: Verify admin access - CRITICAL security check
+            if (!isAdmin(userId)) {
+                LoggingService.warn("get_platform_shipping_orders_unauthorized", Map.of("userId", userId));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Admin access required"));
+            }
+
             ProductCatalogService catalogService = new ProductCatalogService(db);
             ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
             ExpertEarningsService earningsService = new ExpertEarningsService(db);
@@ -5234,6 +5268,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     /**
      * Update product order status.
+     * SECURITY: Only admin can update platform shipping orders.
+     * Expert can only update their own self-shipping orders.
      */
     private String handleUpdateProductOrderStatus(String userId, RequestBody requestBody) {
         try {
@@ -5245,6 +5281,28 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
             ExpertEarningsService earningsService = new ExpertEarningsService(db);
             ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+
+            // SECURITY: Verify authorization based on shipping mode
+            ProductOrderDetails order = orderService.getOrder(requestBody.getUserId(), requestBody.getOrderId());
+            if (order == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
+            }
+
+            boolean isAdminUser = isAdmin(userId);
+            boolean isOrderExpert = userId.equals(order.getExpertId());
+            boolean isSelfShipping = "SELF".equals(order.getShippingMode());
+
+            // Admin can update any order
+            // Expert can only update their own self-shipping orders
+            if (!isAdminUser && !(isOrderExpert && isSelfShipping)) {
+                LoggingService.warn("update_product_order_status_unauthorized", Map.of(
+                    "userId", userId,
+                    "orderId", requestBody.getOrderId(),
+                    "expertId", order.getExpertId(),
+                    "shippingMode", order.getShippingMode()
+                ));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Cannot update this order"));
+            }
 
             orderService.updateOrderStatus(
                 requestBody.getUserId(),
@@ -5293,10 +5351,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     /**
      * Admin: Seed platform products.
+     * SECURITY: Admin-only endpoint for bulk product creation.
      */
     private String handleSeedPlatformProducts(String userId, RequestBody requestBody) {
         try {
-            // TODO: Add admin check
+            // SECURITY: Verify admin access - CRITICAL security check
+            if (!isAdmin(userId)) {
+                LoggingService.warn("seed_platform_products_unauthorized", Map.of("userId", userId));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Admin access required"));
+            }
+
             if (requestBody.getProductsToSeed() == null || requestBody.getProductsToSeed().isEmpty()) {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Products to seed are required"));
             }
@@ -5313,10 +5377,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     /**
      * Admin: Upsert platform product.
+     * SECURITY: Admin-only endpoint for product management.
      */
     private String handleAdminUpsertProduct(String userId, RequestBody requestBody) {
         try {
-            // TODO: Add admin check
+            // SECURITY: Verify admin access - CRITICAL security check
+            if (!isAdmin(userId)) {
+                LoggingService.warn("admin_upsert_product_unauthorized", Map.of("userId", userId));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Admin access required"));
+            }
+
             if (requestBody.getProductsToSeed() == null || requestBody.getProductsToSeed().isEmpty()) {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Product data is required"));
             }

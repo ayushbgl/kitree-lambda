@@ -10,6 +10,10 @@ import java.util.Map;
  * These fields extend the base order in: users/{userId}/orders/{orderId}
  */
 public class ProductOrderDetails {
+    // Order identification
+    private String orderId;
+    private String expertId;
+
     // Product identification (snapshot at time of order)
     private String productId;
     private String sku;
@@ -54,6 +58,12 @@ public class ProductOrderDetails {
     public static final String STATUS_REFUNDED = "REFUNDED";
 
     // Getters and Setters
+    public String getOrderId() { return orderId; }
+    public void setOrderId(String orderId) { this.orderId = orderId; }
+
+    public String getExpertId() { return expertId; }
+    public void setExpertId(String expertId) { this.expertId = expertId; }
+
     public String getProductId() { return productId; }
     public void setProductId(String productId) { this.productId = productId; }
 
@@ -137,6 +147,8 @@ public class ProductOrderDetails {
      */
     public Map<String, Object> toMap() {
         Map<String, Object> map = new java.util.HashMap<>();
+        map.put("order_id", orderId);
+        map.put("expert_id", expertId);
         map.put("productId", productId);
         map.put("sku", sku);
         map.put("productName", productName);
@@ -172,6 +184,8 @@ public class ProductOrderDetails {
         if (map == null) return null;
 
         ProductOrderDetails details = new ProductOrderDetails();
+        details.setOrderId((String) map.get("order_id"));
+        details.setExpertId((String) map.get("expert_id"));
         details.setProductId((String) map.get("productId"));
         details.setSku((String) map.get("sku"));
         details.setProductName((String) map.get("productName"));
