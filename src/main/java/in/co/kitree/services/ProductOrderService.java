@@ -171,12 +171,230 @@ public class ProductOrderService {
     }
 
     /**
+     * Create a multi-item product order (before payment).
+     * Returns order ID for Razorpay payment flow.
+     *
+     * @param userId    The user placing the order
+     * @param expertId  The expert/seller for all items
+     * @param items     List of items, each with productId and quantity
+     * @param address   Shipping address
+     * @param couponCode Optional coupon code
+     * @return Order details including orderId, amount for payment
+     */
+    public Map<String, Object> createMultiItemOrder(
+            String userId,
+            String expertId,
+            List<Map<String, Object>> items,
+            Map<String, Object> address,
+            String couponCode
+    ) throws ExecutionException, InterruptedException {
+        // Validate inputs
+        if (userId == null || expertId == null) {
+            throw new IllegalArgumentException("User ID and Expert ID are required");
+        }
+        if (items == null || items.isEmpty()) {
+            throw new IllegalArgumentException("At least one item is required");
+        }
+
+        // Get expert fee config once
+        PlatformFeeConfig feeConfig = getExpertFeeConfig(expertId);
+
+        // Process all items
+        List<OrderLineItem> lineItems = new ArrayList<>();
+        double totalSubtotal = 0.0;
+        double totalShipping = 0.0;
+        double totalPlatformFee = 0.0;
+        double totalExpertEarnings = 0.0;
+        int totalQuantity = 0;
+
+        // Track first item for backward-compat fields
+        String firstProductId = null;
+        String firstProductName = null;
+        String firstProductImageUrl = null;
+        String firstSku = null;
+        boolean hasWhiteLabel = false;
+        boolean hasPlatformShipping = false;
+
+        for (int i = 0; i < items.size(); i++) {
+            Map<String, Object> itemInput = items.get(i);
+            String productId = (String) itemInput.get("productId");
+            int quantity = itemInput.get("quantity") != null ? ((Number) itemInput.get("quantity")).intValue() : 1;
+
+            if (productId == null) {
+                throw new IllegalArgumentException("Product ID is required for item " + (i + 1));
+            }
+
+            // Get expert's product configuration
+            ExpertProductConfig config = expertProductService.getExpertProductConfigWithDetails(expertId, productId);
+            if (config == null || !config.isEnabled()) {
+                throw new IllegalArgumentException("Product not available from this expert: " + productId);
+            }
+
+            PlatformProduct product = config.getProduct();
+            if (product == null || !product.isActive()) {
+                throw new IllegalArgumentException("Product not found or inactive: " + productId);
+            }
+
+            // Check stock
+            if (!expertProductService.checkExpertStock(expertId, productId, quantity)) {
+                throw new IllegalArgumentException("Insufficient stock for product: " + product.getName());
+            }
+
+            // Calculate pricing for this item
+            double unitPrice = config.getSellerPriceInr() != null ? config.getSellerPriceInr() : product.getSuggestedPriceInr();
+            double itemShipping = config.getEffectiveShippingCost(product);
+            double itemSubtotal = unitPrice * quantity;
+
+            // Calculate commission for this item
+            double commissionPercent = getProductCommissionPercent(feeConfig, config.isWhiteLabel());
+            double itemPlatformFee = itemSubtotal * (commissionPercent / 100.0);
+            double itemExpertEarnings = itemSubtotal - itemPlatformFee;
+
+            // Expert gets shipping revenue only for self-shipping
+            if (config.isSelfShipping()) {
+                itemExpertEarnings += itemShipping;
+            }
+
+            // Create line item
+            OrderLineItem lineItem = new OrderLineItem();
+            lineItem.setProductId(productId);
+            lineItem.setSku(product.getSku());
+            lineItem.setProductName(product.getName());
+            lineItem.setProductImageUrl(product.getThumbnailUrl());
+            lineItem.setQuantity(quantity);
+            lineItem.setUnitPrice(unitPrice);
+            lineItem.setShippingCost(itemShipping);
+            lineItem.setLineTotal(itemSubtotal + itemShipping);
+            lineItem.setWhiteLabel(config.isWhiteLabel());
+            lineItem.setShippingMode(config.getShippingMode());
+            lineItem.setPlatformFeePercent(commissionPercent);
+            lineItem.setPlatformFeeAmount(itemPlatformFee);
+            lineItem.setExpertEarnings(itemExpertEarnings);
+            lineItems.add(lineItem);
+
+            // Accumulate totals
+            totalSubtotal += itemSubtotal;
+            totalShipping += itemShipping;
+            totalPlatformFee += itemPlatformFee;
+            totalExpertEarnings += itemExpertEarnings;
+            totalQuantity += quantity;
+
+            // Track flags
+            if (config.isWhiteLabel()) hasWhiteLabel = true;
+            if (config.isPlatformShipping()) hasPlatformShipping = true;
+
+            // Keep first item info for backward compatibility
+            if (i == 0) {
+                firstProductId = productId;
+                firstProductName = product.getName();
+                firstProductImageUrl = product.getThumbnailUrl();
+                firstSku = product.getSku();
+            }
+        }
+
+        double totalAmount = totalSubtotal + totalShipping;
+
+        // Create order
+        String orderId = UUID.randomUUID().toString();
+        Timestamp now = Timestamp.now();
+
+        // Build order data
+        Map<String, Object> orderData = new HashMap<>();
+        orderData.put("order_id", orderId);
+        orderData.put("user_id", userId);
+        orderData.put("expert_id", expertId);
+        orderData.put("type", ORDER_TYPE);
+        orderData.put("created_at", now);
+        orderData.put("status", ProductOrderDetails.STATUS_INITIATED);
+
+        // Multi-item: store items array
+        List<Map<String, Object>> itemMaps = new ArrayList<>();
+        for (OrderLineItem lineItem : lineItems) {
+            itemMaps.add(lineItem.toMap());
+        }
+        orderData.put("items", itemMaps);
+
+        // Backward compatibility fields (first/primary item info for display)
+        orderData.put("productId", firstProductId);
+        orderData.put("sku", firstSku);
+        orderData.put("productName", lineItems.size() > 1
+            ? firstProductName + " + " + (lineItems.size() - 1) + " more"
+            : firstProductName);
+        orderData.put("productImageUrl", firstProductImageUrl);
+        orderData.put("quantity", totalQuantity);
+
+        // Pricing totals
+        orderData.put("subtotal", totalSubtotal);
+        orderData.put("shippingCost", totalShipping);
+        orderData.put("amount", totalAmount);
+        orderData.put("currency", "INR");
+
+        // Configuration snapshot (aggregate)
+        orderData.put("isWhiteLabel", hasWhiteLabel);
+        orderData.put("shippingMode", hasPlatformShipping ? ExpertProductConfig.SHIPPING_PLATFORM : ExpertProductConfig.SHIPPING_SELF);
+
+        // Commission snapshot (aggregated)
+        double avgCommissionPercent = totalSubtotal > 0 ? (totalPlatformFee / totalSubtotal) * 100.0 : DEFAULT_COMMISSION_PERCENT;
+        orderData.put("platformFeePercent", avgCommissionPercent);
+        orderData.put("platformFeeAmount", totalPlatformFee);
+        orderData.put("expertEarnings", totalExpertEarnings);
+
+        // Shipping address
+        if (address != null) {
+            orderData.put("address", address);
+        }
+
+        // Get user and expert names
+        FirebaseUser user = UserService.getUserDetails(db, userId);
+        FirebaseUser expert = UserService.getUserDetails(db, expertId);
+        if (user != null) {
+            orderData.put("user_name", user.getName());
+            orderData.put("user_phone_number", user.getPhoneNumber());
+        }
+        if (expert != null) {
+            orderData.put("expert_name", expert.getName());
+        }
+
+        // Save order
+        DocumentReference orderRef = db.collection("users").document(userId)
+                .collection(ORDERS_COLLECTION).document(orderId);
+        orderRef.set(orderData).get();
+
+        LoggingService.info("multi_item_product_order_created", Map.of(
+            "orderId", orderId,
+            "userId", userId,
+            "expertId", expertId,
+            "itemCount", lineItems.size(),
+            "totalQuantity", totalQuantity,
+            "amount", totalAmount
+        ));
+
+        // Return order details for payment
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("orderId", orderId);
+        result.put("amount", totalAmount);
+        result.put("currency", "INR");
+        result.put("productName", (String) orderData.get("productName"));
+        result.put("itemCount", lineItems.size());
+        result.put("totalQuantity", totalQuantity);
+        result.put("subtotal", totalSubtotal);
+        result.put("shippingCost", totalShipping);
+        return result;
+    }
+
+    /**
      * Verify order payment (called after Razorpay payment success).
      * Decrements stock and credits expert earnings.
+     * Supports both single-item and multi-item orders.
      */
+    @SuppressWarnings("unchecked")
     public void verifyOrderPayment(String userId, String orderId) throws ExecutionException, InterruptedException {
         DocumentReference orderRef = db.collection("users").document(userId)
                 .collection(ORDERS_COLLECTION).document(orderId);
+
+        // Track items that need self-shipping stock decrement (done outside transaction)
+        List<Map<String, Object>> selfShippingItems = new ArrayList<>();
 
         db.runTransaction(transaction -> {
             DocumentSnapshot orderDoc = transaction.get(orderRef).get();
@@ -191,17 +409,42 @@ public class ProductOrderService {
                 return null;
             }
 
-            String productId = orderDoc.getString("productId");
-            String expertId = orderDoc.getString("expert_id");
-            String shippingMode = orderDoc.getString("shippingMode");
-            Integer quantity = orderDoc.getLong("quantity") != null ? orderDoc.getLong("quantity").intValue() : 1;
+            // Check if this is a multi-item order
+            Object itemsObj = orderDoc.get("items");
+            boolean isMultiItem = itemsObj instanceof List && !((List<?>) itemsObj).isEmpty();
 
-            // Decrement stock based on shipping mode
-            if (ExpertProductConfig.SHIPPING_PLATFORM.equals(shippingMode)) {
-                catalogService.decrementPlatformStock(transaction, productId, quantity);
+            if (isMultiItem) {
+                // Multi-item order: decrement stock for each item
+                List<Map<String, Object>> items = (List<Map<String, Object>>) itemsObj;
+                for (Map<String, Object> item : items) {
+                    String itemProductId = (String) item.get("productId");
+                    String itemShippingMode = (String) item.get("shippingMode");
+                    int itemQuantity = item.get("quantity") != null ? ((Number) item.get("quantity")).intValue() : 1;
+
+                    if (ExpertProductConfig.SHIPPING_PLATFORM.equals(itemShippingMode)) {
+                        catalogService.decrementPlatformStock(transaction, itemProductId, itemQuantity);
+                    } else {
+                        // Track for self-shipping stock decrement after transaction
+                        selfShippingItems.add(Map.of(
+                            "productId", itemProductId,
+                            "quantity", itemQuantity
+                        ));
+                    }
+                }
             } else {
-                // For self-shipping, decrement expert's stock outside transaction
-                // (will handle after transaction commits)
+                // Single-item order (backward compatibility)
+                String productId = orderDoc.getString("productId");
+                String shippingMode = orderDoc.getString("shippingMode");
+                Integer quantity = orderDoc.getLong("quantity") != null ? orderDoc.getLong("quantity").intValue() : 1;
+
+                if (ExpertProductConfig.SHIPPING_PLATFORM.equals(shippingMode)) {
+                    catalogService.decrementPlatformStock(transaction, productId, quantity);
+                } else {
+                    selfShippingItems.add(Map.of(
+                        "productId", productId,
+                        "quantity", quantity
+                    ));
+                }
             }
 
             // Update order status
@@ -210,21 +453,20 @@ public class ProductOrderService {
             updates.put("verified_at", Timestamp.now());
             transaction.update(orderRef, updates);
 
-            return shippingMode;
+            return null;
         }).get();
 
-        // Handle expert stock decrement outside transaction if self-shipping
+        // Handle expert stock decrement outside transaction for self-shipping items
         DocumentSnapshot orderDoc = orderRef.get().get();
-        String shippingMode = orderDoc.getString("shippingMode");
-        if (ExpertProductConfig.SHIPPING_SELF.equals(shippingMode)) {
-            String expertId = orderDoc.getString("expert_id");
-            String productId = orderDoc.getString("productId");
-            Integer quantity = orderDoc.getLong("quantity") != null ? orderDoc.getLong("quantity").intValue() : 1;
+        String expertId = orderDoc.getString("expert_id");
+
+        for (Map<String, Object> item : selfShippingItems) {
+            String productId = (String) item.get("productId");
+            int quantity = (Integer) item.get("quantity");
             expertProductService.decrementExpertStock(expertId, productId, quantity);
         }
 
-        // Credit expert earnings (amount minus platform fee)
-        String expertId = orderDoc.getString("expert_id");
+        // Credit expert earnings (aggregated amount minus platform fee)
         Double expertEarnings = orderDoc.getDouble("expertEarnings");
         if (expertId != null && expertEarnings != null && expertEarnings > 0) {
             earningsService.creditExpertEarnings(
@@ -239,7 +481,8 @@ public class ProductOrderService {
 
         LoggingService.info("product_order_verified", Map.of(
             "orderId", orderId,
-            "userId", userId
+            "userId", userId,
+            "itemCount", selfShippingItems.size() > 0 ? selfShippingItems.size() : 1
         ));
     }
 

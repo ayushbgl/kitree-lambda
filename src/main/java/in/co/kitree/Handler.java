@@ -1252,9 +1252,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return handleGetExpertStorefront(requestBody);
             }
 
-            // Create product order (buy product)
+            // Create product order (buy product) - single item
             if ("buy_product".equals(requestBody.getFunction())) {
                 return handleBuyProduct(userId, requestBody);
+            }
+
+            // Create product order (buy products) - multi-item
+            if ("buy_products".equals(requestBody.getFunction())) {
+                return handleBuyProducts(userId, requestBody);
             }
 
             // Verify product order payment
@@ -5124,6 +5129,72 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(orderResult);
         } catch (Exception e) {
             LoggingService.error("buy_product_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Create multi-item product order (buy products).
+     * Items should be passed as a list with productId and quantity for each.
+     */
+    @SuppressWarnings("unchecked")
+    private String handleBuyProducts(String userId, RequestBody requestBody) {
+        try {
+            if (requestBody.getExpertId() == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
+            }
+
+            // Get items from request - expects a list of {productId, quantity}
+            List<Map<String, Object>> items = requestBody.getItems();
+            if (items == null || items.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "At least one item is required"));
+            }
+
+            // Validate items
+            for (int i = 0; i < items.size(); i++) {
+                Map<String, Object> item = items.get(i);
+                if (item.get("productId") == null) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Product ID is required for item " + (i + 1)));
+                }
+                Object qtyObj = item.get("quantity");
+                int qty = qtyObj != null ? ((Number) qtyObj).intValue() : 1;
+                if (qty < 1) {
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Quantity must be at least 1 for item " + (i + 1)));
+                }
+            }
+
+            ProductCatalogService catalogService = new ProductCatalogService(db);
+            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
+            ExpertEarningsService earningsService = new ExpertEarningsService(db);
+            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+
+            Map<String, Object> orderResult = orderService.createMultiItemOrder(
+                userId,
+                requestBody.getExpertId(),
+                items,
+                requestBody.getAddress(),
+                requestBody.getCouponCode()
+            );
+
+            // Create Razorpay order for payment
+            Double amount = (Double) orderResult.get("amount");
+            String orderId = (String) orderResult.get("orderId");
+
+            if (amount != null && amount > 0) {
+                try {
+                    // Encrypt userId for Razorpay notes
+                    String encryptedCustomerId = CustomerCipher.encryptCaesarCipher(userId);
+                    String razorpayOrderId = razorpay.createOrder(amount, encryptedCustomerId);
+                    orderResult.put("razorpayOrderId", razorpayOrderId);
+                } catch (RazorpayException e) {
+                    LoggingService.error("razorpay_order_creation_failed", e);
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Failed to create payment order"));
+                }
+            }
+
+            return gson.toJson(orderResult);
+        } catch (Exception e) {
+            LoggingService.error("buy_products_error", e);
             return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
         }
     }

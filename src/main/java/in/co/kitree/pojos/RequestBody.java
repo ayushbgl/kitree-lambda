@@ -106,6 +106,7 @@ public class RequestBody {
     // Product ecommerce fields
     private String productId; // Platform product ID
     private Integer quantity; // Quantity of product to order
+    private List<Map<String, Object>> items; // Multi-item order: list of {productId, quantity}
     private String trackingNumber; // Shipping tracking number
     private String newStatus; // New order status for updates
     private Double sellerPriceInr; // Seller's price for a product
@@ -680,6 +681,14 @@ public class RequestBody {
 
     public void setQuantity(Integer quantity) {
         this.quantity = quantity;
+    }
+
+    public List<Map<String, Object>> getItems() {
+        return items;
+    }
+
+    public void setItems(List<Map<String, Object>> items) {
+        this.items = items;
     }
 
     public String getTrackingNumber() {
