@@ -25,12 +25,12 @@ public class TimezoneUtils {
                         // Initialize with accelerated geometry for better performance
                         timeZoneEngine = TimeZoneEngine.initialize(true);
                     } catch (Exception e) {
-                        System.err.println("Failed to initialize TimeZoneEngine: " + e.getMessage());
+                        LoggingService.warn("timezone_engine_init_failed", java.util.Map.of("error", e.getMessage()));
                         // Fallback to non-accelerated version
                         try {
                             timeZoneEngine = TimeZoneEngine.initialize(false);
                         } catch (Exception e2) {
-                            System.err.println("Failed to initialize TimeZoneEngine (fallback): " + e2.getMessage());
+                            LoggingService.error("timezone_engine_init_fallback_failed", e2);
                             throw new RuntimeException("Could not initialize TimeZoneEngine", e2);
                         }
                     }
@@ -61,12 +61,12 @@ public class TimezoneUtils {
                 return getFallbackTimezoneOffset(longitude);
             }
         } catch (Exception e) {
-            System.err.println("Error getting timezone offset: " + e.getMessage());
+            LoggingService.error("timezone_get_offset_error", e);
             // Fallback to simple longitude-based calculation
             return getFallbackTimezoneOffset(longitude);
         }
     }
-    
+
     /**
      * Get timezone ID for given latitude and longitude using Timeshape
      * Returns the actual timezone ID (e.g., "Asia/Kolkata", "America/New_York")
@@ -83,12 +83,12 @@ public class TimezoneUtils {
                 return getFallbackTimezoneId(longitude);
             }
         } catch (Exception e) {
-            System.err.println("Error getting timezone ID: " + e.getMessage());
+            LoggingService.error("timezone_get_id_error", e);
             // Fallback to offset-based timezone ID
             return getFallbackTimezoneId(longitude);
         }
     }
-    
+
     /**
      * Get timezone offset as ZoneOffset object using Timeshape
      */
@@ -106,12 +106,12 @@ public class TimezoneUtils {
                 return getFallbackZoneOffset(longitude);
             }
         } catch (Exception e) {
-            System.err.println("Error getting zone offset: " + e.getMessage());
+            LoggingService.error("timezone_get_zone_offset_error", e);
             // Fallback to simple longitude-based calculation
             return getFallbackZoneOffset(longitude);
         }
     }
-    
+
     /**
      * Get ZoneId object for given latitude and longitude using Timeshape
      * This is the most accurate method as it returns the actual ZoneId
@@ -121,11 +121,11 @@ public class TimezoneUtils {
             TimeZoneEngine engine = getTimeZoneEngine();
             return engine.query(latitude, longitude);
         } catch (Exception e) {
-            System.err.println("Error getting ZoneId: " + e.getMessage());
+            LoggingService.error("timezone_get_zoneid_error", e);
             return Optional.empty();
         }
     }
-    
+
     /**
      * Fallback method for timezone offset calculation based on longitude
      * Used when Timeshape fails or doesn't find a timezone

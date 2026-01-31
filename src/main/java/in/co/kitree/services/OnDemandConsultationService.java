@@ -652,8 +652,8 @@ public class OnDemandConsultationService {
             String[] parts = streamCallCid.split(":");
             if (parts.length >= 2) {
                 String orderId = parts[parts.length - 1];
-                System.out.println("[OnDemandConsultationService] Trying to find order by ID from CID: " + orderId);
-                
+                LoggingService.debug("on_demand_consultation_find_order_by_cid", Map.of("orderId", orderId, "streamCallCid", streamCallCid));
+
                 // Search by orderId across all orders
                 Query orderIdQuery = db.collectionGroup("orders")
                         .whereEqualTo("orderId", orderId)

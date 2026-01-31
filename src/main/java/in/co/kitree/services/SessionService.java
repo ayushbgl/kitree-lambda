@@ -305,7 +305,7 @@ public class SessionService {
                     .update("updatedAt", now).get();
         }
 
-        System.out.println("[SessionService] Started session: " + streamCallId + " with call type: " + callType);
+        LoggingService.info("session_started", Map.of("streamCallId", streamCallId, "callType", callType));
 
         return generateHostToken(streamCallId, expertId, interactionMode);
     }
@@ -361,7 +361,7 @@ public class SessionService {
         String callType = getStreamCallType(interactionMode);
         streamService.endCall(callType, streamCallId);
 
-        System.out.println("[SessionService] Stopped session: " + streamCallId);
+        LoggingService.info("session_stopped", Map.of("streamCallId", streamCallId));
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
@@ -627,7 +627,7 @@ public class SessionService {
         String callType = getStreamCallType(interactionMode != null ? interactionMode : MODE_CLASSROOM);
         boolean updated = streamService.updateMemberRole(callType, streamCallId, targetUserId, ROLE_SPEAKER);
 
-        System.out.println("[SessionService] Promoted " + targetUserId + " to speaker: " + updated);
+        LoggingService.info("session_participant_promoted", Map.of("targetUserId", targetUserId, "newRole", ROLE_SPEAKER, "success", updated));
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", updated);
@@ -675,7 +675,7 @@ public class SessionService {
         String callType = getStreamCallType(interactionMode != null ? interactionMode : MODE_CLASSROOM);
         boolean updated = streamService.updateMemberRole(callType, streamCallId, targetUserId, ROLE_VIEWER);
 
-        System.out.println("[SessionService] Demoted " + targetUserId + " to viewer: " + updated);
+        LoggingService.info("session_participant_demoted", Map.of("targetUserId", targetUserId, "newRole", ROLE_VIEWER, "success", updated));
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", updated);
@@ -982,7 +982,7 @@ public class SessionService {
                 .collection("plans").document(planId)
                 .update("totalGiftsReceived", FieldValue.increment(validatedAmount)).get();
 
-        System.out.println("[SessionService] Gift sent: " + giftId + " ($" + validatedAmount + ") from " + userId);
+        LoggingService.info("session_gift_sent", Map.of("giftId", giftId, "amount", validatedAmount, "userId", userId));
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
