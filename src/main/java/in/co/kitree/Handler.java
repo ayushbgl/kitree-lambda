@@ -15,6 +15,7 @@ import com.google.firebase.cloud.FirestoreClient;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.razorpay.RazorpayException;
+import in.co.kitree.handlers.ExpertHandler;
 import in.co.kitree.handlers.ProductOrderHandler;
 import in.co.kitree.pojos.*;
 import in.co.kitree.services.*;
@@ -62,6 +63,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     protected PythonLambdaService pythonLambdaService;
     private AstrologyService astrologyService;
     private ProductOrderHandler productOrderHandler;
+    private ExpertHandler expertHandler;
 
     public Handler() {
         try {
@@ -85,6 +87,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             this.pythonLambdaService = createPythonLambdaService();
             this.astrologyService = new AstrologyService();
             this.productOrderHandler = new ProductOrderHandler(db, razorpay);
+            this.expertHandler = new ExpertHandler(db);
         } catch (Exception e) {
             LoggingService.error("handler_init_failed", e);
             if (isTest()) {
@@ -124,6 +127,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     this.productOrderHandler = new ProductOrderHandler(db, razorpay);
                 } catch (Exception ex) {
                     LoggingService.warn("product_order_handler_init_skipped_test_env", Map.of("error", ex.getMessage()));
+                }
+                try {
+                    this.expertHandler = new ExpertHandler(db);
+                } catch (Exception ex) {
+                    LoggingService.warn("expert_handler_init_skipped_test_env", Map.of("error", ex.getMessage()));
                 }
             } else {
                 throw new RuntimeException("Failed to initialize Handler", e);
@@ -245,14 +253,10 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return fulfillDigitalOrders(userId, requestBody.getOrderId(), language);
             }
 
-            // Mark expert as BUSY when they join a scheduled call
-            if ("mark_expert_busy".equals(requestBody.getFunction())) {
-                return handleMarkExpertBusy(userId, requestBody.getOrderId());
-            }
-
-            // Mark expert as FREE when they end a scheduled call
-            if ("mark_expert_free".equals(requestBody.getFunction())) {
-                return handleMarkExpertFree(userId, requestBody.getOrderId());
+            // ============= Expert Endpoints =============
+            // Delegated to ExpertHandler
+            if (ExpertHandler.handles(requestBody.getFunction())) {
+                return expertHandler.handleRequest(requestBody.getFunction(), userId, requestBody);
             }
 
             if ("buy_service".equals(requestBody.getFunction())) {
@@ -1460,10 +1464,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return handleWalletBalance(userId, requestBody);
             }
 
-            if ("expert_earnings_balance".equals(requestBody.getFunction())) {
-                return handleExpertEarningsBalance(userId, requestBody);
-            }
-
             if ("create_wallet_recharge_order".equals(requestBody.getFunction())) {
                 return handleCreateWalletRechargeOrder(userId, requestBody);
             }
@@ -1512,25 +1512,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
             if ("get_active_call_for_user".equals(requestBody.getFunction())) {
                 return handleGetActiveCallForUser(userId, requestBody);
-            }
-
-            if ("get_expert_booking_metrics".equals(requestBody.getFunction())) {
-                return handleGetExpertBookingMetrics(userId, requestBody);
-            }
-
-            // Admin endpoint for recording expert payouts
-            if ("record_expert_payout".equals(requestBody.getFunction())) {
-                return handleRecordExpertPayout(userId, requestBody);
-            }
-
-            // Admin endpoint for setting expert platform fee config
-            if ("set_expert_platform_fee".equals(requestBody.getFunction())) {
-                return handleSetExpertPlatformFee(userId, requestBody);
-            }
-
-            // Admin endpoint for getting expert platform fee config
-            if ("get_expert_platform_fee".equals(requestBody.getFunction())) {
-                return handleGetExpertPlatformFee(userId, requestBody);
             }
 
             // ============= Product Ecommerce Endpoints =============
@@ -3050,33 +3031,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         return gson.toJson(response);
     }
 
-    /**
-     * Get expert earnings balance (for experts viewing their earnings in expert mode).
-     * This is separate from wallet balance - shows earnings from consultations.
-     */
-    private String handleExpertEarningsBalance(String expertId, RequestBody requestBody) throws ExecutionException, InterruptedException {
-        ExpertEarningsService earningsService = new ExpertEarningsService(this.db);
-        String currency = requestBody.getCurrency();
-        
-        if (currency != null && !currency.isEmpty()) {
-            // Return specific currency balance
-            Double balance = earningsService.getExpertEarningsBalance(expertId, currency);
-            return gson.toJson(Map.of(
-                "success", true,
-                "balance", balance,
-                "currency", currency
-            ));
-        } else {
-            // Return all currency balances
-            Map<String, Double> balances = earningsService.getExpertEarningsBalances(expertId);
-            return gson.toJson(Map.of(
-                "success", true,
-                "balances", balances,
-                "defaultCurrency", ExpertEarningsService.getDefaultCurrency()
-            ));
-        }
-    }
-
     // =====================================================================
     // ON-DEMAND CONSULTATION HANDLER METHODS
     // =====================================================================
@@ -3971,474 +3925,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         return gson.toJson(response);
     }
 
-    /**
-     * Get aggregate booking metrics for an expert.
-     * Returns total bookings, revenue, and earnings with breakdown by type.
-     * Uses Firestore aggregation queries (count, sum) for efficiency.
-     * Supports date range filtering for different time periods.
-     */
-    private String handleGetExpertBookingMetrics(String expertId, RequestBody requestBody) throws Exception {
-        LoggingService.setFunction("get_expert_booking_metrics");
-        LoggingService.setExpertId(expertId);
-        LoggingService.info("get_expert_booking_metrics_started");
-
-        if (expertId == null) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID required"));
-        }
-
-        // Parse date range from request (REQUIRED - no more "all time")
-        Long startDateMillis = requestBody.getStartDate();
-        Long endDateMillis = requestBody.getEndDate();
-        String bookingType = requestBody.getBookingType(); // "all", "scheduled", "onDemand", "product"
-
-        if (startDateMillis == null || endDateMillis == null) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Date range is required"));
-        }
-
-        com.google.cloud.Timestamp startTs = com.google.cloud.Timestamp.ofTimeMicroseconds(startDateMillis * 1000);
-        com.google.cloud.Timestamp endTs = com.google.cloud.Timestamp.ofTimeMicroseconds(endDateMillis * 1000);
-
-        LoggingService.info("metrics_date_range", Map.of(
-            "startDate", startTs.toString(),
-            "endDate", endTs.toString(),
-            "bookingType", bookingType != null ? bookingType : "all"
-        ));
-
-        String currency = "INR"; // Default currency
-
-        try {
-            // Build base query with expert_id and date filters
-            Query baseQuery = this.db.collectionGroup("orders")
-                    .whereEqualTo("expert_id", expertId)
-                    .whereGreaterThanOrEqualTo("created_at", startTs)
-                    .whereLessThanOrEqualTo("created_at", endTs);
-
-            // --- COUNT QUERIES (all orders regardless of status) ---
-
-            // On-demand count
-            long onDemandCount = 0;
-            if (bookingType == null || bookingType.equals("all") || bookingType.equals("onDemand")) {
-                Query onDemandQuery = baseQuery.whereEqualTo("type", "ON_DEMAND_CONSULTATION");
-                AggregateQuerySnapshot onDemandSnapshot = onDemandQuery.count().get().get();
-                onDemandCount = onDemandSnapshot.getCount();
-            }
-
-            // Product count
-            long productCount = 0;
-            if (bookingType == null || bookingType.equals("all") || bookingType.equals("product")) {
-                Query productQuery = baseQuery.whereEqualTo("type", "PRODUCT");
-                AggregateQuerySnapshot productSnapshot = productQuery.count().get().get();
-                productCount = productSnapshot.getCount();
-            }
-
-            // Scheduled count (CONSULTATION type)
-            long scheduledCount = 0;
-            if (bookingType == null || bookingType.equals("all") || bookingType.equals("scheduled")) {
-                Query scheduledQuery = baseQuery.whereEqualTo("type", "CONSULTATION");
-                AggregateQuerySnapshot scheduledSnapshot = scheduledQuery.count().get().get();
-                scheduledCount = scheduledSnapshot.getCount();
-            }
-
-            // Calculate total based on filter
-            long totalBookings;
-            if (bookingType == null || bookingType.equals("all")) {
-                totalBookings = onDemandCount + productCount + scheduledCount;
-            } else if (bookingType.equals("onDemand")) {
-                totalBookings = onDemandCount;
-            } else if (bookingType.equals("product")) {
-                totalBookings = productCount;
-            } else {
-                totalBookings = scheduledCount;
-            }
-
-            // --- EARNINGS QUERIES (only COMPLETED orders) ---
-            // NOTE: Revenue calculation removed from expert dashboard - experts only see their earnings
-            // Revenue is not shown to experts; only totalEarnings is calculated and returned
-
-            double totalEarnings = 0.0;
-
-            // On-demand completed: sum expert_earnings only
-            if (bookingType == null || bookingType.equals("all") || bookingType.equals("onDemand")) {
-                Query onDemandCompletedQuery = baseQuery
-                        .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
-                        .whereEqualTo("status", "COMPLETED");
-                AggregateQuerySnapshot onDemandSums = onDemandCompletedQuery
-                        .aggregate(sum("expert_earnings"))
-                        .get().get();
-                Double onDemandEarnings = onDemandSums.getDouble(sum("expert_earnings"));
-                if (onDemandEarnings != null) totalEarnings += onDemandEarnings;
-            }
-
-            // Scheduled completed (CONSULTATION type): sum expert_earnings
-            if (bookingType == null || bookingType.equals("all") || bookingType.equals("scheduled")) {
-                Query scheduledCompletedQuery = baseQuery
-                        .whereEqualTo("type", "CONSULTATION")
-                        .whereEqualTo("status", "paid");
-                AggregateQuerySnapshot scheduledSums = scheduledCompletedQuery
-                        .aggregate(sum("amount"), sum("expert_earnings"))
-                        .get().get();
-                Double scheduledAmount = scheduledSums.getDouble(sum("amount"));
-                Double scheduledEarnings = scheduledSums.getDouble(sum("expert_earnings"));
-                // For scheduled, if expert_earnings not set, use amount (no platform fee on scheduled)
-                if (scheduledEarnings != null) {
-                    totalEarnings += scheduledEarnings;
-                } else if (scheduledAmount != null) {
-                    totalEarnings += scheduledAmount;
-                }
-            }
-
-            // Product completed: sum expert_earnings (or amount if expert_earnings not set)
-            if (bookingType == null || bookingType.equals("all") || bookingType.equals("product")) {
-                Query productCompletedQuery = baseQuery
-                        .whereEqualTo("type", "PRODUCT")
-                        .whereEqualTo("status", "paid");
-                AggregateQuerySnapshot productSums = productCompletedQuery
-                        .aggregate(sum("amount"), sum("expert_earnings"))
-                        .get().get();
-                Double productAmount = productSums.getDouble(sum("amount"));
-                Double productEarnings = productSums.getDouble(sum("expert_earnings"));
-                if (productEarnings != null) {
-                    totalEarnings += productEarnings;
-                } else if (productAmount != null) {
-                    totalEarnings += productAmount; // Fallback to amount if expert_earnings not set
-                }
-            }
-
-            LoggingService.info("metrics_calculated", Map.of(
-                "totalBookings", totalBookings,
-                "totalEarnings", totalEarnings,
-                "onDemandCount", onDemandCount,
-                "scheduledCount", scheduledCount,
-                "productCount", productCount
-            ));
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("totalBookings", totalBookings);
-            // NOTE: Revenue removed from expert dashboard - experts only see earnings
-            response.put("totalRevenue", 0); // Kept for backward compatibility but always 0
-            response.put("totalEarnings", Math.round(totalEarnings * 100.0) / 100.0);
-            response.put("currency", currency);
-            response.put("scheduledCount", scheduledCount);
-            response.put("onDemandCount", onDemandCount);
-            response.put("productCount", productCount);
-
-            return gson.toJson(response);
-
-        } catch (Exception e) {
-            LoggingService.error("get_expert_booking_metrics_error", e);
-            return gson.toJson(Map.of(
-                "success", false,
-                "errorMessage", "Failed to calculate metrics: " + e.getMessage()
-            ));
-        }
-    }
-
-    /**
-     * Admin endpoint to record a payout to an expert.
-     * Deducts from expert_earnings_balances and creates a record in payouts subcollection.
-     *
-     * Required params:
-     * - expertId: The expert's user ID
-     * - amount: The payout amount
-     * - currency: Currency code (default: INR)
-     * - method: Payout method (BANK_TRANSFER, UPI, etc.)
-     * - reference: Transaction reference ID
-     * - notes: Optional notes
-     */
-    private String handleRecordExpertPayout(String adminUserId, RequestBody requestBody) {
-        LoggingService.setFunction("record_expert_payout");
-        LoggingService.info("record_expert_payout_started");
-
-        try {
-            // Verify admin access
-            if (!isAdmin(adminUserId)) {
-                LoggingService.warn("record_expert_payout_unauthorized", Map.of("userId", adminUserId));
-                return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
-            }
-
-            // Get required parameters
-            String expertId = requestBody.getExpertId();
-            Double amount = requestBody.getAmount();
-            String currency = requestBody.getCurrency();
-            String method = requestBody.getPayoutMethod();
-            String reference = requestBody.getPayoutReference();
-            String notes = requestBody.getNotes();
-
-            // Validate required fields
-            if (expertId == null || expertId.isEmpty()) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
-            }
-            if (amount == null || amount <= 0) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Valid amount is required"));
-            }
-            if (method == null || method.isEmpty()) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Payout method is required"));
-            }
-            if (reference == null || reference.isEmpty()) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Payout reference is required"));
-            }
-
-            // Default currency
-            if (currency == null || currency.isEmpty()) {
-                currency = "INR";
-            }
-
-            LoggingService.setExpertId(expertId);
-            LoggingService.info("record_expert_payout_processing", Map.of(
-                "amount", amount,
-                "currency", currency,
-                "method", method
-            ));
-
-            // Record the payout
-            ExpertEarningsService earningsService = new ExpertEarningsService(db);
-            String payoutId = earningsService.recordPayout(expertId, currency, amount, method, reference, notes);
-
-            // Get updated balance
-            Double newBalance = earningsService.getExpertEarningsBalance(expertId, currency);
-
-            LoggingService.info("record_expert_payout_success", Map.of(
-                "payoutId", payoutId,
-                "newBalance", newBalance
-            ));
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("payoutId", payoutId);
-            response.put("newBalance", newBalance);
-            response.put("currency", currency);
-
-            return gson.toJson(response);
-
-        } catch (IllegalArgumentException e) {
-            LoggingService.warn("record_expert_payout_validation_error", Map.of("error", e.getMessage()));
-            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
-        } catch (Exception e) {
-            LoggingService.error("record_expert_payout_error", e);
-            return gson.toJson(Map.of(
-                "success", false,
-                "errorMessage", "Failed to record payout: " + e.getMessage()
-            ));
-        }
-    }
-
-    /**
-     * Admin endpoint to set platform fee configuration for an expert.
-     * Stores in users/{expertId}/private/platform_fee_config document.
-     * Only admins can call this endpoint.
-     *
-     * @param adminUserId The calling user's ID (must be admin)
-     * @param requestBody Contains expertId and fee configuration
-     * @return JSON response with success status
-     */
-    private String handleSetExpertPlatformFee(String adminUserId, RequestBody requestBody) {
-        LoggingService.setFunction("set_expert_platform_fee");
-        LoggingService.info("set_expert_platform_fee_started");
-
-        try {
-            // Verify admin access - CRITICAL security check
-            if (!isAdmin(adminUserId)) {
-                LoggingService.warn("set_expert_platform_fee_unauthorized", Map.of("userId", adminUserId));
-                return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
-            }
-
-            // Get required parameters
-            String expertId = requestBody.getExpertId();
-            Double defaultFeePercent = requestBody.getDefaultFeePercent();
-            Map<String, Double> feeByType = requestBody.getFeeByType();
-            Map<String, Double> feeByCategory = requestBody.getFeeByCategory();
-
-            // Validate expert ID
-            if (expertId == null || expertId.isEmpty()) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
-            }
-
-            // At least one fee configuration must be provided
-            if (defaultFeePercent == null && (feeByType == null || feeByType.isEmpty()) && (feeByCategory == null || feeByCategory.isEmpty())) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "At least one fee configuration is required"));
-            }
-
-            // Validate fee percentages (should be between 0 and 100)
-            if (defaultFeePercent != null && (defaultFeePercent < 0 || defaultFeePercent > 100)) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Default fee percent must be between 0 and 100"));
-            }
-
-            LoggingService.setExpertId(expertId);
-            LoggingService.info("set_expert_platform_fee_processing", Map.of(
-                "defaultFeePercent", defaultFeePercent != null ? defaultFeePercent : "not set",
-                "feeByTypeCount", feeByType != null ? feeByType.size() : 0,
-                "feeByCategoryCount", feeByCategory != null ? feeByCategory.size() : 0
-            ));
-
-            // Prepare the document data
-            Map<String, Object> feeConfigData = new HashMap<>();
-            if (defaultFeePercent != null) {
-                feeConfigData.put("default_fee_percent", defaultFeePercent);
-            }
-            if (feeByType != null && !feeByType.isEmpty()) {
-                feeConfigData.put("fee_by_type", feeByType);
-            }
-            if (feeByCategory != null && !feeByCategory.isEmpty()) {
-                feeConfigData.put("fee_by_category", feeByCategory);
-            }
-            feeConfigData.put("updated_at", com.google.cloud.Timestamp.now());
-            feeConfigData.put("updated_by", adminUserId);
-
-            // Write to the private collection: users/{expertId}/private/platform_fee_config
-            DocumentReference feeConfigRef = db.collection("users").document(expertId)
-                    .collection("private").document("platform_fee_config");
-            feeConfigRef.set(feeConfigData, SetOptions.merge()).get();
-
-            LoggingService.info("set_expert_platform_fee_success", Map.of("expertId", expertId));
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("expertId", expertId);
-            response.put("message", "Platform fee configuration updated successfully");
-
-            return gson.toJson(response);
-
-        } catch (Exception e) {
-            LoggingService.error("set_expert_platform_fee_error", e);
-            return gson.toJson(Map.of(
-                "success", false,
-                "errorMessage", "Failed to set platform fee: " + e.getMessage()
-            ));
-        }
-    }
-
-    /**
-     * Admin endpoint to get platform fee configuration for an expert.
-     * Reads from users/{expertId}/private/platform_fee_config document.
-     * Only admins can call this endpoint.
-     *
-     * @param adminUserId The calling user's ID (must be admin)
-     * @param requestBody Contains expertId
-     * @return JSON response with fee configuration
-     */
-    private String handleGetExpertPlatformFee(String adminUserId, RequestBody requestBody) {
-        LoggingService.setFunction("get_expert_platform_fee");
-        LoggingService.info("get_expert_platform_fee_started");
-
-        try {
-            // Verify admin access - CRITICAL security check
-            if (!isAdmin(adminUserId)) {
-                LoggingService.warn("get_expert_platform_fee_unauthorized", Map.of("userId", adminUserId));
-                return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
-            }
-
-            String expertId = requestBody.getExpertId();
-
-            // Validate expert ID
-            if (expertId == null || expertId.isEmpty()) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
-            }
-
-            LoggingService.setExpertId(expertId);
-
-            // Get the platform fee config using WalletService
-            WalletService walletService = new WalletService(db);
-            PlatformFeeConfig feeConfig = walletService.getPlatformFeeConfig(expertId);
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("expertId", expertId);
-            response.put("defaultFeePercent", feeConfig.getDefaultFeePercent());
-            response.put("feeByType", feeConfig.getFeeByType());
-            response.put("feeByCategory", feeConfig.getFeeByCategory());
-
-            LoggingService.info("get_expert_platform_fee_success", Map.of("expertId", expertId));
-
-            return gson.toJson(response);
-
-        } catch (Exception e) {
-            LoggingService.error("get_expert_platform_fee_error", e);
-            return gson.toJson(Map.of(
-                "success", false,
-                "errorMessage", "Failed to get platform fee: " + e.getMessage()
-            ));
-        }
-    }
-
-    /**
-     * Mark expert as BUSY when they join a scheduled call.
-     * This is called from the frontend when an expert joins a scheduled consultation.
-     */
-    private String handleMarkExpertBusy(String expertId, String orderId) {
-        LoggingService.setFunction("mark_expert_busy");
-        LoggingService.setContext(null, orderId, expertId);
-        LoggingService.info("marking_expert_busy_started");
-        
-        try {
-            if (expertId == null) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
-            }
-            
-            // Validate the order exists and belongs to this expert (optional but recommended)
-            if (orderId != null) {
-                OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
-                // Try to find the order to verify expert ownership
-                // Note: This would require a method to get order by ID across collections
-                // For now, we trust the frontend to send correct data
-            }
-            
-            WalletService walletService = new WalletService(db);
-            
-            // Set expert status to BUSY
-            walletService.setConsultationStatus(expertId, "BUSY");
-            
-            LoggingService.info("expert_marked_busy_successfully");
-            return gson.toJson(Map.of("success", true, "status", "BUSY"));
-            
-        } catch (Exception e) {
-            LoggingService.error("mark_expert_busy_failed", e);
-            return gson.toJson(Map.of("success", false, "errorMessage", "Failed to update expert status: " + e.getMessage()));
-        }
-    }
-    
-    /**
-     * Mark expert as FREE when they end a scheduled call.
-     * Checks for other active consultations before freeing the expert.
-     */
-    private String handleMarkExpertFree(String expertId, String orderId) {
-        LoggingService.setFunction("mark_expert_free");
-        LoggingService.setContext(null, orderId, expertId);
-        LoggingService.info("marking_expert_free_started");
-        
-        try {
-            if (expertId == null) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
-            }
-            
-            WalletService walletService = new WalletService(db);
-            OnDemandConsultationService consultationService = new OnDemandConsultationService(db);
-            
-            // Check if expert has other active consultations
-            boolean hasOtherActive = false;
-            if (orderId != null) {
-                hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
-            }
-            
-            if (hasOtherActive) {
-                LoggingService.info("expert_keeping_busy_other_consultations", Map.of(
-                    "reason", "other_active_consultations"
-                ));
-                return gson.toJson(Map.of("success", true, "status", "BUSY", "reason", "other_active_consultations"));
-            }
-            
-            // Set expert status to FREE
-            walletService.setConsultationStatus(expertId, "FREE");
-            
-            LoggingService.info("expert_marked_free_successfully");
-            return gson.toJson(Map.of("success", true, "status", "FREE"));
-            
-        } catch (Exception e) {
-            LoggingService.error("mark_expert_free_failed", e);
-            return gson.toJson(Map.of("success", false, "errorMessage", "Failed to update expert status: " + e.getMessage()));
-        }
-    }
-    
     /**
      * Handle webhook requests from 3rd party services (Stream, Razorpay, etc.)
      * Routes based on the URL path: /webhooks/stream, /webhooks/razorpay, etc.
