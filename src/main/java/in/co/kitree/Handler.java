@@ -1011,6 +1011,385 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return "Success";
             }
 
+            // ================== SESSION / WEBINAR / COURSE APIs (O(1) Implementation) ==================
+
+            if ("create_session_plan".equals(requestBody.getFunction())) {
+                // Validate required fields
+                String title = requestBody.getTitle();
+                Long scheduledStartTime = requestBody.getScheduledStartTime();
+                Integer durationMinutes = requestBody.getDurationMinutes();
+
+                if (title == null || title.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Title is required"));
+                }
+                if (scheduledStartTime == null) {
+                    return gson.toJson(Map.of("success", false, "error", "Scheduled start time is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.createSessionPlan(
+                        userId,
+                        title,
+                        requestBody.getDescription(),
+                        requestBody.getCategory(),
+                        scheduledStartTime,
+                        durationMinutes,
+                        requestBody.getPrice(),
+                        requestBody.getCurrency(),
+                        requestBody.getMaxParticipants(),
+                        requestBody.getSessionCount(),
+                        requestBody.getInteractionMode(),
+                        requestBody.getGiftsEnabled(),
+                        requestBody.getGiftOptions()
+                );
+                return gson.toJson(result);
+            }
+
+            if ("add_course_session".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+                Integer sessionNumber = requestBody.getSessionNumber();
+                String title = requestBody.getTitle();
+                Long scheduledStartTime = requestBody.getScheduledStartTime();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+                if (sessionNumber == null) {
+                    return gson.toJson(Map.of("success", false, "error", "Session number is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.addCourseSession(
+                        userId,
+                        planId,
+                        sessionNumber,
+                        title,
+                        requestBody.getDescription(),
+                        scheduledStartTime,
+                        requestBody.getDurationMinutes()
+                );
+                return gson.toJson(result);
+            }
+
+            if ("start_session".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.startSession(
+                        userId,
+                        planId,
+                        requestBody.getSessionNumber()
+                );
+                return gson.toJson(result);
+            }
+
+            if ("stop_session".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.stopSession(
+                        userId,
+                        planId,
+                        requestBody.getSessionNumber()
+                );
+                return gson.toJson(result);
+            }
+
+            if ("join_session".equals(requestBody.getFunction())) {
+                String orderId = requestBody.getOrderId();
+                String expertId = requestBody.getExpertId();
+                String planId = requestBody.getPlanId();
+
+                if (orderId == null || orderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Order ID is required"));
+                }
+                if (expertId == null || expertId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Expert ID is required"));
+                }
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.joinSession(
+                        userId,
+                        orderId,
+                        expertId,
+                        planId,
+                        requestBody.getSessionNumber(),
+                        requestBody.getUserName(),
+                        requestBody.getUserPhotoUrl()
+                );
+                return gson.toJson(result);
+            }
+
+            if ("leave_session".equals(requestBody.getFunction())) {
+                String orderId = requestBody.getOrderId();
+                String expertId = requestBody.getExpertId();
+                String planId = requestBody.getPlanId();
+
+                if (orderId == null || orderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Order ID is required"));
+                }
+                if (expertId == null || expertId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Expert ID is required"));
+                }
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.leaveSession(
+                        userId,
+                        orderId,
+                        expertId,
+                        planId,
+                        requestBody.getSessionNumber()
+                );
+                return gson.toJson(result);
+            }
+
+            if ("raise_hand".equals(requestBody.getFunction())) {
+                String orderId = requestBody.getOrderId();
+
+                if (orderId == null || orderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Order ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.raiseHand(userId, orderId);
+                return gson.toJson(result);
+            }
+
+            if ("lower_hand".equals(requestBody.getFunction())) {
+                String orderId = requestBody.getOrderId();
+
+                if (orderId == null || orderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Order ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.lowerHand(userId, orderId);
+                return gson.toJson(result);
+            }
+
+            if ("promote_participant".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+                String targetUserId = requestBody.getTargetUserId();
+                String targetOrderId = requestBody.getTargetOrderId();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+                if (targetUserId == null || targetUserId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Target user ID is required"));
+                }
+                if (targetOrderId == null || targetOrderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Target order ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.promoteParticipant(
+                        userId, planId, targetUserId, targetOrderId
+                );
+                return gson.toJson(result);
+            }
+
+            if ("demote_participant".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+                String targetUserId = requestBody.getTargetUserId();
+                String targetOrderId = requestBody.getTargetOrderId();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+                if (targetUserId == null || targetUserId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Target user ID is required"));
+                }
+                if (targetOrderId == null || targetOrderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Target order ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.demoteParticipant(
+                        userId, planId, targetUserId, targetOrderId
+                );
+                return gson.toJson(result);
+            }
+
+            if ("mute_participant".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+                String targetUserId = requestBody.getTargetUserId();
+                String targetOrderId = requestBody.getTargetOrderId();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+                if (targetUserId == null || targetUserId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Target user ID is required"));
+                }
+                if (targetOrderId == null || targetOrderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Target order ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.muteParticipant(
+                        userId, planId, targetUserId, targetOrderId
+                );
+                return gson.toJson(result);
+            }
+
+            if ("kick_participant".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+                String targetUserId = requestBody.getTargetUserId();
+                String targetOrderId = requestBody.getTargetOrderId();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+                if (targetUserId == null || targetUserId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Target user ID is required"));
+                }
+                if (targetOrderId == null || targetOrderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Target order ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.kickParticipant(
+                        userId, planId, targetUserId, targetOrderId
+                );
+                return gson.toJson(result);
+            }
+
+            if ("toggle_session_gifts".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+                Boolean giftsEnabled = requestBody.getGiftsEnabled();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.toggleGifts(userId, planId, giftsEnabled);
+                return gson.toJson(result);
+            }
+
+            if ("get_session_participants".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                List<Map<String, Object>> participants = sessionService.getParticipants(userId, planId);
+                return gson.toJson(Map.of("success", true, "participants", participants));
+            }
+
+            if ("get_raised_hands".equals(requestBody.getFunction())) {
+                String planId = requestBody.getPlanId();
+
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                List<Map<String, Object>> hands = sessionService.getRaisedHands(userId, planId);
+                return gson.toJson(Map.of("success", true, "raisedHands", hands));
+            }
+
+            if ("get_live_sessions".equals(requestBody.getFunction())) {
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                List<Map<String, Object>> sessions = sessionService.getLiveSessions(requestBody.getLimit());
+                return gson.toJson(Map.of("success", true, "sessions", sessions));
+            }
+
+            if ("get_upcoming_sessions".equals(requestBody.getFunction())) {
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                List<Map<String, Object>> sessions = sessionService.getUpcomingSessions(
+                        requestBody.getCategory(),
+                        requestBody.getLimit()
+                );
+                return gson.toJson(Map.of("success", true, "sessions", sessions));
+            }
+
+            if ("send_gift".equals(requestBody.getFunction())) {
+                String orderId = requestBody.getOrderId();
+                String expertId = requestBody.getExpertId();
+                String planId = requestBody.getPlanId();
+                String giftId = requestBody.getGiftId();
+
+                if (orderId == null || orderId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Order ID is required"));
+                }
+                if (expertId == null || expertId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Expert ID is required"));
+                }
+                if (planId == null || planId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
+                }
+                if (giftId == null || giftId.isEmpty()) {
+                    return gson.toJson(Map.of("success", false, "error", "Gift ID is required"));
+                }
+
+                StreamService streamService = new StreamService(isTest());
+                SessionService sessionService = new SessionService(db, streamService, isTest());
+
+                Map<String, Object> result = sessionService.sendGift(
+                        userId,
+                        orderId,
+                        expertId,
+                        planId,
+                        giftId,
+                        requestBody.getPrice() // Can optionally override gift amount
+                );
+                return gson.toJson(result);
+            }
+
+            // ================== END SESSION APIs ==================
+
             if ("confirm_appointment".equals(requestBody.getFunction())) {
 
                 String userIdFromRequest = requestBody.getUserId();

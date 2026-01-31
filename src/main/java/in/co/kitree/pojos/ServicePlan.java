@@ -35,6 +35,24 @@ public class ServicePlan {
     private Double onDemandRatePerMinuteChat;
     private String onDemandCurrency; // Currency for on-demand rates (defaults to plan currency)
 
+    // SESSION type fields (webinar/course)
+    private Integer sessionCount;           // 1 = standalone webinar, N = course with N sessions
+    private Integer maxParticipants;        // Maximum allowed registrations
+    private String interactionMode;         // "cozy" | "classroom" | "broadcast"
+    private Boolean isLive;                 // True when session is currently live
+    private com.google.cloud.Timestamp actualStartTime;   // When expert actually started
+    private com.google.cloud.Timestamp actualEndTime;     // When session actually ended
+    private String streamCallId;            // GetStream call ID
+    private Integer currentParticipantCount; // Current number of joined participants
+    private com.google.cloud.Timestamp scheduledStartTime; // When session is scheduled to start
+    private Integer durationMinutes;        // Planned duration in minutes
+    private Boolean isFree;                 // True if price is 0
+
+    // Gift configuration
+    private Boolean giftsEnabled;           // Whether gifts are enabled for this session
+    private java.util.List<java.util.Map<String, Object>> giftOptions; // [{id, amount}, ...]
+    private Double totalGiftsReceived;      // Total gift amount received
+
     public ServicePlan() {}
 
     // --- New getters/setters ---
@@ -94,6 +112,38 @@ public class ServicePlan {
     public void setOnDemandRatePerMinuteChat(Double onDemandRatePerMinuteChat) { this.onDemandRatePerMinuteChat = onDemandRatePerMinuteChat; }
     public String getOnDemandCurrency() { return onDemandCurrency; }
     public void setOnDemandCurrency(String onDemandCurrency) { this.onDemandCurrency = onDemandCurrency; }
+
+    // SESSION type getters/setters
+    public Integer getSessionCount() { return sessionCount; }
+    public void setSessionCount(Integer sessionCount) { this.sessionCount = sessionCount; }
+    public Integer getMaxParticipants() { return maxParticipants; }
+    public void setMaxParticipants(Integer maxParticipants) { this.maxParticipants = maxParticipants; }
+    public String getInteractionMode() { return interactionMode; }
+    public void setInteractionMode(String interactionMode) { this.interactionMode = interactionMode; }
+    public Boolean getIsLive() { return isLive; }
+    public void setIsLive(Boolean isLive) { this.isLive = isLive; }
+    public com.google.cloud.Timestamp getActualStartTime() { return actualStartTime; }
+    public void setActualStartTime(com.google.cloud.Timestamp actualStartTime) { this.actualStartTime = actualStartTime; }
+    public com.google.cloud.Timestamp getActualEndTime() { return actualEndTime; }
+    public void setActualEndTime(com.google.cloud.Timestamp actualEndTime) { this.actualEndTime = actualEndTime; }
+    public String getStreamCallId() { return streamCallId; }
+    public void setStreamCallId(String streamCallId) { this.streamCallId = streamCallId; }
+    public Integer getCurrentParticipantCount() { return currentParticipantCount; }
+    public void setCurrentParticipantCount(Integer currentParticipantCount) { this.currentParticipantCount = currentParticipantCount; }
+    public com.google.cloud.Timestamp getScheduledStartTime() { return scheduledStartTime; }
+    public void setScheduledStartTime(com.google.cloud.Timestamp scheduledStartTime) { this.scheduledStartTime = scheduledStartTime; }
+    public Integer getDurationMinutes() { return durationMinutes; }
+    public void setDurationMinutes(Integer durationMinutes) { this.durationMinutes = durationMinutes; }
+    public Boolean getIsFree() { return isFree; }
+    public void setIsFree(Boolean isFree) { this.isFree = isFree; }
+
+    // Gift configuration getters/setters
+    public Boolean getGiftsEnabled() { return giftsEnabled; }
+    public void setGiftsEnabled(Boolean giftsEnabled) { this.giftsEnabled = giftsEnabled; }
+    public java.util.List<java.util.Map<String, Object>> getGiftOptions() { return giftOptions; }
+    public void setGiftOptions(java.util.List<java.util.Map<String, Object>> giftOptions) { this.giftOptions = giftOptions; }
+    public Double getTotalGiftsReceived() { return totalGiftsReceived; }
+    public void setTotalGiftsReceived(Double totalGiftsReceived) { this.totalGiftsReceived = totalGiftsReceived; }
 
     @Override
     public String toString() {

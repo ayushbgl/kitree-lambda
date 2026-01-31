@@ -119,6 +119,24 @@ public class RequestBody {
     private String statusFilter; // Filter orders by status
     private List<PlatformProduct> productsToSeed; // Products to seed into platform catalog
 
+    // Session/Webinar/Course fields
+    private String title;                    // Session title
+    private String description;              // Session description
+    private Long scheduledStartTime;         // Scheduled start time in milliseconds
+    private Integer durationMinutes;         // Planned duration in minutes
+    private Double price;                    // Session price (0 for free)
+    private Integer maxParticipants;         // Maximum registrations allowed
+    private Integer sessionCount;            // 1 for standalone, N for course
+    private String interactionMode;          // "cozy" | "classroom" | "broadcast"
+    private Boolean giftsEnabled;            // Whether gifts are enabled
+    private List<Map<String, Object>> giftOptions; // [{id, amount}, ...]
+    private String targetUserId;             // For promote/demote/kick operations
+    private String targetOrderId;            // For promote/demote/kick operations
+    private String giftId;                   // Gift ID for send_gift
+    private Integer sessionNumber;           // For course sessions (1, 2, 3...)
+    private String userPhotoUrl;             // User's photo URL for participant display
+    private Integer limit;                   // Pagination limit for queries
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -777,5 +795,134 @@ public class RequestBody {
 
     public void setProductsToSeed(List<PlatformProduct> productsToSeed) {
         this.productsToSeed = productsToSeed;
+    }
+
+    // Session/Webinar/Course getters and setters
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public Long getScheduledStartTime() {
+        return scheduledStartTime;
+    }
+
+    public void setScheduledStartTime(Long scheduledStartTime) {
+        this.scheduledStartTime = scheduledStartTime;
+    }
+
+    public Integer getDurationMinutes() {
+        return durationMinutes;
+    }
+
+    public void setDurationMinutes(Integer durationMinutes) {
+        this.durationMinutes = durationMinutes;
+    }
+
+    public Double getPrice() {
+        return price;
+    }
+
+    public void setPrice(Double price) {
+        this.price = price;
+    }
+
+    public Integer getMaxParticipants() {
+        return maxParticipants;
+    }
+
+    public void setMaxParticipants(Integer maxParticipants) {
+        this.maxParticipants = maxParticipants;
+    }
+
+    public Integer getSessionCount() {
+        return sessionCount;
+    }
+
+    public void setSessionCount(Integer sessionCount) {
+        this.sessionCount = sessionCount;
+    }
+
+    public String getInteractionMode() {
+        return interactionMode;
+    }
+
+    public void setInteractionMode(String interactionMode) {
+        this.interactionMode = interactionMode;
+    }
+
+    public Boolean getGiftsEnabled() {
+        return giftsEnabled;
+    }
+
+    public void setGiftsEnabled(Boolean giftsEnabled) {
+        this.giftsEnabled = giftsEnabled;
+    }
+
+    public List<Map<String, Object>> getGiftOptions() {
+        return giftOptions;
+    }
+
+    public void setGiftOptions(List<Map<String, Object>> giftOptions) {
+        this.giftOptions = giftOptions;
+    }
+
+    public String getTargetUserId() {
+        return targetUserId;
+    }
+
+    public void setTargetUserId(String targetUserId) {
+        this.targetUserId = targetUserId;
+    }
+
+    public String getTargetOrderId() {
+        return targetOrderId;
+    }
+
+    public void setTargetOrderId(String targetOrderId) {
+        this.targetOrderId = targetOrderId;
+    }
+
+    public String getGiftId() {
+        return giftId;
+    }
+
+    public void setGiftId(String giftId) {
+        this.giftId = giftId;
+    }
+
+    public Integer getSessionNumber() {
+        return sessionNumber;
+    }
+
+    public void setSessionNumber(Integer sessionNumber) {
+        this.sessionNumber = sessionNumber;
+    }
+
+    public String getUserPhotoUrl() {
+        return userPhotoUrl;
+    }
+
+    public void setUserPhotoUrl(String userPhotoUrl) {
+        this.userPhotoUrl = userPhotoUrl;
+    }
+
+    public Integer getLimit() {
+        return limit;
+    }
+
+    public void setLimit(Integer limit) {
+        this.limit = limit;
     }
 }

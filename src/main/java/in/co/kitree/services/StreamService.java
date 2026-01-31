@@ -398,7 +398,267 @@ public class StreamService {
             return "";
         }
     }
-    
+
+    /**
+     * Create a user token with specific role for session/webinar access.
+     * The role determines what permissions the user has in the call.
+     *
+     * COST OPTIMIZATION: Users with viewer role will have no send-audio/send-video
+     * permissions, making them "livestream viewers" which are billed at lower rates.
+     *
+     * @param userId The user's unique ID
+     * @param role The user's role (host, speaker, viewer)
+     * @param callId The session/call ID
+     * @param callType The call type (default, audio_room, livestream)
+     * @return JWT token for Stream SDK
+     */
+    public String createUserToken(String userId, String role, String callId, String callType) {
+        try {
+            String header = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                "{\"alg\":\"HS256\",\"typ\":\"JWT\"}".getBytes(StandardCharsets.UTF_8));
+
+            long now = System.currentTimeMillis() / 1000;
+            long exp = now + 86400; // 24 hour expiry for session tokens
+
+            // Build payload with role and call restrictions
+            StringBuilder payloadBuilder = new StringBuilder();
+            payloadBuilder.append("{");
+            payloadBuilder.append("\"user_id\":\"").append(userId).append("\",");
+            payloadBuilder.append("\"role\":\"").append(role).append("\",");
+            payloadBuilder.append("\"call_cids\":[\"").append(callType).append(":").append(callId).append("\"],");
+            payloadBuilder.append("\"iat\":").append(now).append(",");
+            payloadBuilder.append("\"exp\":").append(exp);
+            payloadBuilder.append("}");
+
+            String payload = payloadBuilder.toString();
+            String encodedPayload = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                payload.getBytes(StandardCharsets.UTF_8));
+
+            // Sign
+            String signatureInput = header + "." + encodedPayload;
+            Mac sha256Hmac = Mac.getInstance("HmacSHA256");
+            SecretKeySpec secretKeySpec = new SecretKeySpec(
+                apiSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+            sha256Hmac.init(secretKeySpec);
+            byte[] signatureBytes = sha256Hmac.doFinal(signatureInput.getBytes(StandardCharsets.UTF_8));
+            String signature = Base64.getUrlEncoder().withoutPadding().encodeToString(signatureBytes);
+
+            System.out.println("[StreamService] Created user token for " + userId + " with role: " + role);
+            return header + "." + encodedPayload + "." + signature;
+
+        } catch (Exception e) {
+            System.err.println("[StreamService] Error creating user token: " + e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * Create a Stream call for sessions/webinars.
+     * Uses appropriate call type based on interaction mode for cost optimization.
+     *
+     * @param callType The call type (default, audio_room, livestream)
+     * @param callId The unique call ID
+     * @param hostUserId The host user ID
+     * @return true if call created successfully
+     */
+    public boolean createCall(String callType, String callId, String hostUserId) {
+        if (!isConfigured()) {
+            System.err.println("[StreamService] Cannot create call: service not configured");
+            return false;
+        }
+
+        try {
+            String url = String.format("%s/call/%s/%s?api_key=%s",
+                STREAM_API_BASE_URL, callType, callId, apiKey);
+
+            String authToken = createServerAuthToken();
+
+            // Request body with call settings optimized for sessions
+            String body = String.format(
+                "{" +
+                "\"data\": {" +
+                "  \"created_by_id\": \"%s\"," +
+                "  \"settings_override\": {" +
+                "    \"audio\": {\"mic_default_on\": false}," +
+                "    \"video\": {\"camera_default_on\": false}," +
+                "    \"recording\": {\"mode\": \"available\"}" +
+                "  }," +
+                "  \"members\": [{\"user_id\": \"%s\", \"role\": \"host\"}]" +
+                "}" +
+                "}", hostUserId, hostUserId);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Authorization", authToken)
+                .header("stream-auth-type", "jwt")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .timeout(Duration.ofSeconds(15))
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            int statusCode = response.statusCode();
+            System.out.println("[StreamService] Create call response: " + statusCode + " for " + callType + ":" + callId);
+
+            // 201 = created, 200 = already exists (get_or_create behavior)
+            return statusCode == 201 || statusCode == 200;
+
+        } catch (Exception e) {
+            System.err.println("[StreamService] Error creating call: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    /**
+     * Update a member's role in a call.
+     * Used to promote/demote participants between viewer and speaker.
+     *
+     * @param callType The call type
+     * @param callId The call ID
+     * @param userId The user to update
+     * @param newRole The new role (viewer, speaker, host)
+     * @return true if update successful
+     */
+    public boolean updateMemberRole(String callType, String callId, String userId, String newRole) {
+        if (!isConfigured()) {
+            System.err.println("[StreamService] Cannot update member role: service not configured");
+            return false;
+        }
+
+        try {
+            String url = String.format("%s/call/%s/%s/members?api_key=%s",
+                STREAM_API_BASE_URL, callType, callId, apiKey);
+
+            String authToken = createServerAuthToken();
+
+            String body = String.format(
+                "{\"update_members\": [{\"user_id\": \"%s\", \"role\": \"%s\"}]}",
+                userId, newRole);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Authorization", authToken)
+                .header("stream-auth-type", "jwt")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .timeout(Duration.ofSeconds(10))
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            int statusCode = response.statusCode();
+            System.out.println("[StreamService] Update member role response: " + statusCode + " for " + userId + " -> " + newRole);
+
+            return statusCode == 200 || statusCode == 201;
+
+        } catch (Exception e) {
+            System.err.println("[StreamService] Error updating member role: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    /**
+     * Grant specific permissions to a user in a call.
+     *
+     * @param callType The call type
+     * @param callId The call ID
+     * @param userId The user to grant permissions to
+     * @param permissions List of permissions (e.g., "send-audio", "send-video")
+     * @return true if permissions granted
+     */
+    public boolean grantPermissions(String callType, String callId, String userId, List<String> permissions) {
+        if (!isConfigured()) {
+            return false;
+        }
+
+        try {
+            String url = String.format("%s/call/%s/%s/user_permissions?api_key=%s",
+                STREAM_API_BASE_URL, callType, callId, apiKey);
+
+            String authToken = createServerAuthToken();
+
+            // Build permissions array
+            StringBuilder permBuilder = new StringBuilder("[");
+            for (int i = 0; i < permissions.size(); i++) {
+                if (i > 0) permBuilder.append(",");
+                permBuilder.append("\"").append(permissions.get(i)).append("\"");
+            }
+            permBuilder.append("]");
+
+            String body = String.format(
+                "{\"user_id\": \"%s\", \"grant_permissions\": %s}",
+                userId, permBuilder.toString());
+
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Authorization", authToken)
+                .header("stream-auth-type", "jwt")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .timeout(Duration.ofSeconds(10))
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() == 200;
+
+        } catch (Exception e) {
+            System.err.println("[StreamService] Error granting permissions: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Revoke specific permissions from a user in a call.
+     *
+     * @param callType The call type
+     * @param callId The call ID
+     * @param userId The user to revoke permissions from
+     * @param permissions List of permissions to revoke
+     * @return true if permissions revoked
+     */
+    public boolean revokePermissions(String callType, String callId, String userId, List<String> permissions) {
+        if (!isConfigured()) {
+            return false;
+        }
+
+        try {
+            String url = String.format("%s/call/%s/%s/user_permissions?api_key=%s",
+                STREAM_API_BASE_URL, callType, callId, apiKey);
+
+            String authToken = createServerAuthToken();
+
+            StringBuilder permBuilder = new StringBuilder("[");
+            for (int i = 0; i < permissions.size(); i++) {
+                if (i > 0) permBuilder.append(",");
+                permBuilder.append("\"").append(permissions.get(i)).append("\"");
+            }
+            permBuilder.append("]");
+
+            String body = String.format(
+                "{\"user_id\": \"%s\", \"revoke_permissions\": %s}",
+                userId, permBuilder.toString());
+
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Authorization", authToken)
+                .header("stream-auth-type", "jwt")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .timeout(Duration.ofSeconds(10))
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() == 200;
+
+        } catch (Exception e) {
+            System.err.println("[StreamService] Error revoking permissions: " + e.getMessage());
+            return false;
+        }
+    }
+
     /**
      * Fetch call details from Stream Video API.
      * GET /api/v2/video/call/{type}/{id}?api_key={apiKey}
