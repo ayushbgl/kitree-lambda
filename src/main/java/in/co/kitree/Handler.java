@@ -1490,6 +1490,13 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
 
             // =====================================================================
+            // REVIEW ENDPOINTS
+            // =====================================================================
+            if ("submit_review".equals(requestBody.getFunction())) {
+                return submitReview(requestBody, userId);
+            }
+
+            // =====================================================================
             // ON-DEMAND CONSULTATION ENDPOINTS
             // =====================================================================
             // Delegated to ConsultationHandler
@@ -1550,6 +1557,141 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             LoggingService.warn("token_verification_failed", Map.of("error", e.getMessage()));
             // Return null - caller will handle the error
             return null;
+        }
+    }
+
+    /**
+     * Submits or updates a review for a consultation booking.
+     * Uses a transaction to atomically update both the booking review and expert rating aggregates.
+     *
+     * @param requestBody Contains bookingId, rating, comment, and optionally previousRating (for edits)
+     * @param userId The authenticated user ID (must be the booking owner)
+     * @return JSON response with success status
+     */
+    private String submitReview(RequestBody requestBody, String userId) {
+        try {
+            String bookingId = requestBody.getBookingId();
+            Integer rating = requestBody.getRating();
+            String comment = requestBody.getComment();
+            Integer previousRating = requestBody.getPreviousRating();
+
+            // Validate required fields
+            if (bookingId == null || bookingId.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Booking ID is required"));
+            }
+            if (rating == null || rating < 1 || rating > 5) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Rating must be between 1 and 5"));
+            }
+            if (comment != null && comment.length() > 500) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Comment must be under 500 characters"));
+            }
+
+            // Get the booking document
+            DocumentReference bookingRef = db.collection("users").document(userId).collection("orders").document(bookingId);
+            DocumentSnapshot bookingDoc = bookingRef.get().get();
+
+            if (!bookingDoc.exists()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Booking not found"));
+            }
+
+            // Verify the booking belongs to the user
+            String bookingUserId = bookingDoc.getString("user_id");
+            if (bookingUserId == null || !bookingUserId.equals(userId)) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: You can only review your own bookings"));
+            }
+
+            // Verify booking type is CONSULTATION
+            String bookingType = bookingDoc.getString("type");
+            if (!"CONSULTATION".equals(bookingType)) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Only consultations can be reviewed"));
+            }
+
+            // Verify session is completed
+            Object sessionCompletedAt = bookingDoc.get("session_completed_at");
+            if (sessionCompletedAt == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Session must be completed before reviewing"));
+            }
+
+            // Verify session duration >= 10 minutes (600 seconds)
+            Long durationSeconds = bookingDoc.getLong("duration_seconds");
+            if (durationSeconds == null || durationSeconds < 600) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Sessions under 10 minutes cannot be reviewed"));
+            }
+
+            // Get expert ID for aggregate update
+            String expertId = bookingDoc.getString("expert_id");
+            if (expertId == null || expertId.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID not found on booking"));
+            }
+
+            // Check if this is an edit (has previous review)
+            boolean isEdit = previousRating != null;
+            Map<String, Object> existingReview = (Map<String, Object>) bookingDoc.get("review");
+            if (existingReview != null && previousRating == null) {
+                // Frontend didn't send previousRating but there's an existing review
+                // Use the existing rating for aggregate adjustment
+                Number existingRating = (Number) existingReview.get("rating");
+                if (existingRating != null) {
+                    previousRating = existingRating.intValue();
+                    isEdit = true;
+                }
+            }
+
+            // Prepare review data
+            Map<String, Object> reviewData = new HashMap<>();
+            reviewData.put("rating", rating);
+            reviewData.put("comment", comment != null ? comment.trim() : null);
+
+            if (isEdit) {
+                reviewData.put("updated_at", FieldValue.serverTimestamp());
+                // Preserve original created_at if exists
+                if (existingReview != null && existingReview.get("created_at") != null) {
+                    reviewData.put("created_at", existingReview.get("created_at"));
+                } else {
+                    reviewData.put("created_at", FieldValue.serverTimestamp());
+                }
+            } else {
+                reviewData.put("created_at", FieldValue.serverTimestamp());
+            }
+
+            // Expert store document reference for aggregate updates
+            DocumentReference expertStoreRef = db.collection("users").document(expertId).collection("public").document("store");
+
+            // Execute in a transaction to ensure atomicity
+            final Integer finalPreviousRating = previousRating;
+            final boolean finalIsEdit = isEdit;
+
+            db.runTransaction(transaction -> {
+                // Update the booking with the review
+                transaction.update(bookingRef, "review", reviewData);
+                transaction.update(bookingRef, "updated_at", FieldValue.serverTimestamp());
+
+                // Update expert rating aggregates
+                if (finalIsEdit && finalPreviousRating != null) {
+                    // For edits: adjust sum by delta, count stays same
+                    int ratingDelta = rating - finalPreviousRating;
+                    transaction.update(expertStoreRef, "ratingSum", FieldValue.increment(ratingDelta));
+                } else {
+                    // For new reviews: increment both sum and count
+                    transaction.update(expertStoreRef, "ratingSum", FieldValue.increment(rating));
+                    transaction.update(expertStoreRef, "ratingCount", FieldValue.increment(1));
+                }
+
+                return null;
+            }).get();
+
+            LoggingService.info("review_submitted", Map.of(
+                "userId", userId,
+                "bookingId", bookingId,
+                "rating", rating,
+                "isEdit", finalIsEdit
+            ));
+
+            return gson.toJson(Map.of("success", true));
+
+        } catch (Exception e) {
+            LoggingService.error("submit_review_failed", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", "Failed to submit review: " + e.getMessage()));
         }
     }
 

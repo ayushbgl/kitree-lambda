@@ -137,6 +137,12 @@ public class RequestBody {
     private String userPhotoUrl;             // User's photo URL for participant display
     private Integer limit;                   // Pagination limit for queries
 
+    // Review fields (for submit_review function)
+    private String bookingId;                // Booking ID to attach review to
+    private Integer rating;                  // Rating value (1-5)
+    private String comment;                  // Optional review comment (max 500 chars)
+    private Integer previousRating;          // Previous rating for edit (for aggregate adjustment)
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -924,5 +930,38 @@ public class RequestBody {
 
     public void setLimit(Integer limit) {
         this.limit = limit;
+    }
+
+    // Review getters/setters
+    public String getBookingId() {
+        return bookingId;
+    }
+
+    public void setBookingId(String bookingId) {
+        this.bookingId = bookingId;
+    }
+
+    public Integer getRating() {
+        return rating;
+    }
+
+    public void setRating(Integer rating) {
+        this.rating = rating;
+    }
+
+    public String getComment() {
+        return comment;
+    }
+
+    public void setComment(String comment) {
+        this.comment = comment;
+    }
+
+    public Integer getPreviousRating() {
+        return previousRating;
+    }
+
+    public void setPreviousRating(Integer previousRating) {
+        this.previousRating = previousRating;
     }
 }
