@@ -64,11 +64,11 @@ public class GeminiService {
 
         String apiKey = loadApiKey(isTest);
         if (apiKey == null || apiKey.isEmpty()) {
-            System.err.println("[GeminiService] No API key configured for " + (isTest ? "TEST" : "PROD"));
+            LoggingService.error("gemini_no_api_key", Map.of("environment", isTest ? "TEST" : "PROD"));
             this.client = null;
         } else {
             this.client = Client.builder().apiKey(apiKey).build();
-            System.out.println("[GeminiService] Initialized for " + (isTest ? "TEST" : "PROD") + " environment");
+            LoggingService.info("gemini_initialized", Map.of("environment", isTest ? "TEST" : "PROD"));
         }
     }
 
@@ -88,7 +88,7 @@ public class GeminiService {
 
             return key;
         } catch (IOException e) {
-            System.err.println("[GeminiService] Error reading secrets.json: " + e.getMessage());
+            LoggingService.error("gemini_secrets_read_failed", e);
             return null;
         }
     }
@@ -124,8 +124,7 @@ public class GeminiService {
             byte[] audioBytes = Files.readAllBytes(audioFilePath);
             String mimeType = determineMimeType(audioFilePath.toString());
 
-            System.out.println("[GeminiService] Processing audio file: " + audioFilePath +
-                " (" + audioBytes.length / 1024 + " KB, " + mimeType + ")");
+            LoggingService.debug("gemini_processing_audio", Map.of("filePath", audioFilePath.toString(), "sizeKB", audioBytes.length / 1024, "mimeType", mimeType));
 
             // Build the prompt
             String prompt = buildSummaryPrompt(category, expertName, durationSeconds);
@@ -155,7 +154,7 @@ public class GeminiService {
                 return GeminiSummaryResult.error("Empty response from Gemini", true);
             }
 
-            System.out.println("[GeminiService] Received response (" + responseText.length() + " chars)");
+            LoggingService.debug("gemini_response_received", Map.of("responseLength", responseText.length()));
 
             // Parse JSON response
             Map<String, Object> summary = parseJsonResponse(responseText);
@@ -171,8 +170,7 @@ public class GeminiService {
             return GeminiSummaryResult.success(summary);
 
         } catch (Exception e) {
-            System.err.println("[GeminiService] Error generating summary: " + e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("gemini_generate_summary_failed", e);
 
             // Determine if error is retryable
             boolean shouldRetry = isRetryableError(e);
@@ -227,8 +225,7 @@ public class GeminiService {
             return GeminiSummaryResult.success(summary);
 
         } catch (Exception e) {
-            System.err.println("[GeminiService] Error generating summary from URI: " + e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("gemini_generate_summary_from_uri_failed", e);
             return GeminiSummaryResult.error(e.getMessage(), isRetryableError(e));
         }
     }
@@ -585,8 +582,7 @@ public class GeminiService {
 
             return objectMapper.readValue(cleanJson, new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
-            System.err.println("[GeminiService] Failed to parse JSON: " + e.getMessage());
-            System.err.println("[GeminiService] Raw response: " + jsonText);
+            LoggingService.warn("gemini_json_parse_failed", Map.of("error", e.getMessage()));
             return null;
         }
     }

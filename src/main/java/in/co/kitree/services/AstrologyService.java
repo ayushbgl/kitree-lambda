@@ -42,7 +42,7 @@ public class AstrologyService {
             JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
             this.astrologyApiKey = rootNode.path("ASTROLOGY_API_KEY").asText();
         } catch (IOException e) {
-            System.err.println("Error reading ASTROLOGY_API_KEY from secrets.json: " + e.getMessage());
+            LoggingService.error("astrology_api_key_read_failed", e);
             this.astrologyApiKey = null;
         }
     }
@@ -134,13 +134,13 @@ public class AstrologyService {
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
-            System.out.println("Horoscope API response: " + response);
+            LoggingService.debug("horoscope_api_response", Map.of("statusCode", httpResponse.statusCode()));
             return response;
         } else {
             throw new RuntimeException("API request failed with status code: " + httpResponse.statusCode());
         }
     }
-    
+
     /**
      * Get astrological details from AWS Lambda (Python Server API deployed on Lambda)
      */
@@ -165,7 +165,7 @@ public class AstrologyService {
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
-            System.out.println("AWS Lambda Horoscope API response: " + response);
+            LoggingService.debug("aws_lambda_horoscope_api_response", Map.of("statusCode", httpResponse.statusCode()));
             // Lambda returns response in body field if it's a Lambda Function URL response
             // Parse the response to extract the actual body if needed
             return parseLambdaResponse(response);
@@ -173,7 +173,7 @@ public class AstrologyService {
             throw new RuntimeException("AWS Lambda API request failed with status code: " + httpResponse.statusCode());
         }
     }
-    
+
     /**
      * Get astrological details from Free Astrology API
      */
@@ -220,8 +220,8 @@ public class AstrologyService {
         
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
-            System.out.println("Free Astrology API response: " + response);
-            
+            LoggingService.debug("free_astrology_api_response", Map.of("statusCode", httpResponse.statusCode()));
+
             // Parse and transform response to match expected format
             return transformThirdPartyResponseToExpectedFormat(response);
         } else {
@@ -305,8 +305,7 @@ public class AstrologyService {
             
             return gson.toJson(transformedResponse);
         } catch (Exception e) {
-            System.err.println("Error transforming third-party response: " + e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("astrology_transform_third_party_response_failed", e);
             throw new RuntimeException("Failed to transform third-party API response", e);
         }
     }
@@ -367,8 +366,8 @@ public class AstrologyService {
         
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
-            System.out.println("Free Astrology API dasha response: " + response);
-            
+            LoggingService.debug("free_astrology_dasha_response", Map.of("statusCode", httpResponse.statusCode()));
+
             // Transform response to match expected format
             return transformThirdPartyDashaResponseToExpectedFormat(response, requestBody);
         } else {
@@ -410,7 +409,7 @@ public class AstrologyService {
             
             return gson.toJson(transformedResponse);
         } catch (Exception e) {
-            System.err.println("Error transforming Free Astrology API dasha response: " + e.getMessage());
+            LoggingService.error("astrology_transform_dasha_response_failed", e);
             throw new RuntimeException("Failed to transform Free Astrology API dasha response", e);
         }
     }
@@ -440,7 +439,7 @@ public class AstrologyService {
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
-            System.out.println("Dasha API response: " + response);
+            LoggingService.debug("dasha_api_response", Map.of("statusCode", httpResponse.statusCode()));
             return response;
         } else {
             throw new RuntimeException("Dasha API request failed with status code: " + httpResponse.statusCode());
@@ -472,7 +471,7 @@ public class AstrologyService {
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
-            System.out.println("AWS Lambda Dasha API response: " + response);
+            LoggingService.debug("aws_lambda_dasha_api_response", Map.of("statusCode", httpResponse.statusCode()));
             return parseLambdaResponse(response);
         } else {
             throw new RuntimeException("AWS Lambda Dasha API request failed with status code: " + httpResponse.statusCode());
@@ -504,7 +503,7 @@ public class AstrologyService {
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
-            System.out.println("Divisional Charts API response: " + response);
+            LoggingService.debug("divisional_charts_api_response", Map.of("statusCode", httpResponse.statusCode()));
             return response;
         } else {
             throw new RuntimeException("Divisional Charts API request failed with status code: " + httpResponse.statusCode());
@@ -536,7 +535,7 @@ public class AstrologyService {
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
-            System.out.println("AWS Lambda Divisional Charts API response: " + response);
+            LoggingService.debug("aws_lambda_divisional_charts_api_response", Map.of("statusCode", httpResponse.statusCode()));
             return parseLambdaResponse(response);
         } else {
             throw new RuntimeException("AWS Lambda Divisional Charts API request failed with status code: " + httpResponse.statusCode());
@@ -573,7 +572,7 @@ public class AstrologyService {
                 );
                 charts.put("D" + chartNumber, chartData);
             } catch (Exception e) {
-                System.err.println("Failed to fetch D" + chartNumber + " chart: " + e.getMessage());
+                LoggingService.warn("astrology_fetch_chart_failed", Map.of("chartNumber", chartNumber, "error", e.getMessage()));
                 // Continue with other charts even if one fails
             }
         }
@@ -619,8 +618,8 @@ public class AstrologyService {
         
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String responseBody = httpResponse.body();
-            System.out.println("Free Astrology API D" + chartNumber + " response: " + responseBody);
-            
+            LoggingService.debug("free_astrology_divisional_chart_response", Map.of("chartNumber", chartNumber, "statusCode", httpResponse.statusCode()));
+
             // Transform response to match expected format
             return transformFreeAstrologyDivisionalChartResponse(responseBody);
         } else {
@@ -666,11 +665,11 @@ public class AstrologyService {
             
             return gson.toJson(transformedChart);
         } catch (Exception e) {
-            System.err.println("Error transforming Free Astrology API divisional chart response: " + e.getMessage());
+            LoggingService.error("astrology_transform_divisional_chart_response_failed", e);
             throw new RuntimeException("Failed to transform Free Astrology API divisional chart response", e);
         }
     }
-    
+
     /**
      * Map planet names from Free Astrology API to expected keys
      */

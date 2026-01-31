@@ -70,7 +70,7 @@ public class RtcTokenBuilder2 {
         try {
             return accessToken.build();
         } catch (Exception e) {
-            e.printStackTrace();
+            LoggingService.error("agora_rtc_token_build_failed", e);
             return "";
         }
     }
@@ -197,7 +197,7 @@ public class RtcTokenBuilder2 {
         try {
             return accessToken.build();
         } catch (Exception e) {
-            e.printStackTrace();
+            LoggingService.error("agora_rtc_token_build_with_privileges_failed", e);
             return "";
         }
     }
