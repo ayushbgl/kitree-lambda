@@ -703,15 +703,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     return gson.toJson(response);
                 }
 
-                // === GIFT PAYMENT ===
-                if ("gift".equals(verificationType)) {
-                    String expertId = requestBody.getExpertId();
-                    String webinarId = requestBody.getPlanId();
-                    String webinarOrderId = requestBody.getOrderId();
-                    addWebinarGiftDetails(userId, expertId, webinarId, webinarOrderId, gatewayOrderId);
-                    return "Verified";
-                }
-
                 // === ORDER PAYMENT (default) ===
                 String firestoreOrderId = requestBody.getOrderId();
                 if (firestoreOrderId == null || firestoreOrderId.isEmpty()) {
@@ -934,80 +925,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 createCallEvent.setTest(isTest());
 
                 pythonLambdaService.invokePythonLambda(createCallEvent);
-                return "Success";
-            }
-
-            if ("create_webinar".equals(requestBody.getFunction())) {
-                // Create webinar room and start webinar
-                // TODO: Currently anybody can join the webinar, we need to manage permissions at Stream's end.
-                String webinarId = requestBody.getPlanId();
-                if (webinarId == null) {
-                    return "Not valid";
-                }
-                ServicePlan servicePlan = getPlanDetails(webinarId, userId);
-                if (servicePlan == null) {
-                    return "Not authorized";
-                }
-
-                if (!Objects.equals(servicePlan.getType(), "WEBINAR")) {
-                    return "Not valid";
-                }
-
-                // TODO: Move sessionStartedAt in webinar plan to backend and check if it is already set, then early return.
-
-                PythonLambdaEventRequest createCallEvent = new PythonLambdaEventRequest();
-                createCallEvent.setFunction("create_call");
-
-                createCallEvent.setType("WEBINAR");
-                createCallEvent.setExpertId(userId);
-                createCallEvent.setWebinarId(webinarId);
-                createCallEvent.setExpertName(requestBody.getExpertName());
-                createCallEvent.setTest(isTest());
-
-                // TODO: Check response from python lambda
-                pythonLambdaService.invokePythonLambda(createCallEvent);
-
-                this.db.collection("users").document(userId).collection("plans").document(webinarId).collection("metadata").document("gifts").set(new HashMap<>(), SetOptions.merge()).get();
-
-                // TODO: Needs to be done in O(1). Another way is to do to have a snapshot listeners on webinar plans
-                //  in frontend for webinars that are supposed to happen on that particular day.
-                Timestamp currentTimestamp = new Timestamp(System.currentTimeMillis());
-                ApiFuture<QuerySnapshot> queryFuture = this.db.collectionGroup("orders").whereEqualTo("planId", webinarId).whereEqualTo("expertId", userId).whereEqualTo("type", "WEBINAR")
-//                        .orderBy("paymentReceivedAt") TODO: Race condition
-                        .get();
-
-                QuerySnapshot querySnapshot = queryFuture.get();
-                for (DocumentSnapshot document : querySnapshot.getDocuments()) {
-                    document.getReference().update("sessionStartedAt", currentTimestamp).get();
-                }
-                return "Success";
-            }
-
-            if ("stop_webinar".equals(requestBody.getFunction())) {
-                String webinarId = requestBody.getPlanId();
-                if (webinarId == null) {
-                    return "Not valid";
-                }
-                ServicePlan servicePlan = getPlanDetails(webinarId, userId);
-                if (servicePlan == null) {
-                    return "Not authorized";
-                }
-
-                if (!Objects.equals(servicePlan.getType(), "WEBINAR")) {
-                    return "Not valid";
-                }
-
-                // TODO: Move sessionCompletedAt in webinar plan to backend and check if it is already set, then early return.
-
-                // TODO: Needs to be done in O(1). Another way is to do to have a snapshot listeners on webinar plans
-                //  in frontend for webinars that are supposed to happen on that particular day.
-                Timestamp currentTimestamp = new Timestamp(System.currentTimeMillis());
-                ApiFuture<QuerySnapshot> queryFuture = this.db.collectionGroup("orders").whereEqualTo("planId", webinarId).whereEqualTo("expertId", userId).whereEqualTo("type", "WEBINAR").orderBy("paymentReceivedAt").get();
-
-                QuerySnapshot querySnapshot = queryFuture.get();
-                for (DocumentSnapshot document : querySnapshot.getDocuments()) {
-                    document.getReference().update("sessionCompletedAt", currentTimestamp).get();
-                }
                 return "Success";
             }
 
@@ -1729,37 +1646,6 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             System.err.println("Token verification failed: " + e.getMessage());
             // Return null - caller will handle the error
             return null;
-        }
-    }
-
-    private void addWebinarGiftDetails(String userId, String expertId, String webinarId, String orderId, String giftOrderId) {
-        try {
-            DocumentReference documentReference = this.db.collection("users").document(userId).collection("orders").document(orderId);
-            DocumentSnapshot document = documentReference.get().get();
-            if (document == null || !document.exists()) {
-                return;
-            }
-            Map<String, Object> orderDetails = document.getData();
-            if (orderDetails == null) {
-                return;
-            }
-            List<Map<String, Object>> giftDetails = (List<Map<String, Object>>) orderDetails.getOrDefault("gifts", new ArrayList<Map<String, Object>>());
-            System.out.println("giftDetails: " + giftDetails);
-            for (Map<String, Object> gift : giftDetails) {
-                System.out.println("gift: " + gift);
-                if (!gift.get("gift_order_id").equals(giftOrderId)) {
-                    continue;
-                }
-                System.out.println("gift3: " + gift);
-                System.out.println("gift2: " + gift);
-                gift.put("paymentReceivedAt", new Timestamp(System.currentTimeMillis()));
-                documentReference.update("gifts", giftDetails).get();
-
-                this.db.collection("users").document(expertId).collection("plans").document(webinarId).collection("metadata").document("gifts").update("totalAmount", FieldValue.increment((Long) gift.getOrDefault("amount", 0L))).get();
-                break;
-            }
-        } catch (Exception e) {
-            System.out.println("Error in updating gift details: " + userId + " " + orderId + " " + e.getMessage());
         }
     }
 
