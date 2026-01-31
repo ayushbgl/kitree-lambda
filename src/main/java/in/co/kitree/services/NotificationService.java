@@ -4,11 +4,13 @@ import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.FirebaseMessagingException;
 import com.google.firebase.messaging.Message;
 
+import java.util.Map;
+
 public class NotificationService {
 
     public static void sendNotification(String userToken) {
 
-        System.out.println("Starting sending notification");
+        LoggingService.info("notification_send_started");
         Message message = Message.builder()
                 .putData("data", "Hello")
                 .putData("type", "test")
@@ -19,9 +21,9 @@ public class NotificationService {
         try {
             response = FirebaseMessaging.getInstance().send(message);
         } catch (FirebaseMessagingException e) {
-            e.printStackTrace();
-            System.out.println("Some error in sending notification");
+            LoggingService.error("notification_send_failed", e);
+            return;
         }
-        System.out.println("Successfully sent message: " + response);
+        LoggingService.info("notification_sent_successfully", Map.of("response", response != null ? response : "null"));
     }
 }

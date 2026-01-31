@@ -22,9 +22,9 @@ public class Booking {
     }
 
     public Map<String, String> makeCall(String userId, String orderId) {
-        System.out.println("Request received: " + orderId);
+        LoggingService.info("booking_make_call_received", Map.of("orderId", orderId));
         if (!validateIfUserCanMakeCall(userId, orderId)) {
-            System.out.println("Validation failed: " + orderId);
+            LoggingService.warn("booking_validation_failed", Map.of("orderId", orderId));
             return null;
         }
         String expertToken = getExpertToken(expertId);
@@ -51,7 +51,7 @@ public class Booking {
 
     private void sendNotificationToExpert(String expertToken, String channelName) {
 
-        System.out.println("Starting sending notification");
+        LoggingService.info("booking_send_notification_started", Map.of("channelName", channelName));
         Message message = Message.builder().putData("appId", "fb2aa4822d2540e9851da8f9f7e32799")
                 .putData("channel", channelName)
                 .putData("type", "call")
@@ -71,10 +71,10 @@ public class Booking {
         try {
             response = FirebaseMessaging.getInstance().send(message);
         } catch (FirebaseMessagingException e) {
-            e.printStackTrace();
-            System.out.println("Some error in sending notification");
+            LoggingService.error("booking_notification_send_failed", e);
+            return;
         }
-        System.out.println("Successfully sent message: " + response);
+        LoggingService.info("booking_notification_sent", Map.of("response", response != null ? response : "null"));
     }
 
     private String generateCallChannel(String orderId) {
@@ -108,7 +108,7 @@ public class Booking {
                 return Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("paymentReceivedAt", null) != null && documentSnapshot.getData().getOrDefault("bookingCompletedAt", null) == null;
             }
         } catch (Exception e) {
-            System.out.println("Error in validating user: " + e.getMessage());
+            LoggingService.error("booking_user_validation_error", e, Map.of("userId", userId, "orderId", orderId));
             return false;
         }
         return false;

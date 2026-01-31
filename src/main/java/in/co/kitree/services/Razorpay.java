@@ -7,6 +7,7 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Map;
 
 public class Razorpay {
 
@@ -43,7 +44,7 @@ public class Razorpay {
                 this.RAZORPAY_WEBHOOK_SECRET = rootNode.path("RAZORPAY_WEBHOOK_SECRET").asText();
             }
         } catch (IOException e) {
-            System.err.println("Error reading the secrets file: " + e.getMessage());
+            LoggingService.error("razorpay_secrets_read_failed", e);
         }
 
         this.isTest = isTest;
@@ -75,7 +76,7 @@ public class Razorpay {
     }
 
     public String createSubscription(String planId, String encryptedCustomerId) throws RazorpayException {
-        System.out.println("planId: " + planId);
+        LoggingService.debug("razorpay_create_subscription", Map.of("planId", planId));
         JSONObject options = new JSONObject();
         JSONObject notes = new JSONObject();
         notes.put("receipt", encryptedCustomerId);
@@ -91,7 +92,7 @@ public class Razorpay {
     public boolean verifySubscription(String subscriptionId) {
         try {
             Subscription subscription = razorpayClient.subscriptions.fetch(subscriptionId);
-            System.out.println("verifying sub: " + subscription.toString());
+            LoggingService.debug("razorpay_verify_subscription", Map.of("subscriptionId", subscriptionId, "status", subscription.get("status")));
             return "active".equals(subscription.get("status"));
         } catch (RazorpayException e) {
             return false;
@@ -102,7 +103,7 @@ public class Razorpay {
         try {
             return com.razorpay.Utils.verifyWebhookSignature(body, signature, RAZORPAY_WEBHOOK_SECRET);
         } catch (RazorpayException e) {
-            e.printStackTrace();
+            LoggingService.error("razorpay_webhook_signature_verification_failed", e);
             return false;
         }
     }

@@ -83,7 +83,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             this.pythonLambdaService = createPythonLambdaService();
             this.astrologyService = new AstrologyService();
         } catch (Exception e) {
-            System.out.println("Error initializing Handler: " + e.getMessage());
+            LoggingService.error("handler_init_failed", e);
             if (isTest()) {
                 // In test environment, try to initialize Firebase again with test configuration
                 try {
@@ -96,26 +96,26 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     }
                     this.db = FirestoreClient.getFirestore();
                 } catch (Exception firebaseEx) {
-                    System.out.println("Failed to initialize Firebase in test environment: " + firebaseEx.getMessage());
+                    LoggingService.error("firebase_init_failed_test_env", firebaseEx);
                     throw new RuntimeException("Failed to initialize Firebase in test environment", firebaseEx);
                 }
 
                 try {
                     this.razorpay = new Razorpay(true);
                 } catch (RazorpayException ex) {
-                    System.out.println("Warning: Could not initialize Razorpay in test environment: " + ex.getMessage());
+                    LoggingService.warn("razorpay_init_skipped_test_env", Map.of("error", ex.getMessage()));
                 }
                 try {
                     // Set default region for testing
                     System.setProperty("aws.region", "ap-south-1");
                     this.pythonLambdaService = createPythonLambdaService();
                 } catch (Exception ex) {
-                    System.out.println("Warning: Could not initialize pythonLambdaService in test environment: " + ex.getMessage());
+                    LoggingService.warn("python_lambda_init_skipped_test_env", Map.of("error", ex.getMessage()));
                 }
                 try {
                     this.astrologyService = new AstrologyService();
                 } catch (Exception ex) {
-                    System.out.println("Warning: Could not initialize astrologyService in test environment: " + ex.getMessage());
+                    LoggingService.warn("astrology_service_init_skipped_test_env", Map.of("error", ex.getMessage()));
                 }
             } else {
                 throw new RuntimeException("Failed to initialize Handler", e);
@@ -177,9 +177,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return handleWebhookRequest(event, rawPath);
             }
             
-            System.out.println("event body: " + event.getBody());
+            LoggingService.debug("request_received", Map.of("body", event.getBody() != null ? event.getBody() : "null"));
             RequestBody requestBody = this.gson.fromJson(event.getBody(), RequestBody.class);
-            System.out.println("env is test: " + isTest());
+            LoggingService.debug("environment_check", Map.of("isTest", isTest()));
 
             if ("make_admin".equals(requestBody.getFunction())) {
                 if (!"C6DC17344FA8287F92C93B11CDF99".equals(requestBody.getAdminSecret())) {
@@ -343,12 +343,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                         } catch (Exception e) {
                             referrals = new HashMap<>();
                         }
-                        System.out.println("referrals: " + referrals);
+                        LoggingService.debug("referrals_lookup", Map.of("referrals", referrals != null ? referrals.toString() : "null"));
                         if (referrals == null || referrals.isEmpty()) {
                             DocumentSnapshot referralDetails = this.db.collection("users").document(requestBody.getExpertId()).collection("public").document("store").get().get();
                             int referredDiscount = Integer.parseInt(String.valueOf(Objects.requireNonNull(referralDetails.getData()).getOrDefault("referredDiscount", 0)));
                             int referrerDiscount = Integer.parseInt(String.valueOf(Objects.requireNonNull(referralDetails.getData()).getOrDefault("referrerDiscount", 0)));
-                            System.out.println("referredDiscount: " + referredDiscount);
+                            LoggingService.debug("referral_discount", Map.of("referredDiscount", referredDiscount, "referrerDiscount", referrerDiscount));
                             orderDetails.put("referred_by", referredBy);
                             orderDetails.put("referrer_discount", referrerDiscount);
                             orderDetails.put("referred_discount", referredDiscount);
@@ -582,7 +582,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                         } catch (Exception e) {
                             referrals = new HashMap<>();
                         }
-                        System.out.println("referrals: " + referrals);
+                        LoggingService.debug("referrals_check", Map.of("referrals", referrals != null ? referrals.toString() : "null"));
                         if (referrals == null || referrals.isEmpty()) {
                             ServicePlan servicePlan = getPlanDetails(requestBody.getPlanId(), requestBody.getExpertId());
                             DocumentSnapshot referralDetails = this.db.collection("users").document(requestBody.getExpertId()).collection("public").document("store").get().get();
@@ -612,8 +612,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 String path = this.isTest() ? "test/" : "";
                 Map uploadResult = cloudinary.uploader().upload(base64Image, ObjectUtils.asMap("public_id", path + "expertDisplayPictures/" + userId, "unique_filename", false, "overwrite", true));
                 String url = String.valueOf(uploadResult.get("secure_url"));
-                System.out.println(userId);
-                System.out.println(url);
+                LoggingService.info("expert_image_updated", Map.of("userId", userId, "url", url));
                 this.db.collection("users").document(userId).collection("public").document("store").set(Map.of("displayPicture", url), SetOptions.merge()).get();
             }
 
@@ -1352,7 +1351,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 String userTimeZone = requestBody.getUserTimeZone();
                 String userIdFromRequest = requestBody.getUserId();
                 FirebaseOrder order = fetchOrder(userIdFromRequest, requestBody.getOrderId());
-                System.out.println("order: " + order);
+                LoggingService.debug("order_fetched_for_availability", Map.of("orderId", requestBody.getOrderId() != null ? requestBody.getOrderId() : "null"));
                 // TODO: Check for date range, dont allow long date ranges for efficiency reasons.
                 if (order == null || order.getExpertId() == null || order.getExpertId().isEmpty() || rangeStart == null || rangeEnd == null || rangeStart.isEmpty() || rangeEnd.isEmpty()) { // TODO: Check if rangeEnd > rangeStart and the difference is maximum 1 month + 1 day (or 32 days).
                     return gson.toJson(Collections.emptyList());
@@ -1371,7 +1370,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 DocumentSnapshot document = future.get();
                 Map<String, Map<String, List<Map<String, String>>>> availability = (Map<String, Map<String, List<Map<String, String>>>>) document.get("availability");
                 String availabilityTimeZone = document.getString("availabilityTimeZone");
-                System.out.println("availabilityTimeZone: " + availabilityTimeZone);
+                LoggingService.debug("availability_timezone", Map.of("timezone", availabilityTimeZone != null ? availabilityTimeZone : "null"));
                 if (availabilityTimeZone == null) {
                     return gson.toJson(new HashMap<>());
                 }
@@ -1599,8 +1598,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
 
         } catch (Exception e) {
-            System.out.println(e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("request_handler_exception", e);
             return gson.toJson(Map.of("success", false));
         }
         return null;
@@ -1643,7 +1641,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             String userId = AuthenticationService.verifyTokenAndGetUserId(token);
             return userId;
         } catch (FirebaseAuthException e) {
-            System.err.println("Token verification failed: " + e.getMessage());
+            LoggingService.warn("token_verification_failed", Map.of("error", e.getMessage()));
             // Return null - caller will handle the error
             return null;
         }
@@ -1708,7 +1706,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
             return overrides;
         } catch (Exception e) {
-            System.out.println("Error in getting overrides: " + e.getMessage());
+            LoggingService.error("get_overrides_failed", e);
             return Collections.emptyList();
         }
     }
@@ -1886,7 +1884,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         }
 
         coupon.setCode(couponCode);
-        System.out.println(data);
+        LoggingService.debug("coupon_data_loaded", Map.of("couponCode", couponCode));
 
         Object discount = data.getOrDefault("discount", 0.0);
         if (discount instanceof Double) {
@@ -1917,7 +1915,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         coupon.setOnlyForNewUsers((Boolean) data.getOrDefault("onlyForNewUsers", false));
         coupon.setEnabled((Boolean) data.getOrDefault("isEnabled", true));
         coupon.setUserIdsAllowed((List<String>) data.getOrDefault("userIdsAllowed", Collections.emptyList()));
-        System.out.println("Type: " + data.get("type").toString());
+        LoggingService.debug("coupon_type", Map.of("type", data.get("type") != null ? data.get("type").toString() : "null"));
         String type = couponSnapshot.getString("type");
         if (type != null) {
             Coupon.CouponType enumValue;
@@ -1936,7 +1934,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         } else {
             throw new RuntimeException("Invalid coupon type: null");
         }
-        System.out.println("Coupon: " + coupon);
+        LoggingService.debug("coupon_parsed", Map.of("couponCode", couponCode, "discount", coupon.getDiscount()));
         ServicePlan servicePlan = getPlanDetails(planName, expertId);
 
         FirebaseUser user = new FirebaseUser();
@@ -1946,9 +1944,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         userCouponFrequency.put(couponCode, count);
         user.setCouponUsageFrequency(userCouponFrequency);
         user.setUid(userId);
-        System.out.println("Coupon usage frequency: " + user.getCouponUsageFrequency());
-        System.out.println("User: " + user);
-        System.out.println("Coupon: " + coupon);
+        LoggingService.debug("coupon_validation", Map.of("userId", userId, "couponCode", couponCode, "usageCount", count));
         couponResult = CouponService.applyCoupon(coupon, servicePlan, user, language);
         return couponResult;
     }
@@ -1969,7 +1965,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                     .collection("orders").document(orderId).get().get();
 
             if (!orderDoc.exists()) {
-                System.out.println("Order not found for wallet deduction: " + orderId);
+                LoggingService.warn("wallet_deduction_order_not_found", Map.of("orderId", orderId));
                 return;
             }
 
@@ -1982,7 +1978,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
             // Check idempotency - if wallet_transaction_id exists, already processed
             if (orderDoc.getString("wallet_transaction_id") != null) {
-                System.out.println("Wallet deduction already processed for order: " + orderId);
+                LoggingService.info("wallet_deduction_already_processed", Map.of("orderId", orderId));
                 return;
             }
 
@@ -1991,7 +1987,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             String category = orderDoc.getString("category");
 
             if (expertId == null || currency == null) {
-                System.out.println("Missing expertId or currency in order: " + orderId);
+                LoggingService.warn("wallet_deduction_missing_fields", Map.of("orderId", orderId, "hasExpertId", expertId != null, "hasCurrency", currency != null));
                 return;
             }
 
@@ -2073,12 +2069,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return null;
             }).get();
 
-            System.out.println("Wallet deduction processed for order: " + orderId + ", amount: " + finalWalletDeduction);
+            LoggingService.info("wallet_deduction_processed", Map.of("orderId", orderId, "amount", finalWalletDeduction));
 
         } catch (Exception e) {
             // Log error but don't fail the payment verification
-            System.err.println("Error processing wallet deduction for order " + orderId + ": " + e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("wallet_deduction_failed", e, Map.of("orderId", orderId));
         }
     }
 
@@ -2137,7 +2132,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         if (documentSnapshot.exists()) {
             servicePlan = new ServicePlan();
             servicePlan.setPlanId(planId);
-            System.out.println("Document data: " + documentSnapshot.getData());
+            LoggingService.debug("plan_details_loaded", Map.of("planId", planId, "expertId", expertId));
             servicePlan.setAmount(((Long) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("amount", 0L)).doubleValue());
             servicePlan.setCurrency((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("currency", ""));
             servicePlan.setSubscription((Boolean) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("isSubscription", false));
@@ -2229,7 +2224,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
         }
 
-        System.out.println("service plan: " + servicePlan);
+        LoggingService.debug("service_plan_loaded", Map.of("planId", planId != null ? planId : "null"));
         return servicePlan;
     }
 
@@ -2242,7 +2237,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     private FirebaseOrder fetchOrder(String clientId, String orderId) {
-        System.out.println("fetchOrder: " + clientId + " " + orderId);
+        LoggingService.debug("fetch_order", Map.of("clientId", clientId != null ? clientId : "null", "orderId", orderId != null ? orderId : "null"));
         FirebaseOrder firebaseOrder = new FirebaseOrder();
         firebaseOrder.setOrderId(orderId);
         firebaseOrder.setUserId(clientId);
@@ -2257,7 +2252,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 firebaseOrder.setPlanId((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("planId", ""));
             }
         } catch (Exception e) {
-            System.out.println("Error in fetching order: " + e.getMessage());
+            LoggingService.error("fetch_order_failed", e, Map.of("clientId", clientId != null ? clientId : "null", "orderId", orderId != null ? orderId : "null"));
             return null;
         }
         return firebaseOrder;
@@ -2275,7 +2270,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 expertStoreDetails.setImageUrl((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("displayPicture", ""));
             }
         } catch (Exception e) { // TODO
-            System.out.println("Error in fetching expert store details: " + e.getMessage()); // TODO: Sentry
+            LoggingService.error("fetch_expert_store_details_failed", e, Map.of("expertId", expertId != null ? expertId : "null"));
             expertStoreDetails.setStoreName("");
             expertStoreDetails.setAbout("");
             expertStoreDetails.setImageUrl("");
@@ -2303,7 +2298,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
-            System.out.println("Gochar API response: " + response);
+            LoggingService.debug("gochar_api_response", Map.of("statusCode", httpResponse.statusCode()));
             // Parse Lambda response format to extract body field if wrapped
             return parseLambdaResponse(response);
         } else {

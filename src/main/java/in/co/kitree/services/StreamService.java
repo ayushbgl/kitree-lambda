@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Service for interacting with Stream Video API and verifying webhooks.
@@ -175,11 +176,10 @@ public class StreamService {
                 secret = rootNode.path("STREAM_API_SECRET").asText("");
             }
             
-            System.out.println("[StreamService] Initialized for " + (isTest ? "TEST" : "PROD") + 
-                " environment, API key loaded: " + !key.isEmpty());
-            
+            LoggingService.info("stream_service_initialized", Map.of("environment", isTest ? "TEST" : "PROD", "apiKeyLoaded", !key.isEmpty()));
+
         } catch (IOException e) {
-            System.err.println("[StreamService] Error reading secrets.json: " + e.getMessage());
+            LoggingService.error("stream_service_secrets_read_failed", e);
         }
         
         this.apiKey = key;
@@ -197,12 +197,12 @@ public class StreamService {
      */
     public boolean verifyWebhookSignature(String body, String signature) {
         if (signature == null || signature.isEmpty()) {
-            System.out.println("[StreamService] No signature provided for verification");
+            LoggingService.warn("stream_webhook_no_signature");
             return false;
         }
-        
+
         if (apiSecret == null || apiSecret.isEmpty()) {
-            System.out.println("[StreamService] No API secret configured, skipping signature verification");
+            LoggingService.warn("stream_webhook_no_api_secret");
             return false;
         }
         
@@ -225,15 +225,14 @@ public class StreamService {
                 isValid = computedSignatureBase64.equals(signature);
             }
             
-            System.out.println("[StreamService] Signature verification: " + (isValid ? "VALID" : "INVALID"));
+            LoggingService.debug("stream_webhook_signature_verification", Map.of("result", isValid ? "VALID" : "INVALID"));
             if (!isValid) {
-                System.out.println("[StreamService] Computed (hex): " + computedSignatureHex);
-                System.out.println("[StreamService] Received: " + signature);
+                LoggingService.debug("stream_webhook_signature_mismatch", Map.of("computed", computedSignatureHex, "received", signature));
             }
-            
+
             return isValid;
         } catch (Exception e) {
-            System.err.println("[StreamService] Error verifying signature: " + e.getMessage());
+            LoggingService.error("stream_webhook_signature_error", e);
             return false;
         }
     }
@@ -316,12 +315,12 @@ public class StreamService {
      */
     public boolean endCall(String callType, String callId) {
         if (callType == null || callId == null) {
-            System.err.println("[StreamService] Cannot end call: missing callType or callId");
+            LoggingService.warn("stream_end_call_missing_params");
             return false;
         }
-        
+
         if (!isConfigured()) {
-            System.err.println("[StreamService] Cannot end call: service not configured");
+            LoggingService.error("stream_end_call_not_configured");
             return false;
         }
         
@@ -346,19 +345,18 @@ public class StreamService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             
             int statusCode = response.statusCode();
-            System.out.println("[StreamService] End call response: " + statusCode + " - " + response.body());
-            
+            LoggingService.debug("stream_end_call_response", Map.of("statusCode", statusCode));
+
             // 200 = success, 404 = call not found (already ended), both are OK
             if (statusCode == 200 || statusCode == 404) {
                 return true;
             }
-            
-            System.err.println("[StreamService] Failed to end call: HTTP " + statusCode);
+
+            LoggingService.warn("stream_end_call_failed", Map.of("statusCode", statusCode));
             return false;
-            
+
         } catch (Exception e) {
-            System.err.println("[StreamService] Error ending call: " + e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("stream_end_call_error", e);
             return false;
         }
     }
@@ -394,7 +392,7 @@ public class StreamService {
             return header + "." + encodedPayload + "." + signature;
             
         } catch (Exception e) {
-            System.err.println("[StreamService] Error creating auth token: " + e.getMessage());
+            LoggingService.error("stream_auth_token_creation_error", e);
             return "";
         }
     }
@@ -443,11 +441,11 @@ public class StreamService {
             byte[] signatureBytes = sha256Hmac.doFinal(signatureInput.getBytes(StandardCharsets.UTF_8));
             String signature = Base64.getUrlEncoder().withoutPadding().encodeToString(signatureBytes);
 
-            System.out.println("[StreamService] Created user token for " + userId + " with role: " + role);
+            LoggingService.debug("stream_user_token_created", Map.of("userId", userId, "role", role));
             return header + "." + encodedPayload + "." + signature;
 
         } catch (Exception e) {
-            System.err.println("[StreamService] Error creating user token: " + e.getMessage());
+            LoggingService.error("stream_user_token_error", e, Map.of("userId", userId, "role", role));
             return "";
         }
     }
@@ -463,7 +461,7 @@ public class StreamService {
      */
     public boolean createCall(String callType, String callId, String hostUserId) {
         if (!isConfigured()) {
-            System.err.println("[StreamService] Cannot create call: service not configured");
+            LoggingService.error("stream_create_call_not_configured");
             return false;
         }
 
@@ -499,14 +497,13 @@ public class StreamService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             int statusCode = response.statusCode();
-            System.out.println("[StreamService] Create call response: " + statusCode + " for " + callType + ":" + callId);
+            LoggingService.info("stream_create_call_response", Map.of("statusCode", statusCode, "callType", callType, "callId", callId));
 
             // 201 = created, 200 = already exists (get_or_create behavior)
             return statusCode == 201 || statusCode == 200;
 
         } catch (Exception e) {
-            System.err.println("[StreamService] Error creating call: " + e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("stream_create_call_error", e, Map.of("callType", callType, "callId", callId));
             return false;
         }
     }
@@ -523,7 +520,7 @@ public class StreamService {
      */
     public boolean updateMemberRole(String callType, String callId, String userId, String newRole) {
         if (!isConfigured()) {
-            System.err.println("[StreamService] Cannot update member role: service not configured");
+            LoggingService.error("stream_update_member_role_not_configured");
             return false;
         }
 
@@ -549,13 +546,12 @@ public class StreamService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             int statusCode = response.statusCode();
-            System.out.println("[StreamService] Update member role response: " + statusCode + " for " + userId + " -> " + newRole);
+            LoggingService.info("stream_update_member_role_response", Map.of("statusCode", statusCode, "userId", userId, "newRole", newRole));
 
             return statusCode == 200 || statusCode == 201;
 
         } catch (Exception e) {
-            System.err.println("[StreamService] Error updating member role: " + e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("stream_update_member_role_error", e, Map.of("userId", userId, "newRole", newRole));
             return false;
         }
     }
@@ -605,7 +601,7 @@ public class StreamService {
             return response.statusCode() == 200;
 
         } catch (Exception e) {
-            System.err.println("[StreamService] Error granting permissions: " + e.getMessage());
+            LoggingService.error("stream_grant_permissions_error", e);
             return false;
         }
     }
@@ -654,7 +650,7 @@ public class StreamService {
             return response.statusCode() == 200;
 
         } catch (Exception e) {
-            System.err.println("[StreamService] Error revoking permissions: " + e.getMessage());
+            LoggingService.error("stream_revoke_permissions_error", e);
             return false;
         }
     }
@@ -701,14 +697,14 @@ public class StreamService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             int statusCode = response.statusCode();
-            System.out.println("[StreamService] Get call details response: " + statusCode);
+            LoggingService.debug("stream_get_call_details_response", Map.of("statusCode", statusCode, "callType", callType, "callId", callId));
 
             if (statusCode == 404) {
                 return StreamCallResponse.error("Call not found: " + callType + ":" + callId);
             }
 
             if (statusCode != 200) {
-                System.err.println("[StreamService] Failed to get call details: HTTP " + statusCode + " - " + response.body());
+                LoggingService.warn("stream_get_call_details_failed", Map.of("statusCode", statusCode, "callType", callType, "callId", callId));
                 return StreamCallResponse.error("HTTP " + statusCode);
             }
 
@@ -716,8 +712,7 @@ public class StreamService {
             return parseCallResponse(response.body(), callType, callId);
 
         } catch (Exception e) {
-            System.err.println("[StreamService] Error fetching call details: " + e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("stream_get_call_details_error", e, Map.of("callType", callType, "callId", callId));
             return StreamCallResponse.error(e.getMessage());
         }
     }
@@ -734,12 +729,12 @@ public class StreamService {
         List<RecordingInfo> recordings = new ArrayList<>();
 
         if (callType == null || callId == null) {
-            System.err.println("[StreamService] Cannot get recordings: missing callType or callId");
+            LoggingService.warn("stream_get_recordings_missing_params");
             return recordings;
         }
 
         if (!isConfigured()) {
-            System.err.println("[StreamService] Cannot get recordings: service not configured");
+            LoggingService.error("stream_get_recordings_not_configured");
             return recordings;
         }
 
@@ -761,23 +756,22 @@ public class StreamService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             int statusCode = response.statusCode();
-            System.out.println("[StreamService] Get recordings response: " + statusCode);
+            LoggingService.debug("stream_get_recordings_response", Map.of("statusCode", statusCode, "callType", callType, "callId", callId));
 
             if (statusCode == 404) {
-                System.out.println("[StreamService] No recordings found for call: " + callType + ":" + callId);
+                LoggingService.info("stream_no_recordings_found", Map.of("callType", callType, "callId", callId));
                 return recordings;
             }
 
             if (statusCode != 200) {
-                System.err.println("[StreamService] Failed to get recordings: HTTP " + statusCode + " - " + response.body());
+                LoggingService.warn("stream_get_recordings_failed", Map.of("statusCode", statusCode, "callType", callType, "callId", callId));
                 return recordings;
             }
 
             return parseRecordingsResponse(response.body());
 
         } catch (Exception e) {
-            System.err.println("[StreamService] Error fetching recordings: " + e.getMessage());
-            e.printStackTrace();
+            LoggingService.error("stream_get_recordings_error", e, Map.of("callType", callType, "callId", callId));
             return recordings;
         }
     }
@@ -805,7 +799,7 @@ public class StreamService {
             JsonNode recordingsNode = root.path("recordings");
 
             if (!recordingsNode.isArray()) {
-                System.out.println("[StreamService] No 'recordings' array in response");
+                LoggingService.debug("stream_no_recordings_array_in_response");
                 return recordings;
             }
 
@@ -823,7 +817,7 @@ public class StreamService {
                     try {
                         info.setStartTime(Instant.parse(startTimeStr));
                     } catch (Exception e) {
-                        System.err.println("[StreamService] Error parsing start_time: " + startTimeStr);
+                        LoggingService.warn("stream_recording_parse_start_time_error", Map.of("startTime", startTimeStr));
                     }
                 }
 
@@ -831,7 +825,7 @@ public class StreamService {
                     try {
                         info.setEndTime(Instant.parse(endTimeStr));
                     } catch (Exception e) {
-                        System.err.println("[StreamService] Error parsing end_time: " + endTimeStr);
+                        LoggingService.warn("stream_recording_parse_end_time_error", Map.of("endTime", endTimeStr));
                     }
                 }
 
@@ -857,12 +851,12 @@ public class StreamService {
                 // Only add recordings with valid URLs
                 if (info.getUrl() != null && !info.getUrl().isEmpty()) {
                     recordings.add(info);
-                    System.out.println("[StreamService] Found recording: " + info);
+                    LoggingService.debug("stream_recording_found", Map.of("filename", info.getFilename() != null ? info.getFilename() : "unknown"));
                 }
             }
 
         } catch (Exception e) {
-            System.err.println("[StreamService] Error parsing recordings response: " + e.getMessage());
+            LoggingService.error("stream_parse_recordings_error", e);
         }
 
         return recordings;
@@ -926,7 +920,7 @@ public class StreamService {
             return response;
 
         } catch (Exception e) {
-            System.err.println("[StreamService] Error parsing call response: " + e.getMessage());
+            LoggingService.error("stream_parse_call_response_error", e);
             return StreamCallResponse.error("Parse error: " + e.getMessage());
         }
     }
@@ -944,7 +938,7 @@ public class StreamService {
             try {
                 session.setStartedAt(Instant.parse(startedAt));
             } catch (Exception e) {
-                System.err.println("[StreamService] Error parsing session started_at: " + startedAt);
+                LoggingService.warn("stream_session_parse_started_at_error", Map.of("startedAt", startedAt));
             }
         }
 
@@ -953,7 +947,7 @@ public class StreamService {
             try {
                 session.setEndedAt(Instant.parse(endedAt));
             } catch (Exception e) {
-                System.err.println("[StreamService] Error parsing session ended_at: " + endedAt);
+                LoggingService.warn("stream_session_parse_ended_at_error", Map.of("endedAt", endedAt));
             }
         }
 
@@ -995,7 +989,7 @@ public class StreamService {
             try {
                 participant.setJoinedAt(Instant.parse(joinedAt));
             } catch (Exception e) {
-                System.err.println("[StreamService] Error parsing participant joined_at: " + joinedAt);
+                LoggingService.warn("stream_participant_parse_joined_at_error", Map.of("joinedAt", joinedAt));
             }
         }
 
@@ -1004,7 +998,7 @@ public class StreamService {
             try {
                 participant.setLeftAt(Instant.parse(leftAt));
             } catch (Exception e) {
-                System.err.println("[StreamService] Error parsing participant left_at: " + leftAt);
+                LoggingService.warn("stream_participant_parse_left_at_error", Map.of("leftAt", leftAt));
             }
         }
 

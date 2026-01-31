@@ -158,27 +158,27 @@ public class WalletService {
                 .collection("public").document("store").get().get();
         
         if (!storeDoc.exists()) {
-            System.out.println("[WalletService] Expert store document does not exist for expertId: " + expertId);
+            LoggingService.debug("wallet_expert_store_not_found", Map.of("expertId", expertId));
             return "OFFLINE";
         }
-        
+
         // Check consultation_status first (system-controlled: BUSY/FREE)
         String consultationStatus = storeDoc.getString("consultation_status");
         if ("BUSY".equals(consultationStatus)) {
-            System.out.println("[WalletService] Expert consultation_status is BUSY for expertId: " + expertId);
+            LoggingService.debug("wallet_expert_busy", Map.of("expertId", expertId));
             return "BUSY";
         }
-        
+
         // Then check is_online (user-controlled: true/false)
         Boolean isOnline = storeDoc.getBoolean("is_online");
-        System.out.println("[WalletService] Expert is_online value for expertId " + expertId + ": " + isOnline + " (type: " + (isOnline != null ? isOnline.getClass().getSimpleName() : "null") + ")");
-        
+        LoggingService.debug("wallet_expert_online_status", Map.of("expertId", expertId, "isOnline", String.valueOf(isOnline)));
+
         if (isOnline == null || !isOnline) {
-            System.out.println("[WalletService] Expert is OFFLINE for expertId: " + expertId + " (isOnline: " + isOnline + ")");
+            LoggingService.debug("wallet_expert_offline", Map.of("expertId", expertId));
             return "OFFLINE";
         }
-        
-        System.out.println("[WalletService] Expert is ONLINE for expertId: " + expertId);
+
+        LoggingService.debug("wallet_expert_online", Map.of("expertId", expertId));
         return "ONLINE";
     }
 
