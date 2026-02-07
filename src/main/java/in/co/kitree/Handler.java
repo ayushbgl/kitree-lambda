@@ -1565,6 +1565,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             return gson.toJson(Map.of("success", false));
         } finally {
             sentryTx.finish();
+            Sentry.flush(1000);
         }
         return null;
     }
