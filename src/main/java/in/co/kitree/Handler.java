@@ -1509,6 +1509,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return astrologyService.getDivisionalCharts(requestBody);
             }
 
+            if ("rashifal_generate".equals(requestBody.getFunction())) {
+                RashifalService rashifalService = new RashifalService(db, isTest());
+                return rashifalService.generateRashifal(userId);
+            }
+
             if ("get_gochar_details".equals(requestBody.getFunction())) {
                 Map<String, Object> gocharApiRequestBody = new HashMap<>();
                 // Validate required fields
