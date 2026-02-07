@@ -32,6 +32,9 @@ public class PythonLambdaEventRequest {
     boolean isVideo = false;
     boolean isTest = false;
 
+    String sentryTrace;
+    String baggage;
+
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
     }
@@ -203,5 +206,21 @@ public class PythonLambdaEventRequest {
 
     public void setCourse(String course) {
         this.course = course;
+    }
+
+    public String getSentryTrace() {
+        return sentryTrace;
+    }
+
+    public void setSentryTrace(String sentryTrace) {
+        this.sentryTrace = sentryTrace;
+    }
+
+    public String getBaggage() {
+        return baggage;
+    }
+
+    public void setBaggage(String baggage) {
+        this.baggage = baggage;
     }
 }

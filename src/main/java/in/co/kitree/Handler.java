@@ -44,6 +44,14 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 
+import io.sentry.Sentry;
+import io.sentry.ITransaction;
+import io.sentry.ISpan;
+import io.sentry.SpanStatus;
+import io.sentry.TransactionContext;
+import io.sentry.BaggageHeader;
+import io.sentry.protocol.User;
+
 import static com.google.cloud.firestore.AggregateField.sum;
 
 //public class Handler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
@@ -70,6 +78,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private ConsultationHandler consultationHandler;
     private WalletHandler walletHandler;
     private WebhookHandler webhookHandler;
+
+    static {
+        Sentry.init(options -> {
+            options.setDsn(System.getenv("SENTRY_DSN"));
+            options.setEnvironment("test".equals(System.getenv("ENVIRONMENT")) ? "development" : "production");
+            options.setTracesSampleRate(1.0);
+            options.setSendDefaultPii(true);
+        });
+    }
 
     public Handler() {
         try {
@@ -172,6 +189,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             @Override
             public PythonLambdaResponseBody invokePythonLambda(PythonLambdaEventRequest request) {
                 try {
+                    // Propagate Sentry trace context to Python Lambda
+                    ISpan currentSpan = Sentry.getSpan();
+                    if (currentSpan != null) {
+                        request.setSentryTrace(currentSpan.toSentryTrace().getValue());
+                        BaggageHeader baggageHeader = currentSpan.toBaggageHeader(List.of());
+                        if (baggageHeader != null) {
+                            request.setBaggage(baggageHeader.getValue());
+                        }
+                    }
                     String payload = gson.toJson(request);
                     InvokeRequest invokeRequest = InvokeRequest.builder()
                             .functionName("certgen")
@@ -194,7 +220,17 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     public String handleRequest(RequestEvent event, Context context) {
         // Initialize structured logging with request context
         LoggingService.initRequest(context);
-        
+
+        // Continue distributed trace from frontend headers (sentry-trace + baggage)
+        Map<String, String> incomingHeaders = event.getHeaders() != null ? event.getHeaders() : Collections.emptyMap();
+        TransactionContext sentryCtx = Sentry.continueTrace(
+            incomingHeaders.get("sentry-trace"),
+            incomingHeaders.get("baggage") != null ? List.of(incomingHeaders.get("baggage")) : null
+        );
+        sentryCtx.setName("lambda.request");
+        sentryCtx.setOperation("http.server");
+        ITransaction sentryTx = Sentry.startTransaction(sentryCtx, true);
+
         try {
             if ("aws.events".equals(event.getSource())) {
                 // Check if this is a scheduled auto-terminate event
@@ -267,7 +303,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             // Extract and verify Firebase token from Authorization header
             // Authentication is optional - some endpoints don't require it
             String userId = extractUserIdFromToken(event, requestBody.getFunction());
-            
+            if (userId != null) {
+                User sentryUser = new User();
+                sentryUser.setId(userId);
+                Sentry.setUser(sentryUser);
+            }
+
             // For functions that require authentication, ensure userId is not null
             if (userId == null && requiresAuthentication(requestBody.getFunction())) {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Authentication required"));
@@ -1511,8 +1552,12 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
 
         } catch (Exception e) {
+            sentryTx.setThrowable(e);
+            sentryTx.setStatus(SpanStatus.INTERNAL_ERROR);
             LoggingService.error("request_handler_exception", e);
             return gson.toJson(Map.of("success", false));
+        } finally {
+            sentryTx.finish();
         }
         return null;
     }

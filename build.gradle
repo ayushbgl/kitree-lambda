@@ -28,6 +28,9 @@ dependencies {
     // Google Gen AI SDK for Gemini API (consultation summaries)
     implementation 'com.google.genai:google-genai:1.36.0'
     
+    // Sentry distributed tracing
+    implementation 'io.sentry:sentry-aws-lambda:7.20.0'
+
     // Structured logging for CloudWatch
     implementation 'software.amazon.lambda:powertools-logging:1.18.0'
     implementation 'org.apache.logging.log4j:log4j-core:2.22.1'

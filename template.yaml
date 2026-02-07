@@ -46,6 +46,7 @@ Resources:
       Environment:
         Variables:
           ENVIRONMENT: !Ref Environment
+          SENTRY_DSN: "https://dc337a8e397dd75f982b60a24018dd22@o1209671.ingest.us.sentry.io/4510843972354048"
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:

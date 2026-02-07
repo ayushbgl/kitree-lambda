@@ -20,7 +20,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import io.sentry.Sentry;
+import io.sentry.ISpan;
+import io.sentry.SpanStatus;
+import io.sentry.BaggageHeader;
+
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
 
@@ -47,6 +53,36 @@ public class AstrologyService {
         }
     }
     
+    /**
+     * Send an HTTP POST with optional Sentry distributed trace propagation and span tracking.
+     */
+    private HttpResponse<String> makeTracedPost(HttpRequest.Builder builder, String description, boolean propagateTrace) throws Exception {
+        ISpan currentSpan = Sentry.getSpan();
+        if (propagateTrace && currentSpan != null) {
+            builder.header("sentry-trace", currentSpan.toSentryTrace().getValue());
+            BaggageHeader baggage = currentSpan.toBaggageHeader(List.of());
+            if (baggage != null) {
+                builder.header("baggage", baggage.getValue());
+            }
+        }
+        ISpan span = currentSpan != null ? currentSpan.startChild("http.client", description) : null;
+        try {
+            HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+            if (span != null) {
+                span.setStatus(SpanStatus.fromHttpStatusCode(response.statusCode()));
+                span.finish();
+            }
+            return response;
+        } catch (Exception e) {
+            if (span != null) {
+                span.setThrowable(e);
+                span.setStatus(SpanStatus.INTERNAL_ERROR);
+                span.finish();
+            }
+            throw e;
+        }
+    }
+
     /**
      * Get astrological details (horoscope) based on birth data
      */
@@ -125,13 +161,14 @@ public class AstrologyService {
         horoscopeApiRequestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
         
         String API_URL = AstrologyServiceConfig.PYTHON_SERVER_BASE_URL + "/get_horoscope";
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(horoscopeApiRequestBody)))
-                .build();
-        
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> httpResponse = makeTracedPost(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(API_URL))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(horoscopeApiRequestBody))),
+                "POST " + API_URL,
+                true
+        );
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             LoggingService.debug("horoscope_api_response", Map.of("statusCode", httpResponse.statusCode()));
@@ -156,13 +193,14 @@ public class AstrologyService {
         horoscopeApiRequestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
         
         String API_URL = AstrologyServiceConfig.AWS_LAMBDA_BASE_URL + "/get_horoscope";
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(horoscopeApiRequestBody)))
-                .build();
-        
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> httpResponse = makeTracedPost(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(API_URL))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(horoscopeApiRequestBody))),
+                "POST " + API_URL,
+                true
+        );
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             LoggingService.debug("aws_lambda_horoscope_api_response", Map.of("statusCode", httpResponse.statusCode()));
@@ -209,15 +247,16 @@ public class AstrologyService {
             throw new RuntimeException("ASTROLOGY_API_KEY not found in secrets.json");
         }
         
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(AstrologyServiceConfig.FREE_ASTROLOGY_API_PLANETS_URL))
-                .header("Content-Type", "application/json")
-                .header("x-api-key", this.astrologyApiKey)
-                .POST(HttpRequest.BodyPublishers.ofString(payload))
-                .build();
-        
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        
+        HttpResponse<String> httpResponse = makeTracedPost(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(AstrologyServiceConfig.FREE_ASTROLOGY_API_PLANETS_URL))
+                        .header("Content-Type", "application/json")
+                        .header("x-api-key", this.astrologyApiKey)
+                        .POST(HttpRequest.BodyPublishers.ofString(payload)),
+                "POST " + AstrologyServiceConfig.FREE_ASTROLOGY_API_PLANETS_URL,
+                false
+        );
+
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             LoggingService.debug("free_astrology_api_response", Map.of("statusCode", httpResponse.statusCode()));
@@ -355,15 +394,16 @@ public class AstrologyService {
             apiUrl = AstrologyServiceConfig.FREE_ASTROLOGY_API_MAHA_DASAS_URL;
         }
         
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(apiUrl))
-                .header("Content-Type", "application/json")
-                .header("x-api-key", this.astrologyApiKey)
-                .POST(HttpRequest.BodyPublishers.ofString(payload))
-                .build();
-        
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        
+        HttpResponse<String> httpResponse = makeTracedPost(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(apiUrl))
+                        .header("Content-Type", "application/json")
+                        .header("x-api-key", this.astrologyApiKey)
+                        .POST(HttpRequest.BodyPublishers.ofString(payload)),
+                "POST " + apiUrl,
+                false
+        );
+
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             LoggingService.debug("free_astrology_dasha_response", Map.of("statusCode", httpResponse.statusCode()));
@@ -430,13 +470,14 @@ public class AstrologyService {
         dashaApiRequestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
         
         String API_URL = AstrologyServiceConfig.PYTHON_SERVER_BASE_URL + "/dasha";
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(dashaApiRequestBody)))
-                .build();
-        
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> httpResponse = makeTracedPost(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(API_URL))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(dashaApiRequestBody))),
+                "POST " + API_URL,
+                true
+        );
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             LoggingService.debug("dasha_api_response", Map.of("statusCode", httpResponse.statusCode()));
@@ -462,13 +503,14 @@ public class AstrologyService {
         dashaApiRequestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
         
         String API_URL = AstrologyServiceConfig.AWS_LAMBDA_BASE_URL + "/dasha";
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(dashaApiRequestBody)))
-                .build();
-        
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> httpResponse = makeTracedPost(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(API_URL))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(dashaApiRequestBody))),
+                "POST " + API_URL,
+                true
+        );
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             LoggingService.debug("aws_lambda_dasha_api_response", Map.of("statusCode", httpResponse.statusCode()));
@@ -494,13 +536,14 @@ public class AstrologyService {
         divisionalChartsApiRequestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
         
         String API_URL = AstrologyServiceConfig.PYTHON_SERVER_BASE_URL + "/divisional_charts";
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(divisionalChartsApiRequestBody)))
-                .build();
-        
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> httpResponse = makeTracedPost(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(API_URL))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(divisionalChartsApiRequestBody))),
+                "POST " + API_URL,
+                true
+        );
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             LoggingService.debug("divisional_charts_api_response", Map.of("statusCode", httpResponse.statusCode()));
@@ -526,13 +569,14 @@ public class AstrologyService {
         divisionalChartsApiRequestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
         
         String API_URL = AstrologyServiceConfig.AWS_LAMBDA_BASE_URL + "/divisional_charts";
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(divisionalChartsApiRequestBody)))
-                .build();
-        
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> httpResponse = makeTracedPost(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(API_URL))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(divisionalChartsApiRequestBody))),
+                "POST " + API_URL,
+                true
+        );
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String response = httpResponse.body();
             LoggingService.debug("aws_lambda_divisional_charts_api_response", Map.of("statusCode", httpResponse.statusCode()));
@@ -607,15 +651,16 @@ public class AstrologyService {
         // Get the appropriate URL for this chart
         String apiUrl = AstrologyServiceConfig.getDivisionalChartUrl(chartNumber);
         
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(apiUrl))
-                .header("Content-Type", "application/json")
-                .header("x-api-key", this.astrologyApiKey)
-                .POST(HttpRequest.BodyPublishers.ofString(payload))
-                .build();
-        
-        HttpResponse<String> httpResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        
+        HttpResponse<String> httpResponse = makeTracedPost(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(apiUrl))
+                        .header("Content-Type", "application/json")
+                        .header("x-api-key", this.astrologyApiKey)
+                        .POST(HttpRequest.BodyPublishers.ofString(payload)),
+                "POST " + apiUrl,
+                false
+        );
+
         if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
             String responseBody = httpResponse.body();
             LoggingService.debug("free_astrology_divisional_chart_response", Map.of("chartNumber", chartNumber, "statusCode", httpResponse.statusCode()));
