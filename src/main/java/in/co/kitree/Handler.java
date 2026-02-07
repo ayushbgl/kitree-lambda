@@ -49,6 +49,7 @@ import io.sentry.ITransaction;
 import io.sentry.ISpan;
 import io.sentry.SpanStatus;
 import io.sentry.TransactionContext;
+import io.sentry.TransactionOptions;
 import io.sentry.BaggageHeader;
 import io.sentry.protocol.User;
 
@@ -231,7 +232,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         );
         sentryCtx.setName("lambda.request");
         sentryCtx.setOperation("http.server");
-        ITransaction sentryTx = Sentry.startTransaction(sentryCtx, true);
+        TransactionOptions txOptions = new TransactionOptions();
+        txOptions.setBindToScope(true);
+        ITransaction sentryTx = Sentry.startTransaction(sentryCtx, txOptions);
         sentryTx.setTag("cold_start", String.valueOf(coldStart));
         coldStart = false;
 
