@@ -232,7 +232,7 @@ public class RashifalService {
                 .orElseThrow(() -> new RuntimeException("No TTS content"));
         List<Part> parts = responseContent.parts()
                 .orElseThrow(() -> new RuntimeException("No TTS parts"));
-        Blob audioBlob = parts.get(0).inlineData()
+        com.google.genai.types.Blob audioBlob = parts.get(0).inlineData()
                 .orElseThrow(() -> new RuntimeException("No TTS inline data"));
         return audioBlob.data()
                 .orElseThrow(() -> new RuntimeException("No TTS audio bytes"));
