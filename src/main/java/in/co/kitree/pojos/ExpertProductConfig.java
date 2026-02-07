@@ -26,9 +26,6 @@ public class ExpertProductConfig {
     private Double selfShippingCostInr;  // If SELF, seller's shipping charge
     private Integer selfStockQuantity;   // Seller's own inventory count (for SELF shipping)
 
-    // Display customization (optional)
-    private String customDescription;  // Seller's custom description overlay
-
     // Status
     private Timestamp createdAt;
     private Timestamp updatedAt;
@@ -66,9 +63,6 @@ public class ExpertProductConfig {
 
     public Integer getSelfStockQuantity() { return selfStockQuantity; }
     public void setSelfStockQuantity(Integer selfStockQuantity) { this.selfStockQuantity = selfStockQuantity; }
-
-    public String getCustomDescription() { return customDescription; }
-    public void setCustomDescription(String customDescription) { this.customDescription = customDescription; }
 
     public Timestamp getCreatedAt() { return createdAt; }
     public void setCreatedAt(Timestamp createdAt) { this.createdAt = createdAt; }
@@ -126,7 +120,6 @@ public class ExpertProductConfig {
         map.put("shippingMode", shippingMode);
         map.put("selfShippingCostInr", selfShippingCostInr);
         map.put("selfStockQuantity", selfStockQuantity);
-        map.put("customDescription", customDescription);
         map.put("createdAt", createdAt);
         map.put("updatedAt", updatedAt);
         return map;
@@ -148,7 +141,6 @@ public class ExpertProductConfig {
         config.setShippingMode((String) map.get("shippingMode"));
         config.setSelfShippingCostInr(map.get("selfShippingCostInr") != null ? ((Number) map.get("selfShippingCostInr")).doubleValue() : null);
         config.setSelfStockQuantity(map.get("selfStockQuantity") != null ? ((Number) map.get("selfStockQuantity")).intValue() : null);
-        config.setCustomDescription((String) map.get("customDescription"));
 
         Object createdAt = map.get("createdAt");
         if (createdAt instanceof Timestamp) {

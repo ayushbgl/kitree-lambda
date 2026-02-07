@@ -202,9 +202,6 @@ public class ProductOrderHandler {
             if (requestBody.getSelfStockQuantity() != null) {
                 config.setSelfStockQuantity(requestBody.getSelfStockQuantity());
             }
-            if (requestBody.getCustomDescription() != null) {
-                config.setCustomDescription(requestBody.getCustomDescription());
-            }
 
             expertProductService.updateProductConfig(userId, config);
 

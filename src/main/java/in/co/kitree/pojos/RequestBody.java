@@ -114,7 +114,6 @@ public class RequestBody {
     private String shippingMode; // "PLATFORM" or "SELF"
     private Double selfShippingCostInr; // Seller's shipping cost for self-shipping
     private Integer selfStockQuantity; // Seller's inventory count for self-shipping
-    private String customDescription; // Seller's custom product description
     private Boolean isEnabled; // Whether product is enabled for selling
     private String statusFilter; // Filter orders by status
     private List<PlatformProduct> productsToSeed; // Products to seed into platform catalog
@@ -769,14 +768,6 @@ public class RequestBody {
 
     public void setSelfStockQuantity(Integer selfStockQuantity) {
         this.selfStockQuantity = selfStockQuantity;
-    }
-
-    public String getCustomDescription() {
-        return customDescription;
-    }
-
-    public void setCustomDescription(String customDescription) {
-        this.customDescription = customDescription;
     }
 
     public Boolean getIsEnabled() {
