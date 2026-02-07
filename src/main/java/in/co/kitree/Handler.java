@@ -79,6 +79,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private WalletHandler walletHandler;
     private WebhookHandler webhookHandler;
 
+    private static volatile boolean coldStart = true;
+
     static {
         Sentry.init(options -> {
             options.setDsn(System.getenv("SENTRY_DSN"));
@@ -230,6 +232,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         sentryCtx.setName("lambda.request");
         sentryCtx.setOperation("http.server");
         ITransaction sentryTx = Sentry.startTransaction(sentryCtx, true);
+        sentryTx.setTag("cold_start", String.valueOf(coldStart));
+        coldStart = false;
 
         try {
             if ("aws.events".equals(event.getSource())) {
