@@ -1559,6 +1559,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
 
         } catch (Exception e) {
+            Sentry.captureException(e);
             sentryTx.setThrowable(e);
             sentryTx.setStatus(SpanStatus.INTERNAL_ERROR);
             LoggingService.error("request_handler_exception", e);
