@@ -684,7 +684,4 @@ public class ExpertHandler {
         }
     }
 
-    private boolean isAdmin(String userId) throws FirebaseAuthException {
-        return Boolean.TRUE.equals(FirebaseAuth.getInstance().getUser(userId).getCustomClaims().get("admin"));
-    }
 }

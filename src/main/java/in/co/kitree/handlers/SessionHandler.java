@@ -115,7 +115,7 @@ public class SessionHandler {
 
     // ============= Handler Methods =============
 
-    private String handleGetStreamUserToken(String userId, RequestBody requestBody) {
+    private String handleGetStreamUserToken(String userId, RequestBody requestBody) throws Exception {
         PythonLambdaEventRequest getStreamUserTokenEvent = new PythonLambdaEventRequest();
         getStreamUserTokenEvent.setFunction("get_stream_user_token");
         getStreamUserTokenEvent.setUserId(userId);
@@ -124,7 +124,7 @@ public class SessionHandler {
         return pythonLambdaService.invokePythonLambda(getStreamUserTokenEvent).getStreamUserToken();
     }
 
-    private String handleCreateCall(String userId, RequestBody requestBody) {
+    private String handleCreateCall(String userId, RequestBody requestBody) throws Exception {
         FirebaseOrder order = fetchOrder(requestBody.getUserId(), requestBody.getOrderId());
         if (order == null) {
             return "Not authorized";
@@ -152,7 +152,7 @@ public class SessionHandler {
         return "Success";
     }
 
-    private String handleCreateSessionPlan(String userId, RequestBody requestBody) {
+    private String handleCreateSessionPlan(String userId, RequestBody requestBody) throws Exception {
         String title = requestBody.getTitle();
         Long scheduledStartTime = requestBody.getScheduledStartTime();
 
@@ -173,7 +173,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleAddCourseSession(String userId, RequestBody requestBody) {
+    private String handleAddCourseSession(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         Integer sessionNumber = requestBody.getSessionNumber();
 
@@ -193,7 +193,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleStartSession(String userId, RequestBody requestBody) {
+    private String handleStartSession(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         if (planId == null || planId.isEmpty()) {
             return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
@@ -203,7 +203,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleStopSession(String userId, RequestBody requestBody) {
+    private String handleStopSession(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         if (planId == null || planId.isEmpty()) {
             return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
@@ -213,7 +213,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleJoinSession(String userId, RequestBody requestBody) {
+    private String handleJoinSession(String userId, RequestBody requestBody) throws Exception {
         String orderId = requestBody.getOrderId();
         String expertId = requestBody.getExpertId();
         String planId = requestBody.getPlanId();
@@ -236,7 +236,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleLeaveSession(String userId, RequestBody requestBody) {
+    private String handleLeaveSession(String userId, RequestBody requestBody) throws Exception {
         String orderId = requestBody.getOrderId();
         String expertId = requestBody.getExpertId();
         String planId = requestBody.getPlanId();
@@ -258,7 +258,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleRaiseHand(String userId, RequestBody requestBody) {
+    private String handleRaiseHand(String userId, RequestBody requestBody) throws Exception {
         String orderId = requestBody.getOrderId();
         if (orderId == null || orderId.isEmpty()) {
             return gson.toJson(Map.of("success", false, "error", "Order ID is required"));
@@ -268,7 +268,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleLowerHand(String userId, RequestBody requestBody) {
+    private String handleLowerHand(String userId, RequestBody requestBody) throws Exception {
         String orderId = requestBody.getOrderId();
         if (orderId == null || orderId.isEmpty()) {
             return gson.toJson(Map.of("success", false, "error", "Order ID is required"));
@@ -278,7 +278,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handlePromoteParticipant(String userId, RequestBody requestBody) {
+    private String handlePromoteParticipant(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         String targetUserId = requestBody.getTargetUserId();
         String targetOrderId = requestBody.getTargetOrderId();
@@ -298,7 +298,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleDemoteParticipant(String userId, RequestBody requestBody) {
+    private String handleDemoteParticipant(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         String targetUserId = requestBody.getTargetUserId();
         String targetOrderId = requestBody.getTargetOrderId();
@@ -318,7 +318,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleMuteParticipant(String userId, RequestBody requestBody) {
+    private String handleMuteParticipant(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         String targetUserId = requestBody.getTargetUserId();
         String targetOrderId = requestBody.getTargetOrderId();
@@ -338,7 +338,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleKickParticipant(String userId, RequestBody requestBody) {
+    private String handleKickParticipant(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         String targetUserId = requestBody.getTargetUserId();
         String targetOrderId = requestBody.getTargetOrderId();
@@ -358,7 +358,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleToggleSessionGifts(String userId, RequestBody requestBody) {
+    private String handleToggleSessionGifts(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         if (planId == null || planId.isEmpty()) {
             return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
@@ -368,7 +368,7 @@ public class SessionHandler {
         return gson.toJson(result);
     }
 
-    private String handleGetSessionParticipants(String userId, RequestBody requestBody) {
+    private String handleGetSessionParticipants(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         if (planId == null || planId.isEmpty()) {
             return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
@@ -378,7 +378,7 @@ public class SessionHandler {
         return gson.toJson(Map.of("success", true, "participants", participants));
     }
 
-    private String handleGetRaisedHands(String userId, RequestBody requestBody) {
+    private String handleGetRaisedHands(String userId, RequestBody requestBody) throws Exception {
         String planId = requestBody.getPlanId();
         if (planId == null || planId.isEmpty()) {
             return gson.toJson(Map.of("success", false, "error", "Plan ID is required"));
@@ -388,13 +388,13 @@ public class SessionHandler {
         return gson.toJson(Map.of("success", true, "raisedHands", hands));
     }
 
-    private String handleGetLiveSessions(RequestBody requestBody) {
+    private String handleGetLiveSessions(RequestBody requestBody) throws Exception {
         SessionService sessionService = new SessionService(db, streamService, isTest);
         List<Map<String, Object>> sessions = sessionService.getLiveSessions(requestBody.getLimit());
         return gson.toJson(Map.of("success", true, "sessions", sessions));
     }
 
-    private String handleGetUpcomingSessions(RequestBody requestBody) {
+    private String handleGetUpcomingSessions(RequestBody requestBody) throws Exception {
         SessionService sessionService = new SessionService(db, streamService, isTest);
         List<Map<String, Object>> sessions = sessionService.getUpcomingSessions(
                 requestBody.getCategory(), requestBody.getLimit()
@@ -402,7 +402,7 @@ public class SessionHandler {
         return gson.toJson(Map.of("success", true, "sessions", sessions));
     }
 
-    private String handleSendGift(String userId, RequestBody requestBody) {
+    private String handleSendGift(String userId, RequestBody requestBody) throws Exception {
         String orderId = requestBody.getOrderId();
         String expertId = requestBody.getExpertId();
         String planId = requestBody.getPlanId();

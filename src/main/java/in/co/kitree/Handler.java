@@ -287,9 +287,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     public class HandlerException extends Exception {
-        ErrorCode errorCode;
+        Razorpay.ErrorCode errorCode;
 
-        public HandlerException(ErrorCode errorCode) {
+        public HandlerException(Razorpay.ErrorCode errorCode) {
             super();
             this.errorCode = errorCode;
         }

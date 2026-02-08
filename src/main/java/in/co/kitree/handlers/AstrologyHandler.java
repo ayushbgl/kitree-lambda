@@ -3,9 +3,7 @@ package in.co.kitree.handlers;
 import com.google.cloud.firestore.Firestore;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import in.co.kitree.pojos.PythonLambdaEventRequest;
-import in.co.kitree.pojos.PythonLambdaResponseBody;
-import in.co.kitree.pojos.RequestBody;
+import in.co.kitree.pojos.*;
 import in.co.kitree.services.*;
 
 import java.net.URI;
