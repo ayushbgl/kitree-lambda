@@ -29,7 +29,7 @@ import java.util.*;
  */
 public class RashifalService {
 
-    private static final String TTS_MODEL = "gemini-2.5-pro-preview-tts";
+    private static final String TTS_MODEL = "gemini-2.5-flash-preview-tts";
     private static final int SAMPLE_RATE = 24000;
     private static final int BITS_PER_SAMPLE = 16;
     private static final int NUM_CHANNELS = 1;
@@ -91,13 +91,56 @@ public class RashifalService {
         }
     }
 
+    private static final int STALE_GENERATING_MINUTES = 15;
+
     /**
      * Generate rashifal audio for a user and persist to Firestore.
      * Returns JSON with success/errorMessage.
+     *
+     * Guards:
+     * - Already ready for today → return cached audioUrl
+     * - Currently generating and < 15 min old → reject (still in progress)
+     * - Generating but stale (>= 15 min) → clear stuck state, allow retry
+     * - Ready but different date (new day) → allow overwrite
+     * On error → delete the generating doc so user is not stuck
      */
     public String generateRashifal(String userId) throws Exception {
         if (geminiClient == null) {
             return objectMapper.writeValueAsString(Map.of("success", false, "errorMessage", "Gemini not configured"));
+        }
+
+        String today = LocalDate.now(ZoneOffset.UTC).format(DateTimeFormatter.ISO_LOCAL_DATE);
+        DocumentReference rashifalRef = db.collection("users").document(userId)
+                .collection("rashifal").document("current");
+
+        // Check existing state
+        DocumentSnapshot existingDoc = rashifalRef.get().get();
+        if (existingDoc.exists()) {
+            String status = existingDoc.getString("status");
+            String existingDate = existingDoc.getString("date");
+
+            if ("ready".equals(status) && today.equals(existingDate)) {
+                // Already done for today — return cached result
+                return objectMapper.writeValueAsString(Map.of(
+                    "success", true,
+                    "audioUrl", existingDoc.getString("audioUrl")
+                ));
+            }
+
+            if ("generating".equals(status) && today.equals(existingDate)) {
+                Timestamp generatedAt = existingDoc.getTimestamp("generatedAt");
+                if (generatedAt != null) {
+                    long elapsedMinutes = (System.currentTimeMillis() - generatedAt.toDate().getTime()) / 60000;
+                    if (elapsedMinutes < STALE_GENERATING_MINUTES) {
+                        return objectMapper.writeValueAsString(Map.of(
+                            "success", false,
+                            "errorMessage", "Rashifal generation is already in progress, please wait"
+                        ));
+                    }
+                    // Stale — fall through to regenerate
+                    LoggingService.warn("rashifal_stale_generating_cleared", Map.of("userId", userId, "elapsedMinutes", elapsedMinutes));
+                }
+            }
         }
 
         // 1. Fetch primary birth profile
@@ -136,50 +179,58 @@ public class RashifalService {
         int birthHour = cal.get(Calendar.HOUR_OF_DAY);
         int birthMinute = cal.get(Calendar.MINUTE);
 
-        // 2. Mark as generating
-        String today = LocalDate.now(ZoneOffset.UTC).format(DateTimeFormatter.ISO_LOCAL_DATE);
-        DocumentReference rashifalRef = db.collection("users").document(userId)
-                .collection("rashifal").document("current");
+        // 2. Mark as generating so concurrent requests are blocked
         Map<String, Object> generatingData = new HashMap<>();
         generatingData.put("status", "generating");
         generatingData.put("date", today);
         generatingData.put("generatedAt", FieldValue.serverTimestamp());
         rashifalRef.set(generatingData).get();
 
-        // 3. Call Python /rashifal
-        String rashifalJson = callPythonRashifal(birthYear, birthMonth, birthDay, birthHour, birthMinute, latitude, longitude);
-        JsonNode rashifalData = objectMapper.readTree(rashifalJson);
+        try {
+            // 3. Call Python /rashifal
+            String rashifalJson = callPythonRashifal(birthYear, birthMonth, birthDay, birthHour, birthMinute, latitude, longitude);
+            JsonNode rashifalData = objectMapper.readTree(rashifalJson);
 
-        int natalMoonSign = rashifalData.path("natal_moon_sign").asInt();
-        int taraBala = rashifalData.path("tara_bala").asInt();
-        int weekday = rashifalData.path("weekday").asInt();
-        int transitMoonSign = rashifalData.path("transit_moon_sign").asInt();
-        int transitSunSign = rashifalData.path("transit_sun_sign").asInt();
+            int natalMoonSign = rashifalData.path("natal_moon_sign").asInt();
+            int taraBala = rashifalData.path("tara_bala").asInt();
+            int weekday = rashifalData.path("weekday").asInt();
+            int transitMoonSign = rashifalData.path("transit_moon_sign").asInt();
+            int transitSunSign = rashifalData.path("transit_sun_sign").asInt();
 
-        // 4. Build Hindi TTS text
-        String hindiText = buildHindiRashifalText(natalMoonSign, transitMoonSign, transitSunSign, taraBala, weekday);
+            // 4. Build Hindi TTS text
+            String hindiText = buildHindiRashifalText(natalMoonSign, transitMoonSign, transitSunSign, taraBala, weekday);
 
-        // 5. Generate audio via Gemini TTS
-        byte[] pcmBytes = generateTtsAudio(hindiText);
+            // 5. Generate audio via Gemini TTS
+            byte[] pcmBytes = generateTtsAudio(hindiText);
 
-        // 6. Convert PCM → WAV
-        byte[] wavBytes = pcmToWav(pcmBytes);
+            // 6. Convert PCM → WAV
+            byte[] wavBytes = pcmToWav(pcmBytes);
 
-        // 7. Upload to Cloudinary
-        String audioUrl = uploadToCloudinary(wavBytes, userId);
+            // 7. Upload to Cloudinary (overwrites previous if any)
+            String audioUrl = uploadToCloudinary(wavBytes, userId);
 
-        // 8. Update Firestore with ready status
-        Map<String, Object> readyData = new HashMap<>();
-        readyData.put("status", "ready");
-        readyData.put("date", today);
-        readyData.put("audioUrl", audioUrl);
-        readyData.put("natalMoonSign", natalMoonSign);
-        readyData.put("taraBala", taraBala);
-        readyData.put("generatedAt", FieldValue.serverTimestamp());
-        rashifalRef.set(readyData).get();
+            // 8. Update Firestore with ready status
+            Map<String, Object> readyData = new HashMap<>();
+            readyData.put("status", "ready");
+            readyData.put("date", today);
+            readyData.put("audioUrl", audioUrl);
+            readyData.put("natalMoonSign", natalMoonSign);
+            readyData.put("taraBala", taraBala);
+            readyData.put("generatedAt", FieldValue.serverTimestamp());
+            rashifalRef.set(readyData).get();
 
-        LoggingService.info("rashifal_generated", Map.of("userId", userId, "date", today));
-        return objectMapper.writeValueAsString(Map.of("success", true, "audioUrl", audioUrl));
+            LoggingService.info("rashifal_generated", Map.of("userId", userId, "date", today));
+            return objectMapper.writeValueAsString(Map.of("success", true, "audioUrl", audioUrl));
+
+        } catch (Exception e) {
+            // Clear the stuck generating status so the user can retry immediately
+            try {
+                rashifalRef.delete().get();
+            } catch (Exception ignored) {
+                LoggingService.warn("rashifal_cleanup_failed", Map.of("userId", userId));
+            }
+            throw e;
+        }
     }
 
     private String callPythonRashifal(int year, int month, int day, int hour, int minute,

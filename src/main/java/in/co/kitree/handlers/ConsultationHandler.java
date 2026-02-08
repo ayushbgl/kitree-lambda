@@ -58,6 +58,8 @@ public class ConsultationHandler {
                     return handleUpdateConsultationMaxDuration(userId, requestBody);
                 case "on_demand_consultation_end":
                     return handleOnDemandConsultationEnd(userId, requestBody);
+                case "submit_review":
+                    return handleSubmitReview(userId, requestBody);
                 case "cleanup_stale_order":
                     return handleCleanupStaleOrder(userId, requestBody);
                 case "recalculate_charge":
@@ -91,7 +93,8 @@ public class ConsultationHandler {
             functionName.equals("recalculate_charge") ||
             functionName.equals("generate_consultation_summary") ||
             functionName.equals("get_consultation_summary") ||
-            functionName.equals("get_active_call_for_user")
+            functionName.equals("get_active_call_for_user") ||
+            functionName.equals("submit_review")
         );
     }
 
@@ -953,4 +956,365 @@ public class ConsultationHandler {
 
         return gson.toJson(response);
     }
+
+    /**
+     * Submits or updates a review for a consultation booking.
+     * Uses a transaction to atomically update both the booking review and expert rating aggregates.
+     */
+    @SuppressWarnings("unchecked")
+    private String handleSubmitReview(String userId, RequestBody requestBody) {
+        try {
+            String bookingId = requestBody.getBookingId();
+            Integer rating = requestBody.getRating();
+            String comment = requestBody.getComment();
+            Integer previousRating = requestBody.getPreviousRating();
+
+            if (bookingId == null || bookingId.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Booking ID is required"));
+            }
+            if (rating == null || rating < 1 || rating > 5) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Rating must be between 1 and 5"));
+            }
+            if (comment != null && comment.length() > 500) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Comment must be under 500 characters"));
+            }
+
+            DocumentReference bookingRef = db.collection("users").document(userId).collection("orders").document(bookingId);
+            DocumentSnapshot bookingDoc = bookingRef.get().get();
+
+            if (!bookingDoc.exists()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Booking not found"));
+            }
+
+            String bookingUserId = bookingDoc.getString("user_id");
+            if (bookingUserId == null || !bookingUserId.equals(userId)) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: You can only review your own bookings"));
+            }
+
+            String bookingType = bookingDoc.getString("type");
+            if (!"CONSULTATION".equals(bookingType)) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Only consultations can be reviewed"));
+            }
+
+            Object sessionCompletedAt = bookingDoc.get("session_completed_at");
+            if (sessionCompletedAt == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Session must be completed before reviewing"));
+            }
+
+            Long durationSeconds = bookingDoc.getLong("duration_seconds");
+            if (durationSeconds == null || durationSeconds < 600) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Sessions under 10 minutes cannot be reviewed"));
+            }
+
+            String expertId = bookingDoc.getString("expert_id");
+            if (expertId == null || expertId.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID not found on booking"));
+            }
+
+            boolean isEdit = previousRating != null;
+            Map<String, Object> existingReview = (Map<String, Object>) bookingDoc.get("review");
+            if (existingReview != null && previousRating == null) {
+                Number existingRatingVal = (Number) existingReview.get("rating");
+                if (existingRatingVal != null) {
+                    previousRating = existingRatingVal.intValue();
+                    isEdit = true;
+                }
+            }
+
+            Map<String, Object> reviewData = new HashMap<>();
+            reviewData.put("rating", rating);
+            reviewData.put("comment", comment != null ? comment.trim() : null);
+
+            if (isEdit) {
+                reviewData.put("updated_at", FieldValue.serverTimestamp());
+                if (existingReview != null && existingReview.get("created_at") != null) {
+                    reviewData.put("created_at", existingReview.get("created_at"));
+                } else {
+                    reviewData.put("created_at", FieldValue.serverTimestamp());
+                }
+            } else {
+                reviewData.put("created_at", FieldValue.serverTimestamp());
+            }
+
+            DocumentReference expertStoreRef = db.collection("users").document(expertId).collection("public").document("store");
+
+            final Integer finalPreviousRating = previousRating;
+            final boolean finalIsEdit = isEdit;
+            final Integer finalRating = rating;
+
+            db.runTransaction(transaction -> {
+                transaction.update(bookingRef, "review", reviewData);
+                transaction.update(bookingRef, "updated_at", FieldValue.serverTimestamp());
+
+                if (finalIsEdit && finalPreviousRating != null) {
+                    int ratingDelta = finalRating - finalPreviousRating;
+                    transaction.update(expertStoreRef, "ratingSum", FieldValue.increment(ratingDelta));
+                } else {
+                    transaction.update(expertStoreRef, "ratingSum", FieldValue.increment(finalRating));
+                    transaction.update(expertStoreRef, "ratingCount", FieldValue.increment(1));
+                }
+
+                return null;
+            }).get();
+
+            LoggingService.info("review_submitted", Map.of(
+                "userId", userId,
+                "bookingId", bookingId,
+                "rating", rating,
+                "isEdit", finalIsEdit
+            ));
+
+            return gson.toJson(Map.of("success", true));
+
+        } catch (Exception e) {
+            LoggingService.error("submit_review_failed", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", "Failed to submit review: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Auto-terminate consultations cron entrypoint.
+     * Called from Handler.handleRequest for scheduled EventBridge events.
+     */
+    public String handleAutoTerminateConsultations(boolean isTest) {
+        // Delegate to the auto-terminate logic extracted from Handler.java
+        long nowMillis = System.currentTimeMillis();
+        int terminatedCount = 0;
+        int errorCount = 0;
+
+        try {
+            WalletService walletService = new WalletService(this.db);
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+
+            com.google.cloud.Timestamp now = com.google.cloud.Timestamp.now();
+            nowMillis = now.toDate().getTime();
+
+            Query query = this.db.collectionGroup("orders")
+                    .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                    .whereEqualTo("status", "CONNECTED");
+
+            for (com.google.cloud.firestore.QueryDocumentSnapshot doc : query.get().get().getDocuments()) {
+                try {
+                    String orderId = doc.getId();
+                    String userId = doc.getReference().getParent().getParent().getId();
+                    com.google.cloud.Timestamp startTime = doc.getTimestamp("start_time");
+                    Long maxAllowedDuration = doc.getLong("max_allowed_duration");
+
+                    if (startTime == null || maxAllowedDuration == null) {
+                        continue;
+                    }
+
+                    long startTimeMillis = startTime.toDate().getTime();
+                    long elapsedSeconds = (nowMillis - startTimeMillis) / 1000;
+
+                    if (elapsedSeconds >= (maxAllowedDuration + AUTO_TERMINATE_GRACE_PERIOD_SECONDS)) {
+                        LoggingService.setContext(userId, orderId, null);
+                        OnDemandConsultationOrder order = consultationService.getOrder(userId, orderId);
+                        if (order != null && "CONNECTED".equals(order.getStatus())) {
+                            java.util.List<Map<String, Object>> userIntervalMaps = order.getUserIntervals();
+                            java.util.List<Map<String, Object>> expertIntervalMaps = order.getExpertIntervals();
+                            Long billableSeconds;
+
+                            if (userIntervalMaps != null && !userIntervalMaps.isEmpty() &&
+                                expertIntervalMaps != null && !expertIntervalMaps.isEmpty()) {
+                                billableSeconds = consultationService.calculateOverlapFromIntervals(
+                                    consultationService.parseIntervalsFromList(userIntervalMaps),
+                                    consultationService.parseIntervalsFromList(expertIntervalMaps),
+                                    order.getMaxAllowedDuration());
+                            } else {
+                                billableSeconds = consultationService.calculateBillableSeconds(order);
+                            }
+
+                            Double cost = consultationService.calculateCost(billableSeconds, order.getExpertRatePerMinute());
+                            Double platformFeeAmount = consultationService.calculatePlatformFee(cost, order.getPlatformFeePercent());
+                            Double expertEarnings = cost - platformFeeAmount;
+                            String expertId = order.getExpertId();
+                            String currency = order.getCurrency();
+
+                            final Long finalDurationSeconds = billableSeconds;
+                            final Double finalCost = cost;
+                            final Double finalPlatformFeeAmount = platformFeeAmount;
+                            final String finalUserId = userId;
+                            final String finalOrderId = orderId;
+                            final String finalExpertId = expertId;
+                            final String finalCurrency = currency;
+                            ExpertEarningsService earningsService = new ExpertEarningsService(this.db);
+
+                            this.db.runTransaction(transaction -> {
+                                DocumentReference userExpertWalletRef = db.collection("users").document(finalUserId)
+                                        .collection("expert_wallets").document(finalExpertId);
+                                DocumentSnapshot userExpertWalletDoc = transaction.get(userExpertWalletRef).get();
+                                DocumentReference expertUserRef = db.collection("users").document(finalExpertId);
+                                DocumentSnapshot expertUserDoc = transaction.get(expertUserRef).get();
+                                DocumentReference orderRef = db.collection("users").document(finalUserId)
+                                        .collection("orders").document(finalOrderId);
+                                DocumentSnapshot orderDoc = transaction.get(orderRef).get();
+
+                                if (!orderDoc.exists() || !"CONNECTED".equals(orderDoc.getString("status"))) {
+                                    throw new IllegalStateException("Order is not in CONNECTED status: " + finalOrderId);
+                                }
+
+                                boolean hasOtherActive = consultationService.hasOtherConnectedConsultationsInTransaction(
+                                    transaction, finalExpertId, finalOrderId);
+
+                                DocumentReference expertStoreRef2 = db.collection("users").document(finalExpertId)
+                                        .collection("public").document("store");
+                                DocumentSnapshot expertStoreDoc = transaction.get(expertStoreRef2).get();
+
+                                walletService.updateExpertWalletBalanceInTransaction(
+                                    transaction, finalUserId, finalExpertId, finalCurrency, -finalCost);
+                                earningsService.creditExpertEarningsInTransaction(
+                                    transaction, finalExpertId, finalCurrency, finalCost, finalPlatformFeeAmount,
+                                    finalOrderId, "On-demand consultation earning (auto-terminated)");
+
+                                WalletTransaction deductionTransaction = new WalletTransaction();
+                                deductionTransaction.setType("CONSULTATION_DEDUCTION");
+                                deductionTransaction.setSource("PAYMENT");
+                                deductionTransaction.setAmount(-finalCost);
+                                deductionTransaction.setCurrency(finalCurrency);
+                                deductionTransaction.setOrderId(finalOrderId);
+                                deductionTransaction.setStatus("COMPLETED");
+                                deductionTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
+                                deductionTransaction.setDurationSeconds(finalDurationSeconds);
+                                deductionTransaction.setRatePerMinute(order.getExpertRatePerMinute());
+                                deductionTransaction.setConsultationType(order.getConsultationType());
+                                deductionTransaction.setCategory(order.getCategory());
+                                walletService.createExpertWalletTransactionInTransaction(transaction, finalUserId, finalExpertId, deductionTransaction);
+
+                                Map<String, Object> orderUpdates = new HashMap<>();
+                                orderUpdates.put("status", "COMPLETED");
+                                orderUpdates.put("end_time", com.google.cloud.Timestamp.now());
+                                orderUpdates.put("duration_seconds", finalDurationSeconds);
+                                orderUpdates.put("cost", finalCost);
+                                orderUpdates.put("platform_fee_amount", finalPlatformFeeAmount);
+                                orderUpdates.put("expert_earnings", expertEarnings);
+                                transaction.update(orderRef, orderUpdates);
+
+                                if (!hasOtherActive) {
+                                    Map<String, Object> statusUpdates = new HashMap<>();
+                                    statusUpdates.put("consultation_status", "FREE");
+                                    statusUpdates.put("consultation_status_updated_at", com.google.cloud.Timestamp.now());
+                                    transaction.update(expertStoreRef2, statusUpdates);
+                                }
+                                return null;
+                            }).get();
+
+                            terminatedCount++;
+                        }
+                    }
+                } catch (Exception e) {
+                    errorCount++;
+                    LoggingService.error("auto_terminate_consultation_error", e, Map.of("orderId", doc.getId()));
+                }
+            }
+        } catch (Exception e) {
+            LoggingService.error("auto_terminate_consultations_fatal_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+
+        // Auto-fail stale INITIATED orders
+        int failedInitiatedCount = 0;
+        try {
+            WalletService walletService = new WalletService(this.db);
+            OnDemandConsultationService consultationService = new OnDemandConsultationService(this.db, walletService);
+
+            Query initiatedQuery = this.db.collectionGroup("orders")
+                    .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                    .whereEqualTo("status", "INITIATED");
+
+            for (com.google.cloud.firestore.QueryDocumentSnapshot doc : initiatedQuery.get().get().getDocuments()) {
+                try {
+                    String orderId = doc.getId();
+                    String userId = doc.getReference().getParent().getParent().getId();
+                    String expertId = doc.getString("expert_id");
+                    com.google.cloud.Timestamp createdAt = doc.getTimestamp("created_at");
+
+                    if (createdAt == null) continue;
+
+                    long elapsedSeconds = (nowMillis - createdAt.toDate().getTime()) / 1000;
+                    if (elapsedSeconds >= INITIATED_ORDER_TIMEOUT_SECONDS) {
+                        DocumentReference orderRef = doc.getReference();
+                        Map<String, Object> updates = new HashMap<>();
+                        updates.put("status", "FAILED");
+                        updates.put("end_time", com.google.cloud.Timestamp.now());
+                        updates.put("failure_reason", "INITIATED_TIMEOUT");
+                        orderRef.update(updates).get();
+
+                        if (expertId != null) {
+                            boolean hasOtherActive = consultationService.hasOtherConnectedConsultations(expertId, orderId);
+                            boolean hasOtherInitiated = hasNonStaleInitiatedOrders(expertId, orderId, nowMillis);
+                            if (!hasOtherActive && !hasOtherInitiated) {
+                                walletService.setConsultationStatus(expertId, "FREE");
+                            }
+                        }
+
+                        String streamCallCid = doc.getString("stream_call_cid");
+                        if (streamCallCid != null) {
+                            try {
+                                StreamService streamSvc = new StreamService(isTest);
+                                String[] cidParts = StreamService.parseCallCid(streamCallCid);
+                                if (cidParts != null) streamSvc.endCall(cidParts[0], cidParts[1]);
+                            } catch (Exception ignore) {}
+                        }
+                        failedInitiatedCount++;
+                    }
+                } catch (Exception e) {
+                    errorCount++;
+                    LoggingService.error("auto_fail_initiated_order_error", e, Map.of("orderId", doc.getId()));
+                }
+            }
+        } catch (Exception e) {
+            LoggingService.error("stale_initiated_orders_cleanup_error", e);
+        }
+
+        // Process pending summaries
+        int summariesProcessed = 0, summariesSucceeded = 0, summariesFailed = 0, summariesSkipped = 0;
+        try {
+            ConsultationSummaryService summaryService = new ConsultationSummaryService(db, isTest);
+            Map<String, Integer> summaryResults = summaryService.processPendingSummaries(5);
+            summariesProcessed = summaryResults.getOrDefault("processed", 0);
+            summariesSucceeded = summaryResults.getOrDefault("succeeded", 0);
+            summariesFailed = summaryResults.getOrDefault("failed", 0);
+            summariesSkipped = summaryResults.getOrDefault("skipped", 0);
+        } catch (Exception e) {
+            LoggingService.error("process_pending_summaries_error", e);
+        }
+
+        return gson.toJson(Map.of(
+            "success", true,
+            "terminatedCount", terminatedCount,
+            "failedInitiatedCount", failedInitiatedCount,
+            "errorCount", errorCount,
+            "summariesProcessed", summariesProcessed,
+            "summariesSucceeded", summariesSucceeded,
+            "summariesFailed", summariesFailed,
+            "summariesSkipped", summariesSkipped
+        ));
+    }
+
+    private boolean hasNonStaleInitiatedOrders(String expertId, String excludeOrderId, long nowMillis) {
+        try {
+            Query initiatedQuery = this.db.collectionGroup("orders")
+                    .whereEqualTo("type", "ON_DEMAND_CONSULTATION")
+                    .whereEqualTo("expertId", expertId)
+                    .whereEqualTo("status", "INITIATED");
+
+            for (com.google.cloud.firestore.QueryDocumentSnapshot doc : initiatedQuery.get().get().getDocuments()) {
+                String orderId = doc.getId();
+                if (excludeOrderId != null && orderId.equals(excludeOrderId)) continue;
+
+                com.google.cloud.Timestamp createdAt = doc.getTimestamp("created_at");
+                if (createdAt == null) return true;
+
+                long elapsedSeconds = (nowMillis - createdAt.toDate().getTime()) / 1000;
+                if (elapsedSeconds < INITIATED_ORDER_TIMEOUT_SECONDS) return true;
+            }
+            return false;
+        } catch (Exception e) {
+            LoggingService.error("error_checking_non_stale_initiated_orders", e, Map.of("expertId", expertId));
+            return true;
+        }
+    }
+
+    private static final int AUTO_TERMINATE_GRACE_PERIOD_SECONDS = 60;
 }

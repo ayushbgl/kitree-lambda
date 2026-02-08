@@ -9,8 +9,14 @@ import in.co.kitree.pojos.PlatformFeeConfig;
 import in.co.kitree.pojos.RequestBody;
 import in.co.kitree.services.*;
 
-import java.util.HashMap;
-import java.util.Map;
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
+import org.json.JSONObject;
+
+import java.io.FileInputStream;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
 
 import static com.google.cloud.firestore.AggregateField.sum;
@@ -54,6 +60,10 @@ public class ExpertHandler {
                     return handleSetExpertPlatformFee(userId, requestBody);
                 case "get_expert_platform_fee":
                     return handleGetExpertPlatformFee(userId, requestBody);
+                case "expert_metrics":
+                    return handleExpertMetrics(userId, requestBody);
+                case "updateExpertImage":
+                    return handleUpdateExpertImage(userId, requestBody);
                 default:
                     return null; // Not handled by this handler
             }
@@ -74,7 +84,9 @@ public class ExpertHandler {
             functionName.equals("get_expert_booking_metrics") ||
             functionName.equals("record_expert_payout") ||
             functionName.equals("set_expert_platform_fee") ||
-            functionName.equals("get_expert_platform_fee")
+            functionName.equals("get_expert_platform_fee") ||
+            functionName.equals("expert_metrics") ||
+            functionName.equals("updateExpertImage")
         );
     }
 
@@ -563,5 +575,116 @@ public class ExpertHandler {
             LoggingService.error("mark_expert_free_failed", e);
             return gson.toJson(Map.of("success", false, "errorMessage", "Failed to update expert status: " + e.getMessage()));
         }
+    }
+
+    /**
+     * Expert metrics: aggregated order and subscription earnings.
+     * Requires admin or matching expertId.
+     */
+    private String handleExpertMetrics(String userId, RequestBody requestBody) throws Exception {
+        Map<String, Object> response = new HashMap<>();
+        String expertId = requestBody.getExpertId();
+        if (isAdmin(userId) || userId.equals(expertId)) {
+            Query ordersQuery = db.collectionGroup("orders");
+            Query subscriptionsQuery = db.collectionGroup("subscription_payments");
+
+            if (expertId != null) {
+                ordersQuery = ordersQuery.whereEqualTo("expertId", expertId);
+                subscriptionsQuery = subscriptionsQuery.whereEqualTo("expertId", expertId);
+            }
+            if (requestBody.getCategory() != null && !("all").equals(requestBody.getCategory())) {
+                ordersQuery = ordersQuery.whereEqualTo("category", requestBody.getCategory());
+                subscriptionsQuery = subscriptionsQuery.whereEqualTo("category", requestBody.getCategory());
+            }
+            if (requestBody.getType() != null && !("all").equals(requestBody.getType())) {
+                ordersQuery = ordersQuery.whereEqualTo("type", requestBody.getType());
+            }
+            if (requestBody.getDateRangeFilter() != null && !requestBody.getDateRangeFilter().isEmpty()) {
+                ordersQuery = ordersQuery.orderBy("created_at", Query.Direction.DESCENDING);
+
+                SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+
+                Date startDate = dateFormat.parse(requestBody.getDateRangeFilter().get(0));
+                Timestamp startTimestamp = new Timestamp(startDate.getTime());
+
+                Date endDate = dateFormat.parse(requestBody.getDateRangeFilter().get(1));
+                Timestamp endTimestamp = new Timestamp(endDate.getTime());
+
+                ordersQuery = ordersQuery.whereGreaterThanOrEqualTo("created_at", startTimestamp);
+                ordersQuery = ordersQuery.whereLessThan("created_at", endTimestamp);
+
+                subscriptionsQuery = subscriptionsQuery.whereGreaterThanOrEqualTo("paymentReceivedAt", startTimestamp);
+                subscriptionsQuery = subscriptionsQuery.whereLessThan("paymentReceivedAt", endTimestamp);
+            }
+
+            ordersQuery = ordersQuery.whereEqualTo("subscription", false).orderBy("paymentReceivedAt", Query.Direction.ASCENDING);
+
+            AggregateQuerySnapshot ordersSnapshot = ordersQuery.aggregate(sum("amount")).get().get();
+            AggregateQuerySnapshot subscriptionsSnapshot = subscriptionsQuery.aggregate(sum("amount")).get().get();
+
+            Object orderEarnings = Objects.requireNonNull(ordersSnapshot.get(sum("amount")));
+            double orderEarningsDouble = 0.0;
+            if (orderEarnings instanceof Double) {
+                orderEarningsDouble = (Double) orderEarnings;
+            } else if (orderEarnings instanceof Long) {
+                orderEarningsDouble = ((Long) orderEarnings).doubleValue();
+            }
+
+            Object subscriptionEarnings = Objects.requireNonNull(subscriptionsSnapshot.get(sum("amount")));
+            double subscriptionEarningsDouble = 0.0;
+            if (subscriptionEarnings instanceof Double) {
+                subscriptionEarningsDouble = (Double) subscriptionEarnings;
+            } else if (subscriptionEarnings instanceof Long) {
+                subscriptionEarningsDouble = ((Long) subscriptionEarnings).doubleValue();
+            }
+
+            response.put("totalEarnings", orderEarningsDouble + subscriptionEarningsDouble);
+        } else {
+            return "Not authorized";
+        }
+        return gson.toJson(response);
+    }
+
+    /**
+     * Update expert display picture via Cloudinary upload.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private String handleUpdateExpertImage(String userId, RequestBody requestBody) throws Exception {
+        String base64Image = requestBody.getBase64Image();
+        if (base64Image == null || base64Image.isBlank()) {
+            return "Image not found";
+        }
+        String cloudinaryUrl = loadCloudinaryUrl();
+        if (cloudinaryUrl == null || cloudinaryUrl.isBlank()) {
+            return "Cloudinary not configured";
+        }
+        boolean isTest = "test".equals(System.getenv("ENVIRONMENT"));
+        Cloudinary cloudinary = new Cloudinary(cloudinaryUrl);
+        cloudinary.config.secure = true;
+        String path = isTest ? "test/" : "";
+        Map uploadResult = cloudinary.uploader().upload(base64Image, ObjectUtils.asMap(
+            "public_id", path + "expertDisplayPictures/" + userId,
+            "unique_filename", false,
+            "overwrite", true
+        ));
+        String url = String.valueOf(uploadResult.get("secure_url"));
+        LoggingService.info("expert_image_updated", Map.of("userId", userId, "url", url));
+        db.collection("users").document(userId).collection("public").document("store")
+            .set(Map.of("displayPicture", url), SetOptions.merge()).get();
+        return "Done";
+    }
+
+    private String loadCloudinaryUrl() {
+        try (FileInputStream fis = new FileInputStream("secrets.json")) {
+            String content = new String(fis.readAllBytes());
+            return new JSONObject(content).getString("CLOUDINARY_URL");
+        } catch (Exception e) {
+            LoggingService.error("handler_cloudinary_secrets_read_failed", e);
+            return null;
+        }
+    }
+
+    private boolean isAdmin(String userId) throws FirebaseAuthException {
+        return Boolean.TRUE.equals(FirebaseAuth.getInstance().getUser(userId).getCustomClaims().get("admin"));
     }
 }
