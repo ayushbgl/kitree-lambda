@@ -662,7 +662,7 @@ public class ServiceHandler {
 
     private void verifyOrderInDB(String userId, String orderId) throws ExecutionException, InterruptedException {
         this.db.collection("users").document(userId).collection("orders").document(orderId)
-            .update("paymentReceivedAt", new Timestamp(System.currentTimeMillis())).get();
+            .update("payment_received_at", com.google.cloud.Timestamp.now()).get();
     }
 
     private void incrementCouponUsageCount(String userId, String orderId) throws ExecutionException, InterruptedException {
