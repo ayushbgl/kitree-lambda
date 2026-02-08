@@ -30,7 +30,6 @@ import java.util.*;
 public class RashifalService {
 
     private static final String TTS_MODEL = "gemini-2.5-pro-preview-tts";
-    private static final String CLOUDINARY_URL = "cloudinary://334183382528294:C6nSfrjAMU0acJQ7WXPvmxCnSOY@kitree";
     private static final int SAMPLE_RATE = 24000;
     private static final int BITS_PER_SAMPLE = 16;
     private static final int NUM_CHANNELS = 1;
@@ -64,6 +63,16 @@ public class RashifalService {
         } else {
             LoggingService.error("rashifal_gemini_no_api_key", Map.of("environment", isTest ? "TEST" : "PROD"));
             this.geminiClient = null;
+        }
+    }
+
+    private String loadCloudinaryUrl() {
+        try {
+            JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
+            return rootNode.path("CLOUDINARY_URL").asText("");
+        } catch (IOException e) {
+            LoggingService.error("rashifal_cloudinary_secrets_read_failed", e);
+            return null;
         }
     }
 
@@ -270,7 +279,11 @@ public class RashifalService {
     }
 
     private String uploadToCloudinary(byte[] wavBytes, String userId) throws Exception {
-        Cloudinary cloudinary = new Cloudinary(CLOUDINARY_URL);
+        String cloudinaryUrl = loadCloudinaryUrl();
+        if (cloudinaryUrl == null || cloudinaryUrl.isEmpty()) {
+            throw new RuntimeException("CLOUDINARY_URL not configured in secrets.json");
+        }
+        Cloudinary cloudinary = new Cloudinary(cloudinaryUrl);
         cloudinary.config.secure = true;
         String path = isTest ? "test/" : "";
         Map uploadResult = cloudinary.uploader().upload(

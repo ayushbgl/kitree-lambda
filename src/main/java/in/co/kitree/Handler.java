@@ -691,7 +691,10 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 if (base64Image == null || base64Image.isBlank()) {
                     return "Image not found";
                 }
-                String cloudinaryUrl = "cloudinary://334183382528294:C6nSfrjAMU0acJQ7WXPvmxCnSOY@kitree";
+                String cloudinaryUrl = loadCloudinaryUrl();
+                if (cloudinaryUrl == null || cloudinaryUrl.isBlank()) {
+                    return "Cloudinary not configured";
+                }
                 Cloudinary cloudinary = new Cloudinary(cloudinaryUrl);
                 cloudinary.config.secure = true;
                 String path = this.isTest() ? "test/" : "";
@@ -2210,6 +2213,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
         LoggingService.debug("service_plan_loaded", Map.of("planId", planId != null ? planId : "null"));
         return servicePlan;
+    }
+
+    private String loadCloudinaryUrl() {
+        try (FileInputStream fis = new FileInputStream("secrets.json")) {
+            String content = new String(fis.readAllBytes());
+            return new JSONObject(content).getString("CLOUDINARY_URL");
+        } catch (Exception e) {
+            LoggingService.error("handler_cloudinary_secrets_read_failed", e);
+            return null;
+        }
     }
 
     private boolean isTest() {
