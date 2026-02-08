@@ -16,6 +16,7 @@ import in.co.kitree.pojos.*;
 import in.co.kitree.services.*;
 import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.lambda.LambdaClient;
+import software.amazon.awssdk.services.lambda.model.InvocationType;
 import software.amazon.awssdk.services.lambda.model.InvokeRequest;
 import software.amazon.awssdk.services.lambda.model.InvokeResponse;
 
@@ -40,6 +41,8 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private Firestore db;
     private Razorpay razorpay;
     protected PythonLambdaService pythonLambdaService;
+
+    private RashifalService rashifalService;
 
     private AdminHandler adminHandler;
     private ServiceHandler serviceHandler;
@@ -126,6 +129,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     }
 
     private void initHandlers(AstrologyService astrologyService, RashifalService rashifalService, StreamService streamService) {
+        this.rashifalService = rashifalService;
         this.adminHandler = new AdminHandler(db, razorpay);
         this.serviceHandler = new ServiceHandler(db, razorpay);
         this.astrologyHandler = new AstrologyHandler(db, astrologyService, pythonLambdaService, rashifalService);
@@ -188,6 +192,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         coldStart = false;
 
         try {
+            // Async rashifal worker: direct Lambda self-invocation, no API Gateway request context.
+            // Safe against spoofing from HTTP clients because API Gateway always sets requestContext.
+            if ("lambda.rashifal_worker".equals(event.getSource()) && event.getRequestContext() == null) {
+                if (rashifalService != null) {
+                    rashifalService.executeRashifalGeneration(gson.fromJson(event.getBody(), RequestBody.class).getUserId());
+                }
+                return null;
+            }
+
             // Scheduled cron events
             if ("aws.events".equals(event.getSource())) {
                 String detailType = event.getDetailType();
@@ -226,6 +239,20 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Authentication required"));
             }
 
+            // rashifal_generate uses fire-and-forget: quick return + Lambda async self-invocation
+            if ("rashifal_generate".equals(requestBody.getFunction()) && rashifalService != null) {
+                String quickResult = rashifalService.prepareRashifalGeneration(userId);
+                if (quickResult != null) return quickResult;
+                try {
+                    invokeRashifalAsync(context, userId);
+                } catch (Exception e) {
+                    LoggingService.error("rashifal_async_invoke_failed", e);
+                    rashifalService.cleanupRashifalGenerating(userId);
+                    return gson.toJson(Map.of("success", false, "errorMessage", "Generation service temporarily unavailable"));
+                }
+                return gson.toJson(Map.of("success", true));
+            }
+
             // Delegate to specialized handlers in order
             if (ExpertHandler.handles(requestBody.getFunction())) {
                 return expertHandler.handleRequest(requestBody.getFunction(), userId, requestBody);
@@ -260,6 +287,23 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             Sentry.flush(1000);
         }
         return null;
+    }
+
+    private void invokeRashifalAsync(Context context, String userId) {
+        RequestBody asyncBody = new RequestBody();
+        asyncBody.setFunction("rashifal_generate");
+        asyncBody.setUserId(userId);
+        RequestEvent asyncEvent = new RequestEvent();
+        asyncEvent.setSource("lambda.rashifal_worker");
+        asyncEvent.setBody(gson.toJson(asyncBody));
+        LambdaClient client = LambdaClient.builder()
+                .region(software.amazon.awssdk.regions.Region.AP_SOUTH_1)
+                .build();
+        client.invoke(InvokeRequest.builder()
+                .functionName(context.getFunctionName())
+                .invocationType(InvocationType.EVENT)
+                .payload(SdkBytes.fromUtf8String(gson.toJson(asyncEvent)))
+                .build());
     }
 
     private boolean isTest() {
