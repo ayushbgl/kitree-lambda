@@ -436,10 +436,11 @@ public class SessionHandler {
             var doc = this.db.collection("users").document(clientId).collection("orders").document(orderId);
             var documentSnapshot = doc.get().get();
             if (documentSnapshot.exists()) {
-                firebaseOrder.setExpertId((String) java.util.Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("expertId", ""));
-                firebaseOrder.setUserName((String) java.util.Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("userName", ""));
-                firebaseOrder.setVideo((boolean) java.util.Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("isVideo", false));
-                firebaseOrder.setPlanId((String) java.util.Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("planId", ""));
+                var data = java.util.Objects.requireNonNull(documentSnapshot.getData());
+                firebaseOrder.setExpertId((String) data.getOrDefault("expert_id", ""));
+                firebaseOrder.setUserName((String) data.getOrDefault("user_name", ""));
+                firebaseOrder.setVideo((boolean) data.getOrDefault("is_video", false));
+                firebaseOrder.setPlanId((String) data.getOrDefault("plan_id", ""));
             }
         } catch (Exception e) {
             return null;
