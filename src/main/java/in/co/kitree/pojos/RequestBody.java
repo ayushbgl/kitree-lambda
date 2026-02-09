@@ -16,6 +16,11 @@ public class RequestBody {
     private String gatewaySubscriptionId; // Payment gateway's subscription ID
     private String adminSecret;
     private String adminUid;
+
+    // Impersonation: client-provided target user ID
+    private String actAs;
+    // Set server-side after token extraction — never from JSON
+    private transient String callerUserId;
     private String certificateHolderName;
     private String certificateDate;
     private String certificateCourse;
@@ -298,6 +303,22 @@ public class RequestBody {
 
     public void setAdminUid(String adminUid) {
         this.adminUid = adminUid;
+    }
+
+    public String getActAs() {
+        return actAs;
+    }
+
+    public void setActAs(String actAs) {
+        this.actAs = actAs;
+    }
+
+    public String getCallerUserId() {
+        return callerUserId;
+    }
+
+    public void setCallerUserId(String callerUserId) {
+        this.callerUserId = callerUserId;
     }
 
     public RazorpayWebhookBody getRazorpayWebhookBody() {

@@ -297,9 +297,10 @@ public class ExpertHandler {
         LoggingService.info("record_expert_payout_started");
 
         try {
-            // Verify admin access
-            if (!isAdmin(adminUserId)) {
-                LoggingService.warn("record_expert_payout_unauthorized", Map.of("userId", adminUserId));
+            // Verify admin access against the original caller
+            String callerUserId = requestBody.getCallerUserId() != null ? requestBody.getCallerUserId() : adminUserId;
+            if (!isAdmin(callerUserId)) {
+                LoggingService.warn("record_expert_payout_unauthorized", Map.of("userId", callerUserId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
             }
 
@@ -379,9 +380,10 @@ public class ExpertHandler {
         LoggingService.info("set_expert_platform_fee_started");
 
         try {
-            // Verify admin access - CRITICAL security check
-            if (!isAdmin(adminUserId)) {
-                LoggingService.warn("set_expert_platform_fee_unauthorized", Map.of("userId", adminUserId));
+            // Verify admin access - CRITICAL security check against original caller
+            String callerUserId = requestBody.getCallerUserId() != null ? requestBody.getCallerUserId() : adminUserId;
+            if (!isAdmin(callerUserId)) {
+                LoggingService.warn("set_expert_platform_fee_unauthorized", Map.of("userId", callerUserId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
             }
 
@@ -460,9 +462,10 @@ public class ExpertHandler {
         LoggingService.info("get_expert_platform_fee_started");
 
         try {
-            // Verify admin access - CRITICAL security check
-            if (!isAdmin(adminUserId)) {
-                LoggingService.warn("get_expert_platform_fee_unauthorized", Map.of("userId", adminUserId));
+            // Verify admin access - CRITICAL security check against original caller
+            String callerUserId = requestBody.getCallerUserId() != null ? requestBody.getCallerUserId() : adminUserId;
+            if (!isAdmin(callerUserId)) {
+                LoggingService.warn("get_expert_platform_fee_unauthorized", Map.of("userId", callerUserId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
             }
 
@@ -584,7 +587,8 @@ public class ExpertHandler {
     private String handleExpertMetrics(String userId, RequestBody requestBody) throws Exception {
         Map<String, Object> response = new HashMap<>();
         String expertId = requestBody.getExpertId();
-        if (isAdmin(userId) || userId.equals(expertId)) {
+        String callerUserId = requestBody.getCallerUserId() != null ? requestBody.getCallerUserId() : userId;
+        if (isAdmin(callerUserId) || userId.equals(expertId)) {
             Query ordersQuery = db.collectionGroup("orders");
             Query subscriptionsQuery = db.collectionGroup("subscription_payments");
 

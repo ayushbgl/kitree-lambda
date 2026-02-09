@@ -21,6 +21,7 @@ import software.amazon.awssdk.services.lambda.model.InvokeRequest;
 import software.amazon.awssdk.services.lambda.model.InvokeResponse;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 import io.sentry.Sentry;
 import io.sentry.ITransaction;
@@ -36,6 +37,20 @@ import io.sentry.protocol.User;
  * Routes requests to specialized handlers. No business logic lives here.
  */
 public class Handler implements RequestHandler<RequestEvent, Object> {
+
+    /**
+     * Functions where actAs impersonation is forbidden (call/session related).
+     */
+    private static final Set<String> BLOCKED_ACT_AS_FUNCTIONS = new HashSet<>(Arrays.asList(
+        "get_stream_user_token", "create_call", "start_session", "join_session", "leave_session",
+        "stop_session", "raise_hand", "lower_hand", "promote_participant", "demote_participant",
+        "mute_participant", "kick_participant", "toggle_session_gifts", "send_gift",
+        "on_demand_consultation_initiate", "on_demand_consultation_connect",
+        "on_demand_consultation_heartbeat", "update_consultation_max_duration",
+        "on_demand_consultation_end", "cleanup_stale_order", "recalculate_charge",
+        "submit_review", "make_call", "buy_gift", "buy_product", "buy_products",
+        "cancel_subscription", "get_user_product_orders"
+    ));
 
     Gson gson = (new GsonBuilder()).setPrettyPrinting().create();
     private Firestore db;
@@ -233,21 +248,32 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 User sentryUser = new User();
                 sentryUser.setId(userId);
                 Sentry.setUser(sentryUser);
+                // Set callerUserId server-side — client cannot spoof this
+                requestBody.setCallerUserId(userId);
             }
 
             if (userId == null && requiresAuthentication(requestBody.getFunction())) {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Authentication required"));
             }
 
+            // Resolve effective user ID (handles actAs impersonation)
+            String effectiveUserId = resolveEffectiveUserId(userId, requestBody, requestBody.getFunction());
+            if (effectiveUserId == null && requestBody.getActAs() != null && !requestBody.getActAs().isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Not authorized"));
+            }
+            if (effectiveUserId == null) {
+                effectiveUserId = userId;
+            }
+
             // rashifal_generate uses fire-and-forget: quick return + Lambda async self-invocation
             if ("rashifal_generate".equals(requestBody.getFunction()) && rashifalService != null) {
-                String quickResult = rashifalService.prepareRashifalGeneration(userId);
+                String quickResult = rashifalService.prepareRashifalGeneration(effectiveUserId);
                 if (quickResult != null) return quickResult;
                 try {
-                    invokeRashifalAsync(context, userId);
+                    invokeRashifalAsync(context, effectiveUserId);
                 } catch (Exception e) {
                     LoggingService.error("rashifal_async_invoke_failed", e);
-                    rashifalService.cleanupRashifalGenerating(userId);
+                    rashifalService.cleanupRashifalGenerating(effectiveUserId);
                     return gson.toJson(Map.of("success", false, "errorMessage", "Generation service temporarily unavailable"));
                 }
                 return gson.toJson(Map.of("success", true));
@@ -255,25 +281,25 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
             // Delegate to specialized handlers in order
             if (ExpertHandler.handles(requestBody.getFunction())) {
-                return expertHandler.handleRequest(requestBody.getFunction(), userId, requestBody);
+                return expertHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
             }
             if (AstrologyHandler.handles(requestBody.getFunction())) {
-                return astrologyHandler.handleRequest(requestBody.getFunction(), userId, requestBody);
+                return astrologyHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
             }
             if (SessionHandler.handles(requestBody.getFunction())) {
-                return sessionHandler.handleRequest(requestBody.getFunction(), userId, requestBody);
+                return sessionHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
             }
             if (ServiceHandler.handles(requestBody.getFunction())) {
-                return serviceHandler.handleRequest(requestBody.getFunction(), userId, requestBody);
+                return serviceHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
             }
             if (ConsultationHandler.handles(requestBody.getFunction())) {
-                return consultationHandler.handleRequest(requestBody.getFunction(), userId, requestBody);
+                return consultationHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
             }
             if (ProductOrderHandler.handles(requestBody.getFunction())) {
-                return productOrderHandler.handleRequest(requestBody.getFunction(), userId, requestBody);
+                return productOrderHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
             }
             if (WalletHandler.handles(requestBody.getFunction())) {
-                return walletHandler.handleRequest(requestBody.getFunction(), userId, requestBody);
+                return walletHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
             }
 
         } catch (Exception e) {
@@ -314,7 +340,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         return true;
     }
 
-    private String extractUserIdFromToken(RequestEvent event, String functionName) {
+    protected String extractUserIdFromToken(RequestEvent event, String functionName) {
         String token = null;
         if (event.getHeaders() != null) {
             token = AuthenticationService.extractTokenFromHeaders(event.getHeaders());
@@ -328,6 +354,31 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             LoggingService.warn("token_verification_failed", Map.of("error", e.getMessage()));
             return null;
         }
+    }
+
+    /**
+     * Resolves the effective user ID for data access.
+     * If actAs is set: verifies the caller is admin and the function is not blocked.
+     * Returns null on authorization failure (caller should return error response).
+     */
+    private String resolveEffectiveUserId(String callerUserId, RequestBody requestBody, String functionName) throws FirebaseAuthException {
+        String actAs = requestBody.getActAs();
+        if (actAs == null || actAs.isEmpty()) {
+            return callerUserId;
+        }
+        if (BLOCKED_ACT_AS_FUNCTIONS.contains(functionName)) {
+            LoggingService.warn("act_as_blocked_function", Map.of("function", functionName, "callerUserId", callerUserId));
+            return null; // signals "Not authorized"
+        }
+        boolean adminClaim = Boolean.TRUE.equals(
+            com.google.firebase.auth.FirebaseAuth.getInstance().getUser(callerUserId).getCustomClaims().get("admin")
+        );
+        if (!adminClaim) {
+            LoggingService.warn("act_as_non_admin", Map.of("callerUserId", callerUserId));
+            return null; // signals "Not authorized"
+        }
+        LoggingService.info("act_as_resolved", Map.of("callerUserId", callerUserId, "actAs", actAs, "function", functionName));
+        return actAs;
     }
 
     public class HandlerException extends Exception {
