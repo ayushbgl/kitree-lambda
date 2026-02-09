@@ -55,6 +55,7 @@ Resources:
                 - lambda:InvokeFunction
               Resource:
                 - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:certgen"
+                - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:java-lambda-${Environment}"
       AutoPublishAlias: !Ref Environment
       DeploymentPreference:
         Type: !If [ IsProd, AllAtOnce, Canary10Percent5Minutes ]
