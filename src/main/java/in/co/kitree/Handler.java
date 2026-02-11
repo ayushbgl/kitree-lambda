@@ -71,12 +71,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private static volatile boolean coldStart = true;
 
     static {
-        Sentry.init(options -> {
-            options.setDsn(System.getenv("SENTRY_DSN"));
-            options.setEnvironment("test".equals(System.getenv("ENVIRONMENT")) ? "development" : "production");
-            options.setTracesSampleRate(1.0);
-            options.setSendDefaultPii(true);
-        });
+        String sentryDsn = System.getenv("SENTRY_DSN");
+        if (sentryDsn != null && !sentryDsn.isEmpty()) {
+            Sentry.init(options -> {
+                options.setDsn(sentryDsn);
+                options.setEnvironment("test".equals(System.getenv("ENVIRONMENT")) ? "development" : "production");
+                options.setTracesSampleRate(1.0);
+                options.setSendDefaultPii(true);
+            });
+        }
     }
 
     public Handler() {
