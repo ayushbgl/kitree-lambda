@@ -27,9 +27,6 @@ Parameters:
     Type: String
     Description: Function URL of the kitree-astrology-api Lambda for this environment
 
-  AstrologyApiToken:
-    Type: String
-    Description: API token for authenticating with the astrology lambda
 
 Globals:
   Function:
@@ -56,7 +53,6 @@ Resources:
           ENVIRONMENT: !Ref Environment
           SENTRY_DSN: "https://dc337a8e397dd75f982b60a24018dd22@o1209671.ingest.us.sentry.io/4510843972354048"
           ASTROLOGY_LAMBDA_URL: !Ref AstrologyLambdaUrl
-          ASTROLOGY_API_TOKEN: !Ref AstrologyApiToken
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:

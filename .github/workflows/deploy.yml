@@ -277,17 +277,6 @@ jobs:
         if: inputs.environment != 'only-sync-rules'
         id: resolve-params
         run: |
-          # Read ASTROLOGY_API_TOKEN from kitree-secrets
-          ASTROLOGY_API_TOKEN=$(jq -r '.ASTROLOGY_API_TOKEN // empty' secrets/kitree-lambda/secrets.json)
-          if [ -z "$ASTROLOGY_API_TOKEN" ]; then
-            echo "❌ ASTROLOGY_API_TOKEN not found in secrets/kitree-lambda/secrets.json"
-            exit 1
-          fi
-          echo "✅ ASTROLOGY_API_TOKEN loaded from kitree-secrets"
-          # Mask the token so it doesn't appear in logs
-          echo "::add-mask::$ASTROLOGY_API_TOKEN"
-          echo "ASTROLOGY_API_TOKEN=$ASTROLOGY_API_TOKEN" >> $GITHUB_ENV
-
           # Dynamically fetch astrology lambda Function URL for each environment
           if [ "${{ inputs.environment }}" = "test" ] || [ "${{ inputs.environment }}" = "both" ]; then
             TEST_URL=$(aws lambda get-function-url-config \
@@ -346,7 +335,6 @@ jobs:
               ApiDomainName=${{ env.API_DOMAIN_TEST }} \
               CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
               AstrologyLambdaUrl=${ASTROLOGY_LAMBDA_URL_TEST} \
-              AstrologyApiToken=${ASTROLOGY_API_TOKEN} \
             --no-fail-on-empty-changeset
 
           echo "📤 Fetching important TEST stack outputs..."
@@ -395,7 +383,6 @@ jobs:
               ApiDomainName=${{ env.API_DOMAIN_PROD }} \
               CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
               AstrologyLambdaUrl=${ASTROLOGY_LAMBDA_URL_PROD} \
-              AstrologyApiToken=${ASTROLOGY_API_TOKEN} \
             --no-fail-on-empty-changeset
 
           echo "📤 Fetching important PROD stack outputs..."
