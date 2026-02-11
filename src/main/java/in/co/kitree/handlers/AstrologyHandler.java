@@ -37,57 +37,6 @@ public class AstrologyHandler {
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     }
 
-    /**
-     * Check if a function name is handled by this handler.
-     */
-    public static boolean handles(String functionName) {
-        return functionName != null && (
-            functionName.equals("get_astrological_details") ||
-            functionName.equals("get_dasha_details") ||
-            functionName.equals("get_divisional_charts") ||
-            functionName.equals("get_gochar_details") ||
-            functionName.equals("rashifal_generate") ||
-            functionName.equals("generate_report") ||
-            functionName.equals("get_certificate_courses") ||
-            functionName.equals("generate_certificate") ||
-            functionName.equals("generate_aura_report")
-        );
-    }
-
-    /**
-     * Route the request to the appropriate handler method.
-     */
-    public String handleRequest(String functionName, String userId, RequestBody requestBody) {
-        try {
-            switch (functionName) {
-                case "get_astrological_details":
-                    return astrologyService.getAstrologicalDetails(requestBody);
-                case "get_dasha_details":
-                    return astrologyService.getDashaDetails(requestBody);
-                case "get_divisional_charts":
-                    return astrologyService.getDivisionalCharts(requestBody);
-                case "get_gochar_details":
-                    return handleGetGocharDetails(requestBody);
-                case "rashifal_generate":
-                    return rashifalService.generateRashifal(userId);
-                case "generate_report":
-                    String language = requestBody.getLanguage() == null ? "en" : requestBody.getLanguage();
-                    return fulfillDigitalOrders(userId, requestBody.getOrderId(), language);
-                case "get_certificate_courses":
-                    return handleGetCertificateCourses(requestBody);
-                case "generate_certificate":
-                    return handleGenerateCertificate(requestBody);
-                case "generate_aura_report":
-                    return handleGenerateAuraReport(userId, requestBody);
-                default:
-                    return null;
-            }
-        } catch (Exception e) {
-            LoggingService.error("astrology_handler_exception", e);
-            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
-        }
-    }
-
     // ============= Handler Methods =============
 
     private String handleGetGocharDetails(RequestBody requestBody) throws Exception {

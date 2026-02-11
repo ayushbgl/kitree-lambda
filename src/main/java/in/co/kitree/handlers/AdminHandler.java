@@ -43,43 +43,6 @@ public class AdminHandler {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
-    /**
-     * Check if a function name is handled by this handler.
-     * Note: These functions require no auth — they use their own secrets.
-     */
-    public static boolean handles(String functionName) {
-        return functionName != null && (
-            functionName.equals("make_admin") ||
-            functionName.equals("remove_admin") ||
-            functionName.equals("razorpay_webhook") ||
-            functionName.equals("app_startup")
-        );
-    }
-
-    /**
-     * Route the request to the appropriate handler method.
-     * Returns null if function is not handled by this handler.
-     */
-    public String handleRequest(String functionName, RequestBody requestBody) {
-        try {
-            switch (functionName) {
-                case "make_admin":
-                    return handleMakeAdmin(requestBody);
-                case "remove_admin":
-                    return handleRemoveAdmin(requestBody);
-                case "razorpay_webhook":
-                    return handleRazorpayWebhook(requestBody);
-                case "app_startup":
-                    return handleAppStartup(requestBody);
-                default:
-                    return null;
-            }
-        } catch (Exception e) {
-            LoggingService.error("admin_handler_exception", e);
-            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
-        }
-    }
-
     private String handleMakeAdmin(RequestBody requestBody) throws FirebaseAuthException {
         if (!ADMIN_SECRET.equals(requestBody.getAdminSecret())) {
             return "Not Authorized";

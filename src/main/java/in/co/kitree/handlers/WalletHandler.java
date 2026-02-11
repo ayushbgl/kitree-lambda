@@ -33,28 +33,6 @@ public class WalletHandler {
     }
 
     /**
-     * Check if this handler handles the given function name.
-     */
-    public static boolean handles(String functionName) {
-        return "wallet_balance".equals(functionName) ||
-               "create_wallet_recharge_order".equals(functionName);
-    }
-
-    /**
-     * Route the request to the appropriate handler method.
-     */
-    public String handleRequest(String functionName, String userId, RequestBody requestBody) throws Exception {
-        switch (functionName) {
-            case "wallet_balance":
-                return handleWalletBalance(userId, requestBody);
-            case "create_wallet_recharge_order":
-                return handleCreateWalletRechargeOrder(userId, requestBody);
-            default:
-                return gson.toJson(Map.of("success", false, "errorMessage", "Unknown wallet function: " + functionName));
-        }
-    }
-
-    /**
      * Get wallet balance for a user with a specific expert.
      * Requires expertId - wallets are per-expert.
      */

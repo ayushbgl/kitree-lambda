@@ -35,61 +35,6 @@ public class ExpertHandler {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
-    /**
-     * Routes expert-related function calls to the appropriate handler method.
-     *
-     * @param functionName The function name from the request
-     * @param userId The authenticated user ID
-     * @param requestBody The request body
-     * @return The response string, or null if the function is not handled by this handler
-     */
-    public String handleRequest(String functionName, String userId, RequestBody requestBody) {
-        try {
-            switch (functionName) {
-                case "mark_expert_busy":
-                    return handleMarkExpertBusy(userId, requestBody.getOrderId());
-                case "mark_expert_free":
-                    return handleMarkExpertFree(userId, requestBody.getOrderId());
-                case "expert_earnings_balance":
-                    return handleExpertEarningsBalance(userId, requestBody);
-                case "get_expert_booking_metrics":
-                    return handleGetExpertBookingMetrics(userId, requestBody);
-                case "record_expert_payout":
-                    return handleRecordExpertPayout(userId, requestBody);
-                case "set_expert_platform_fee":
-                    return handleSetExpertPlatformFee(userId, requestBody);
-                case "get_expert_platform_fee":
-                    return handleGetExpertPlatformFee(userId, requestBody);
-                case "expert_metrics":
-                    return handleExpertMetrics(userId, requestBody);
-                case "updateExpertImage":
-                    return handleUpdateExpertImage(userId, requestBody);
-                default:
-                    return null; // Not handled by this handler
-            }
-        } catch (Exception e) {
-            LoggingService.error("expert_handler_exception", e);
-            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
-        }
-    }
-
-    /**
-     * Check if a function name is handled by this handler.
-     */
-    public static boolean handles(String functionName) {
-        return functionName != null && (
-            functionName.equals("mark_expert_busy") ||
-            functionName.equals("mark_expert_free") ||
-            functionName.equals("expert_earnings_balance") ||
-            functionName.equals("get_expert_booking_metrics") ||
-            functionName.equals("record_expert_payout") ||
-            functionName.equals("set_expert_platform_fee") ||
-            functionName.equals("get_expert_platform_fee") ||
-            functionName.equals("expert_metrics") ||
-            functionName.equals("updateExpertImage")
-        );
-    }
-
     // ============= Helper Methods =============
 
     private boolean isAdmin(String userId) throws FirebaseAuthException {

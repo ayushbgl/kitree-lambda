@@ -37,67 +37,6 @@ public class ConsultationHandler {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
-    /**
-     * Routes consultation-related function calls to the appropriate handler method.
-     *
-     * @param functionName The function name from the request
-     * @param userId The authenticated user ID
-     * @param requestBody The request body
-     * @return The response string, or null if the function is not handled by this handler
-     */
-    public String handleRequest(String functionName, String userId, RequestBody requestBody) {
-        try {
-            switch (functionName) {
-                case "on_demand_consultation_initiate":
-                    return handleOnDemandConsultationInitiate(userId, requestBody);
-                case "on_demand_consultation_connect":
-                    return handleOnDemandConsultationConnect(userId, requestBody);
-                case "on_demand_consultation_heartbeat":
-                    return handleOnDemandConsultationHeartbeat(userId, requestBody);
-                case "update_consultation_max_duration":
-                    return handleUpdateConsultationMaxDuration(userId, requestBody);
-                case "on_demand_consultation_end":
-                    return handleOnDemandConsultationEnd(userId, requestBody);
-                case "submit_review":
-                    return handleSubmitReview(userId, requestBody);
-                case "cleanup_stale_order":
-                    return handleCleanupStaleOrder(userId, requestBody);
-                case "recalculate_charge":
-                    return handleRecalculateCharge(requestBody);
-                case "generate_consultation_summary":
-                    return handleGenerateConsultationSummary(userId, requestBody);
-                case "get_consultation_summary":
-                    return handleGetConsultationSummary(userId, requestBody);
-                case "get_active_call_for_user":
-                    return handleGetActiveCallForUser(userId, requestBody);
-                default:
-                    return null; // Not handled by this handler
-            }
-        } catch (Exception e) {
-            LoggingService.error("consultation_handler_exception", e);
-            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
-        }
-    }
-
-    /**
-     * Check if a function name is handled by this handler.
-     */
-    public static boolean handles(String functionName) {
-        return functionName != null && (
-            functionName.equals("on_demand_consultation_initiate") ||
-            functionName.equals("on_demand_consultation_connect") ||
-            functionName.equals("on_demand_consultation_heartbeat") ||
-            functionName.equals("update_consultation_max_duration") ||
-            functionName.equals("on_demand_consultation_end") ||
-            functionName.equals("cleanup_stale_order") ||
-            functionName.equals("recalculate_charge") ||
-            functionName.equals("generate_consultation_summary") ||
-            functionName.equals("get_consultation_summary") ||
-            functionName.equals("get_active_call_for_user") ||
-            functionName.equals("submit_review")
-        );
-    }
-
     // ============= Helper Methods =============
 
     /**

@@ -33,56 +33,6 @@ public class ServiceHandler {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
-    /**
-     * Check if a function name is handled by this handler.
-     */
-    public static boolean handles(String functionName) {
-        return functionName != null && (
-            functionName.equals("buy_service") ||
-            functionName.equals("buy_gift") ||
-            functionName.equals("apply_coupon") ||
-            functionName.equals("checkReferralBonus") ||
-            functionName.equals("verify_payment") ||
-            functionName.equals("cancel_subscription") ||
-            functionName.equals("make_call") ||
-            functionName.equals("confirm_appointment") ||
-            functionName.equals("get_expert_availability")
-        );
-    }
-
-    /**
-     * Route the request to the appropriate handler method.
-     */
-    public String handleRequest(String functionName, String userId, RequestBody requestBody) {
-        try {
-            switch (functionName) {
-                case "buy_service":
-                    return handleBuyService(userId, requestBody);
-                case "buy_gift":
-                    return handleBuyGift(userId, requestBody);
-                case "apply_coupon":
-                    return handleApplyCoupon(userId, requestBody);
-                case "checkReferralBonus":
-                    return handleCheckReferralBonus(userId, requestBody);
-                case "verify_payment":
-                    return handleVerifyPayment(userId, requestBody);
-                case "cancel_subscription":
-                    return handleCancelSubscription(userId, requestBody);
-                case "make_call":
-                    return handleMakeCall(userId, requestBody);
-                case "confirm_appointment":
-                    return handleConfirmAppointment(userId, requestBody);
-                case "get_expert_availability":
-                    return handleGetExpertAvailability(userId, requestBody);
-                default:
-                    return null;
-            }
-        } catch (Exception e) {
-            LoggingService.error("service_handler_exception", e);
-            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
-        }
-    }
-
     // ============= Service Handler Methods =============
 
     private String handleBuyService(String userId, RequestBody requestBody) throws Exception {

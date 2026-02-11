@@ -4,7 +4,6 @@ import java.util.List;
 import java.util.Map;
 
 public class RequestBody {
-    private String function;
     private String serviceName; // To buy a service
     private String base64Image;
     private String planName; // To buy a service
@@ -230,14 +229,6 @@ public class RequestBody {
 
 
     public RequestBody() {
-    }
-
-    public String getFunction() {
-        return function;
-    }
-
-    public void setFunction(String function) {
-        this.function = function;
     }
 
     public String getServiceName() {

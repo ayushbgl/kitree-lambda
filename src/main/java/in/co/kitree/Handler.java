@@ -13,6 +13,8 @@ import com.google.gson.GsonBuilder;
 import com.razorpay.RazorpayException;
 import in.co.kitree.handlers.*;
 import in.co.kitree.pojos.*;
+import in.co.kitree.rest.ApiResponse;
+import in.co.kitree.rest.RestRouter;
 import in.co.kitree.services.*;
 import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.lambda.LambdaClient;
@@ -39,17 +41,13 @@ import io.sentry.protocol.User;
 public class Handler implements RequestHandler<RequestEvent, Object> {
 
     /**
-     * Functions where actAs impersonation is forbidden (call/session related).
+     * REST paths where actAs impersonation is forbidden (real-time/transactional operations).
      */
-    private static final Set<String> BLOCKED_ACT_AS_FUNCTIONS = new HashSet<>(Arrays.asList(
-        "get_stream_user_token", "create_call", "start_session", "join_session", "leave_session",
-        "stop_session", "raise_hand", "lower_hand", "promote_participant", "demote_participant",
-        "mute_participant", "kick_participant", "toggle_session_gifts", "send_gift",
-        "on_demand_consultation_initiate", "on_demand_consultation_connect",
-        "on_demand_consultation_heartbeat", "update_consultation_max_duration",
-        "on_demand_consultation_end", "cleanup_stale_order", "recalculate_charge",
-        "submit_review", "make_call", "buy_gift", "buy_product", "buy_products",
-        "cancel_subscription", "get_user_product_orders"
+    private static final Set<String> BLOCKED_ACT_AS_PATHS = new HashSet<>(Arrays.asList(
+        "/api/v1/stream/token", "/api/v1/calls/create",
+        "/api/v1/sessions", "/api/v1/consultations",
+        "/api/v1/reviews", "/api/v1/products/buy",
+        "/api/v1/orders"
     ));
 
     Gson gson = (new GsonBuilder()).setPrettyPrinting().create();
@@ -68,6 +66,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     private ProductOrderHandler productOrderHandler;
     private WalletHandler walletHandler;
     private WebhookHandler webhookHandler;
+    private RestRouter restRouter;
 
     private static volatile boolean coldStart = true;
 
@@ -154,6 +153,10 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         this.productOrderHandler = new ProductOrderHandler(db, razorpay);
         this.walletHandler = new WalletHandler(db, razorpay);
         this.webhookHandler = new WebhookHandler(db, isTest());
+        this.restRouter = new RestRouter(
+                adminHandler, walletHandler, consultationHandler, expertHandler,
+                productOrderHandler, serviceHandler, astrologyHandler, sessionHandler
+        );
     }
 
     protected PythonLambdaService createPythonLambdaService() {
@@ -190,7 +193,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         };
     }
 
-    public String handleRequest(RequestEvent event, Context context) {
+    public Object handleRequest(RequestEvent event, Context context) {
         LoggingService.initRequest(context);
 
         Map<String, String> incomingHeaders = event.getHeaders() != null ? event.getHeaders() : Collections.emptyMap();
@@ -235,71 +238,62 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return webhookHandler.handleWebhookRequest(event, rawPath);
             }
 
-            RequestBody requestBody = this.gson.fromJson(event.getBody(), RequestBody.class);
+            // --- REST API routing ---
+            // Routes /api/v1/* paths through RestRouter with proper HTTP status codes.
+            // Returns a structured Map response that Lambda Function URL interprets
+            // as {statusCode, headers, body} instead of wrapping in HTTP 200.
+            if (RestRouter.isRestPath(rawPath)) {
+                String httpMethod = extractHttpMethod(event);
+                RequestBody requestBody = (event.getBody() != null && !event.getBody().isEmpty())
+                        ? this.gson.fromJson(event.getBody(), RequestBody.class)
+                        : new RequestBody();
 
-            // Admin/system functions that bypass normal auth
-            if (AdminHandler.handles(requestBody.getFunction())) {
-                return adminHandler.handleRequest(requestBody.getFunction(), requestBody);
-            }
-
-            // Extract and verify Firebase token
-            String userId = extractUserIdFromToken(event, requestBody.getFunction());
-            if (userId != null) {
-                User sentryUser = new User();
-                sentryUser.setId(userId);
-                Sentry.setUser(sentryUser);
-                // Set callerUserId server-side — client cannot spoof this
-                requestBody.setCallerUserId(userId);
-            }
-
-            if (userId == null && requiresAuthentication(requestBody.getFunction())) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Authentication required"));
-            }
-
-            // Resolve effective user ID (handles actAs impersonation)
-            String effectiveUserId = resolveEffectiveUserId(userId, requestBody, requestBody.getFunction());
-            if (effectiveUserId == null && requestBody.getActAs() != null && !requestBody.getActAs().isEmpty()) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Not authorized"));
-            }
-            if (effectiveUserId == null) {
-                effectiveUserId = userId;
-            }
-
-            // rashifal_generate uses fire-and-forget: quick return + Lambda async self-invocation
-            if ("rashifal_generate".equals(requestBody.getFunction()) && rashifalService != null) {
-                String quickResult = rashifalService.prepareRashifalGeneration(effectiveUserId);
-                if (quickResult != null) return quickResult;
-                try {
-                    invokeRashifalAsync(context, effectiveUserId);
-                } catch (Exception e) {
-                    LoggingService.error("rashifal_async_invoke_failed", e);
-                    rashifalService.cleanupRashifalGenerating(effectiveUserId);
-                    return gson.toJson(Map.of("success", false, "errorMessage", "Generation service temporarily unavailable"));
+                // Authenticate
+                String userId = extractUserIdFromToken(event);
+                if (userId != null) {
+                    User sentryUser = new User();
+                    sentryUser.setId(userId);
+                    Sentry.setUser(sentryUser);
+                    requestBody.setCallerUserId(userId);
                 }
-                return gson.toJson(Map.of("success", true));
-            }
 
-            // Delegate to specialized handlers in order
-            if (ExpertHandler.handles(requestBody.getFunction())) {
-                return expertHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
-            }
-            if (AstrologyHandler.handles(requestBody.getFunction())) {
-                return astrologyHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
-            }
-            if (SessionHandler.handles(requestBody.getFunction())) {
-                return sessionHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
-            }
-            if (ServiceHandler.handles(requestBody.getFunction())) {
-                return serviceHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
-            }
-            if (ConsultationHandler.handles(requestBody.getFunction())) {
-                return consultationHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
-            }
-            if (ProductOrderHandler.handles(requestBody.getFunction())) {
-                return productOrderHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
-            }
-            if (WalletHandler.handles(requestBody.getFunction())) {
-                return walletHandler.handleRequest(requestBody.getFunction(), effectiveUserId, requestBody);
+                if (userId == null) {
+                    return ApiResponse.unauthorizedMessage("Unauthorized: Authentication required").toLambdaResponse();
+                }
+
+                // Resolve effective user ID (handles actAs impersonation)
+                String effectiveUserId = resolveEffectiveUserId(userId, requestBody, rawPath);
+                if (effectiveUserId == null && requestBody.getActAs() != null && !requestBody.getActAs().isEmpty()) {
+                    return ApiResponse.forbiddenMessage("Not authorized").toLambdaResponse();
+                }
+                if (effectiveUserId == null) {
+                    effectiveUserId = userId;
+                }
+
+                // Handle rashifal_generate via REST
+                if ("/api/v1/rashifal/generate".equals(rawPath) && "POST".equalsIgnoreCase(httpMethod) && rashifalService != null) {
+                    String quickResult = rashifalService.prepareRashifalGeneration(effectiveUserId);
+                    if (quickResult != null) {
+                        return ApiResponse.ok(quickResult).toLambdaResponse();
+                    }
+                    try {
+                        invokeRashifalAsync(context, effectiveUserId);
+                    } catch (Exception e) {
+                        LoggingService.error("rashifal_async_invoke_failed", e);
+                        rashifalService.cleanupRashifalGenerating(effectiveUserId);
+                        return ApiResponse.errorMessage("Generation service temporarily unavailable").toLambdaResponse();
+                    }
+                    return ApiResponse.ok(gson.toJson(Map.of("success", true))).toLambdaResponse();
+                }
+
+                ApiResponse response = restRouter.route(httpMethod, rawPath, event.getRawQueryString(), effectiveUserId, requestBody);
+                if (response != null) {
+                    sentryTx.setTag("http.status_code", String.valueOf(response.getStatusCode()));
+                    return response.toLambdaResponse();
+                }
+
+                // No matching REST route
+                return ApiResponse.notFoundMessage("Not found: " + httpMethod + " " + rawPath).toLambdaResponse();
             }
 
         } catch (Exception e) {
@@ -307,17 +301,35 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             sentryTx.setThrowable(e);
             sentryTx.setStatus(SpanStatus.INTERNAL_ERROR);
             LoggingService.error("request_handler_exception", e);
-            return gson.toJson(Map.of("success", false));
+            return ApiResponse.errorMessage("Internal server error").toLambdaResponse();
         } finally {
             sentryTx.finish();
             Sentry.flush(1000);
         }
-        return null;
+        return ApiResponse.notFoundMessage("Not found").toLambdaResponse();
+    }
+
+    /**
+     * Extract HTTP method from the Lambda Function URL event.
+     * Lambda Function URLs put the method in requestContext.http.method.
+     * Falls back to the top-level httpMethod field or defaults to POST.
+     */
+    private String extractHttpMethod(RequestEvent event) {
+        // Lambda Function URL format: requestContext.http.method
+        if (event.getRequestContext() != null
+                && event.getRequestContext().getHttp() != null
+                && event.getRequestContext().getHttp().getMethod() != null) {
+            return event.getRequestContext().getHttp().getMethod();
+        }
+        // Fallback to top-level field (API Gateway or custom)
+        if (event.getHttpMethod() != null) {
+            return event.getHttpMethod();
+        }
+        return "POST"; // default
     }
 
     private void invokeRashifalAsync(Context context, String userId) {
         RequestBody asyncBody = new RequestBody();
-        asyncBody.setFunction("rashifal_generate");
         asyncBody.setUserId(userId);
         RequestEvent asyncEvent = new RequestEvent();
         asyncEvent.setSource("lambda.rashifal_worker");
@@ -336,11 +348,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         return "test".equals(System.getenv("ENVIRONMENT"));
     }
 
-    private boolean requiresAuthentication(String functionName) {
-        return true;
-    }
-
-    protected String extractUserIdFromToken(RequestEvent event, String functionName) {
+    protected String extractUserIdFromToken(RequestEvent event) {
         String token = null;
         if (event.getHeaders() != null) {
             token = AuthenticationService.extractTokenFromHeaders(event.getHeaders());
@@ -358,26 +366,31 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
     /**
      * Resolves the effective user ID for data access.
-     * If actAs is set: verifies the caller is admin and the function is not blocked.
+     * If actAs is set: verifies the caller is admin and the path is not blocked.
      * Returns null on authorization failure (caller should return error response).
      */
-    private String resolveEffectiveUserId(String callerUserId, RequestBody requestBody, String functionName) throws FirebaseAuthException {
+    private String resolveEffectiveUserId(String callerUserId, RequestBody requestBody, String path) throws FirebaseAuthException {
         String actAs = requestBody.getActAs();
         if (actAs == null || actAs.isEmpty()) {
             return callerUserId;
         }
-        if (BLOCKED_ACT_AS_FUNCTIONS.contains(functionName)) {
-            LoggingService.warn("act_as_blocked_function", Map.of("function", functionName, "callerUserId", callerUserId));
-            return null; // signals "Not authorized"
+        // Block impersonation on sensitive paths (real-time, transactional)
+        if (path != null) {
+            for (String blockedPrefix : BLOCKED_ACT_AS_PATHS) {
+                if (path.startsWith(blockedPrefix)) {
+                    LoggingService.warn("act_as_blocked_path", Map.of("path", path, "callerUserId", callerUserId));
+                    return null;
+                }
+            }
         }
         boolean adminClaim = Boolean.TRUE.equals(
             com.google.firebase.auth.FirebaseAuth.getInstance().getUser(callerUserId).getCustomClaims().get("admin")
         );
         if (!adminClaim) {
             LoggingService.warn("act_as_non_admin", Map.of("callerUserId", callerUserId));
-            return null; // signals "Not authorized"
+            return null;
         }
-        LoggingService.info("act_as_resolved", Map.of("callerUserId", callerUserId, "actAs", actAs, "function", functionName));
+        LoggingService.info("act_as_resolved", Map.of("callerUserId", callerUserId, "actAs", actAs, "path", path != null ? path : ""));
         return actAs;
     }
 
