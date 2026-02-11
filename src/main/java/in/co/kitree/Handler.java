@@ -200,16 +200,19 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         LoggingService.initRequest(context);
 
         Map<String, String> incomingHeaders = event.getHeaders() != null ? event.getHeaders() : Collections.emptyMap();
+        ITransaction sentryTx = null;
         TransactionContext sentryCtx = Sentry.continueTrace(
             incomingHeaders.get("sentry-trace"),
             incomingHeaders.get("baggage") != null ? List.of(incomingHeaders.get("baggage")) : null
         );
-        sentryCtx.setName("lambda.request");
-        sentryCtx.setOperation("http.server");
-        TransactionOptions txOptions = new TransactionOptions();
-        txOptions.setBindToScope(true);
-        ITransaction sentryTx = Sentry.startTransaction(sentryCtx, txOptions);
-        sentryTx.setTag("cold_start", String.valueOf(coldStart));
+        if (sentryCtx != null) {
+            sentryCtx.setName("lambda.request");
+            sentryCtx.setOperation("http.server");
+            TransactionOptions txOptions = new TransactionOptions();
+            txOptions.setBindToScope(true);
+            sentryTx = Sentry.startTransaction(sentryCtx, txOptions);
+            sentryTx.setTag("cold_start", String.valueOf(coldStart));
+        }
         coldStart = false;
 
         try {
@@ -291,7 +294,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
                 ApiResponse response = restRouter.route(httpMethod, rawPath, event.getRawQueryString(), effectiveUserId, requestBody);
                 if (response != null) {
-                    sentryTx.setTag("http.status_code", String.valueOf(response.getStatusCode()));
+                    if (sentryTx != null) sentryTx.setTag("http.status_code", String.valueOf(response.getStatusCode()));
                     return response.toLambdaResponse();
                 }
 
@@ -301,12 +304,14 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
         } catch (Exception e) {
             Sentry.captureException(e);
-            sentryTx.setThrowable(e);
-            sentryTx.setStatus(SpanStatus.INTERNAL_ERROR);
+            if (sentryTx != null) {
+                sentryTx.setThrowable(e);
+                sentryTx.setStatus(SpanStatus.INTERNAL_ERROR);
+            }
             LoggingService.error("request_handler_exception", e);
             return ApiResponse.errorMessage("Internal server error").toLambdaResponse();
         } finally {
-            sentryTx.finish();
+            if (sentryTx != null) sentryTx.finish();
             Sentry.flush(1000);
         }
         return ApiResponse.notFoundMessage("Not found").toLambdaResponse();
