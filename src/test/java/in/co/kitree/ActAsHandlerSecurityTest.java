@@ -69,10 +69,17 @@ public class ActAsHandlerSecurityTest extends TestBase {
 
         handler = new TestableHandler();
 
-        try { createAuthUser(ADMIN_USER_ID); } catch (Exception ignored) {}
+        try { createAuthUserWithEmail(ADMIN_USER_ID, "admin-actas@test.com"); } catch (Exception ignored) {}
         setUserClaims(ADMIN_USER_ID, Map.of("admin", true));
-        try { createAuthUser(EXPERT_USER_ID); } catch (Exception ignored) {}
-        try { createAuthUser(REGULAR_USER_ID); } catch (Exception ignored) {}
+        try { createAuthUserWithEmail(EXPERT_USER_ID, "expert-actas@test.com"); } catch (Exception ignored) {}
+        try { createAuthUserWithEmail(REGULAR_USER_ID, "user-actas@test.com"); } catch (Exception ignored) {}
+    }
+
+    private com.google.firebase.auth.UserRecord createAuthUserWithEmail(String uid, String email)
+            throws com.google.firebase.auth.FirebaseAuthException {
+        return com.google.firebase.auth.FirebaseAuth.getInstance().createUser(
+            new com.google.firebase.auth.UserRecord.CreateRequest()
+                .setUid(uid).setEmail(email).setEmailVerified(true));
     }
 
     // ==================== NON-ADMIN REJECTION ====================
