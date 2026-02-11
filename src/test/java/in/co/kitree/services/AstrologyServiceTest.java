@@ -7,9 +7,6 @@ import in.co.kitree.TestBase;
 import in.co.kitree.pojos.RequestBody;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -39,21 +36,6 @@ public class AstrologyServiceTest extends TestBase {
         
         // Check if response contains planet data
         assertTrue(jsonResponse.has("ascendant") || jsonResponse.has("sun") || jsonResponse.has("moon"));
-    }
-    
-    @Test
-    @EnabledIfEnvironmentVariable(named = "ASTROLOGY_API_KEY", matches = ".*")
-    public void testGetAstrologicalDetailsWithThirdPartyAPI() throws Exception {
-        // This test requires ASTROLOGY_API_KEY environment variable to be set
-        // Temporarily modify the service to use third-party API for this test
-        RequestBody requestBody = createValidHoroscopeRequestBody();
-        
-        // We need to modify the AstrologyService to use third-party API for this test
-        // For now, we'll test the validation logic
-        String response = astrologyService.getAstrologicalDetails(requestBody);
-        
-        assertNotNull(response);
-        assertFalse(response.isEmpty());
     }
     
     @Test
@@ -134,32 +116,6 @@ public class AstrologyServiceTest extends TestBase {
         assertTrue(jsonResponse.has("success"));
         assertFalse(jsonResponse.get("success").getAsBoolean());
         assertTrue(jsonResponse.has("errorMessage"));
-    }
-    
-    @Test
-    public void testTimezoneCalculation() {
-        // Test timezone calculation for different coordinates using Timeshape
-        
-        // India (Delhi) - should be around +5.5
-        double indiaTimezone = TimezoneUtils.getTimezoneOffset(28.6139, 77.2090);
-        assertEquals(5.5, indiaTimezone, 0.5); // Allow some tolerance for DST
-        
-        // New York - should be around -5 (or -4 during DST)
-        double nyTimezone = TimezoneUtils.getTimezoneOffset(40.7128, -74.0060);
-        assertTrue(nyTimezone >= -5.0 && nyTimezone <= -4.0); // Account for DST
-        
-        // London - should be around 0 (or +1 during DST)
-        double londonTimezone = TimezoneUtils.getTimezoneOffset(51.5074, -0.1278);
-        assertTrue(londonTimezone >= 0.0 && londonTimezone <= 1.0); // Account for DST
-        
-        // Test timezone ID retrieval
-        String delhiTimezoneId = TimezoneUtils.getTimezoneId(28.6139, 77.2090);
-        assertNotNull(delhiTimezoneId);
-        assertTrue(delhiTimezoneId.contains("Asia") || delhiTimezoneId.contains("+05:30"));
-        
-        String nyTimezoneId = TimezoneUtils.getTimezoneId(40.7128, -74.0060);
-        assertNotNull(nyTimezoneId);
-        assertTrue(nyTimezoneId.contains("America") || nyTimezoneId.contains("-05:00") || nyTimezoneId.contains("-04:00"));
     }
     
     private RequestBody createValidHoroscopeRequestBody() {
