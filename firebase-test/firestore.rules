@@ -31,16 +31,27 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
   	}
-    
+
+    // Allow experts to read orders across all users (collection group query)
     match /{path=**}/orders/{orderId} {
-    	allow read: if request.auth != null && (request.auth.token.admin == true || (request.auth.uid == resource.data.expertId));
-      allow update: if request.auth != null && request.auth.uid == resource.data.expertId && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'statusUpdateTime', 'profileId', 'sessionStartedAt', 'moves', 'sessionCompletedAt', 'cardsDrawn', 'remedies']));
+      allow read: if request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.uid == resource.data.expert_id
+      );
+      allow update: if request.auth != null && request.auth.uid == resource.data.expert_id
+        && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'status_update_time', 'profile_id', 'session_started_at', 'moves', 'session_completed_at', 'cards_drawn', 'remedies']));
       allow delete: if false;
     }
     
     match /users/{userId} {
-      allow read, update: if (request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true));
-      allow create: if request.auth != null && request.auth.uid == userId;
+      // User can read all their data except wallet_balances update (backend only)
+      allow read: if (request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true));
+      // User can update their data BUT NOT wallet_balances (backend-only field)
+      allow update: if (request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true)) 
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['wallet_balances']);
+      // User can create their document BUT NOT with wallet_balances (backend-only field)
+      allow create: if request.auth != null && request.auth.uid == userId 
+        && !('wallet_balances' in request.resource.data);
       allow delete: if false;
       
       match /coupons/{couponId} {
@@ -50,10 +61,36 @@ service cloud.firestore {
         allow delete: if false;
       }
       
+      // Wallet transactions - user and admin can read, backend writes only
+      match /wallet_transactions/{transactionId} {
+        // Allow reading individual documents
+        allow get: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+        // Allow list queries (for orderBy, etc.)
+        allow list: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+        allow write: if false; // Only backend can write
+      }
+      
+      // Expert-specific wallets - user can read their own, backend writes only
+      match /expert_wallets/{expertId} {
+        allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+        allow write: if false; // Only backend can write
+
+        // Transactions within expert wallet (includes recharges and deductions)
+        match /transactions/{transactionId} {
+          allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+          allow write: if false; // Only backend can write
+        }
+      }
+
       match /orders/{orderId} {
       	allow read: if request.auth != null && request.auth.uid == userId;
-        allow write: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true || request.auth.uid == resource.data.expertId) && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['profileId']));
-         allow delete: if false;
+        // Allow profile ID updates for all order types
+        // For ON_DEMAND_CONSULTATION orders, only backend can modify (handled by checking type)
+        allow write: if request.auth != null 
+          && (request.auth.uid == userId || request.auth.token.admin == true || request.auth.uid == resource.data.expert_id)
+          && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['profile_id']))
+          && resource.data.type != 'ON_DEMAND_CONSULTATION';
+        allow delete: if false;
       }
       
       match /addresses/{addressId} {
@@ -72,11 +109,19 @@ service cloud.firestore {
       match /public/{document=**} {
       // Remove coupons from public?
         allow read: if true;
+        // Allow updates to expert_status by the expert themselves
         allow write: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
       }
       
-      match /private {
-      	allow read: if false;
+      // Platform fee config - separate document (expert and admin can read, admin can write)
+      match /platform_fee_config/{document=**} {
+        allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+        allow write: if request.auth != null && request.auth.token.admin == true;
+      }
+      
+      // Private subcollection - no access to anyone
+      match /private/{document=**} {
+        allow read: if false;
         allow write: if false;
       }
       

@@ -25,8 +25,10 @@ Parameters:
 
 Globals:
   Function:
-    Timeout: 120
-    MemorySize: 512
+    Timeout: 300  # 5 minutes - allows time for audio download + Gemini API processing
+    MemorySize: 1024  # Increased for audio file processing
+    EphemeralStorage:
+      Size: 1024  # 1GB temp storage for audio files
     LoggingConfig:
       LogFormat: JSON
       LogGroup: !Sub "/aws/lambda/java-lambda-${Environment}"
@@ -44,6 +46,7 @@ Resources:
       Environment:
         Variables:
           ENVIRONMENT: !Ref Environment
+          SENTRY_DSN: "https://dc337a8e397dd75f982b60a24018dd22@o1209671.ingest.us.sentry.io/4510843972354048"
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:
@@ -52,6 +55,7 @@ Resources:
                 - lambda:InvokeFunction
               Resource:
                 - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:certgen"
+                - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:java-lambda-${Environment}"
       AutoPublishAlias: !Ref Environment
       DeploymentPreference:
         Type: !If [ IsProd, AllAtOnce, Canary10Percent5Minutes ]
@@ -110,6 +114,28 @@ Resources:
     Properties:
       LogGroupName: !Sub "/aws/lambda/java-lambda-${Environment}"
       RetentionInDays: !If [ IsProd, 7, 1 ]
+
+  # EventBridge Rule for auto-terminating stale on-demand consultations
+  AutoTerminateConsultationsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "auto-terminate-consultations-${Environment}"
+      Description: "Auto-terminate on-demand consultations that exceed max_allowed_duration"
+      ScheduleExpression: "rate(5 minutes)"
+      State: ENABLED
+      Targets:
+        - Id: JavaLambdaTarget
+          Arn: !GetAtt JavaFunction.Arn
+          Input: '{"source":"aws.events","detailType":"auto_terminate_consultations"}'
+
+  # Permission for EventBridge to invoke Lambda
+  AutoTerminateConsultationsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref JavaFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AutoTerminateConsultationsRule.Arn
 
 Conditions:
   IsProd: !Equals [ !Ref Environment, "prod" ]

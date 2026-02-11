@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+    <Appenders>
+        <!-- Console appender with JSON layout for CloudWatch -->
+        <Console name="JsonConsole" target="SYSTEM_OUT">
+            <JsonTemplateLayout eventTemplateUri="classpath:CloudWatchLogsLayout.json"/>
+        </Console>
+    </Appenders>
+    
+    <Loggers>
+        <!-- Application logger -->
+        <Logger name="in.co.kitree" level="INFO" additivity="false">
+            <AppenderRef ref="JsonConsole"/>
+        </Logger>
+        
+        <!-- Powertools logger -->
+        <Logger name="software.amazon.lambda.powertools" level="INFO" additivity="false">
+            <AppenderRef ref="JsonConsole"/>
+        </Logger>
+        
+        <!-- Reduce noise from other libraries -->
+        <Logger name="com.google" level="WARN" additivity="false">
+            <AppenderRef ref="JsonConsole"/>
+        </Logger>
+        <Logger name="io.grpc" level="WARN" additivity="false">
+            <AppenderRef ref="JsonConsole"/>
+        </Logger>
+        <Logger name="io.netty" level="WARN" additivity="false">
+            <AppenderRef ref="JsonConsole"/>
+        </Logger>
+        
+        <!-- Root logger -->
+        <Root level="INFO">
+            <AppenderRef ref="JsonConsole"/>
+        </Root>
+    </Loggers>
+</Configuration>

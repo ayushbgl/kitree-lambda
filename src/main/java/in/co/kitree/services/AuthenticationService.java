@@ -31,11 +31,11 @@ public class AuthenticationService {
             FirebaseToken decodedToken = FirebaseAuth.getInstance().verifyIdToken(idToken);
             return decodedToken.getUid();
         } catch (FirebaseAuthException e) {
-            System.err.println("Firebase token verification failed: " + e.getMessage());
+            LoggingService.warn("firebase_token_verification_failed", java.util.Map.of("error", e.getMessage()));
             throw e;
         }
     }
-    
+
     /**
      * Verifies a Firebase ID token and returns the full token object
      * 
@@ -56,11 +56,11 @@ public class AuthenticationService {
         try {
             return FirebaseAuth.getInstance().verifyIdToken(idToken);
         } catch (FirebaseAuthException e) {
-            System.err.println("Firebase token verification failed: " + e.getMessage());
+            LoggingService.warn("firebase_token_verification_failed", java.util.Map.of("error", e.getMessage()));
             throw e;
         }
     }
-    
+
     /**
      * Extracts the Authorization token from headers map
      * Handles case-insensitive header keys

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Deployment Environment'
+        description: 'Deployment environment'
         required: true
         type: choice
         options:
@@ -12,6 +12,10 @@ on:
           - prod
           - both
           - only-sync-rules
+      skip_tests:
+        description: 'Skip CI tests (unit + emulator)'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -29,14 +33,137 @@ env:
   API_CERTIFICATE_ARN: arn:aws:acm:us-east-1:585768141144:certificate/33d1035e-b43b-4ba2-8bb4-342cb185139b
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 1: CI — unit + integration + E2E tests against Firebase emulators
+  # Skipped by default (skip_tests: true). Set skip_tests: false for prod runs.
+  # ─────────────────────────────────────────────────────────────────────────────
+  ci:
+    if: inputs.skip_tests != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Install Firebase CLI
+        run: curl -sL https://firebase.tools | bash
+
+      - name: Cache Firebase Emulators
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}
+
+      - name: Start Firebase Emulators
+        run: |
+          cat > .firebaserc << EOF
+          {
+            "projects": {
+              "default": "kitree-emulator"
+            }
+          }
+          EOF
+
+          cat > firebase.json << EOF
+          {
+            "emulators": {
+              "auth": {
+                "host": "0.0.0.0",
+                "port": 9099
+              },
+              "firestore": {
+                "host": "0.0.0.0",
+                "port": 8080
+              }
+            },
+            "firestore": {
+              "rules": "firestore.rules"
+            }
+          }
+          EOF
+
+          echo "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }" > firestore.rules
+
+          firebase emulators:start --project kitree-emulator --only auth,firestore &
+
+          wait_for_service() {
+            local host=$1
+            local port=$2
+            local max_attempts=30
+            local attempt=1
+            echo "Waiting for service at $host:$port..."
+            while [ $attempt -le $max_attempts ]; do
+              if nc -z $host $port; then
+                echo "✅ $host:$port is ready"
+                return 0
+              fi
+              echo "  attempt $attempt/$max_attempts..."
+              sleep 2
+              attempt=$((attempt + 1))
+            done
+            echo "❌ $host:$port failed to start"
+            return 1
+          }
+
+          wait_for_service localhost 8080 || exit 1
+          wait_for_service localhost 9099 || exit 1
+
+          echo "Verifying Auth emulator..."
+          for i in {1..5}; do
+            if curl -s -X POST http://localhost:9099/identitytoolkit/v3/relyingparty/signupNewUser \
+              -H "Content-Type: application/json" \
+              -d '{"email":"healthcheck@example.com","password":"password123"}' > /dev/null; then
+              echo "✅ Auth emulator responding"
+              break
+            fi
+            [ $i -eq 5 ] && echo "❌ Auth emulator not responding" && exit 1
+            sleep 2
+          done
+
+          echo "Verifying Firestore emulator..."
+          for i in {1..5}; do
+            if curl -s "http://localhost:8080/emulator/v1/projects/kitree-emulator/databases/(default)/documents" > /dev/null; then
+              echo "✅ Firestore emulator responding"
+              break
+            fi
+            [ $i -eq 5 ] && echo "❌ Firestore emulator not responding" && exit 1
+            sleep 2
+          done
+
+      - name: Run all tests
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8080
+          FIREBASE_AUTH_EMULATOR_HOST: localhost:9099
+          FIREBASE_PROJECT_ID: kitree-emulator
+          ENVIRONMENT: test
+        run: ./gradlew test --info --console=plain
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: build/reports/tests/test/
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 2: Deploy
+  # Runs if ci passed or was skipped (skip_tests: true)
+  # ─────────────────────────────────────────────────────────────────────────────
   deploy:
+    needs: [ci]
+    if: always() && (needs.ci.result == 'success' || needs.ci.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout main repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Checkout secrets repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/kitree-secrets
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -48,16 +175,16 @@ jobs:
           node-version: '22'
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        if: inputs.environment != 'only-sync-rules'
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
-        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
 
       # (Optional) You probably do not need gcloud for Firebase CLI,
       # so consider deleting this step entirely.
       - name: Install Google Cloud SDK
-        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' || github.event.inputs.environment == 'only-sync-rules' }}
+        if: inputs.environment == 'prod' || inputs.environment == 'both' || inputs.environment == 'only-sync-rules'
         run: |
           echo "📦 Installing Google Cloud SDK for debugging..."
           curl https://sdk.cloud.google.com | bash
@@ -65,7 +192,7 @@ jobs:
           echo "✅ Google Cloud SDK installed"
 
       - name: Copy secret files
-        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
+        if: inputs.environment != 'only-sync-rules'
         run: |
           mkdir -p src/main/resources
           cp secrets/kitree-lambda/secrets.json src/main/resources/
@@ -73,29 +200,24 @@ jobs:
           cp secrets/kitree-lambda/serviceAccountKeyTest.json src/main/resources/
 
       - name: Configure AWS credentials
+        if: inputs.environment != 'only-sync-rules'
         uses: aws-actions/configure-aws-credentials@v4
-        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
-          # Best practice: migrate to role-to-assume + OIDC when you’re ready.
-          # role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          # (see AWS/GitHub docs on OIDC)
-          # [web:56][web:57][web:58]
 
       - name: Install AWS SAM CLI
-        if: ${{ github.event.inputs.environment != 'only-sync-rules' }}
-        run: |
-          pip install aws-sam-cli
+        if: inputs.environment != 'only-sync-rules'
+        run: pip install aws-sam-cli
 
       - name: Deploy Test Environment
-        if: ${{ github.event.inputs.environment == 'test' || github.event.inputs.environment == 'both' }}
+        if: inputs.environment == 'test' || inputs.environment == 'both'
         run: |
           echo "🚀 Deploying to TEST environment..."
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
-          
+
           echo "✅ Verifying TEST credentials..."
           if [ -f "firebase-test-key.json" ]; then
             echo "✅ Test service account file created successfully"
@@ -105,7 +227,7 @@ jobs:
             echo "❌ Failed to create test service account file"
             exit 1
           fi
-          
+
           sam build
           sam package \
             --template-file .aws-sam/build/template.yaml \
@@ -124,7 +246,6 @@ jobs:
             --no-fail-on-empty-changeset
 
           echo "📤 Fetching important TEST stack outputs..."
-          # Requires SAM CLI 1.88+ for 'sam list stack-outputs'
           TEST_OUTPUTS=$(sam list stack-outputs --stack-name java-lambda-test --output json)
 
           TEST_CF_DOMAIN=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue')
@@ -138,12 +259,12 @@ jobs:
           echo "──────────────────────────────────────────"
 
       - name: Deploy Production Environment
-        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' }}
+        if: inputs.environment == 'prod' || inputs.environment == 'both'
         run: |
           echo "🚀 Deploying to PRODUCTION environment..."
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
-          
+
           echo "✅ Verifying PRODUCTION credentials..."
           if [ -f "firebase-prod-key.json" ]; then
             echo "✅ Production service account file created successfully"
@@ -153,7 +274,7 @@ jobs:
             echo "❌ Failed to create production service account file"
             exit 1
           fi
-          
+
           sam build
           sam package \
             --template-file .aws-sam/build/template.yaml \
@@ -185,11 +306,11 @@ jobs:
           echo "──────────────────────────────────────────────"
 
       - name: Sync Firebase Rules and Indexes
-        if: ${{ github.event.inputs.environment == 'prod' || github.event.inputs.environment == 'both' || github.event.inputs.environment == 'only-sync-rules' }}
+        if: inputs.environment == 'prod' || inputs.environment == 'both' || inputs.environment == 'only-sync-rules'
         run: |
           echo "🔄 Starting Firebase Rules and Indexes sync..."
-          echo "📋 Selected environment: ${{ github.event.inputs.environment }}"
-          
+          echo "📋 Selected environment: ${{ inputs.environment }}"
+
           npm install -g firebase-tools
           npm install firebase-admin
           echo "✅ Packages installed successfully"
@@ -197,14 +318,14 @@ jobs:
           echo "🔑 Creating service account files..."
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_TEST }}' > firebase-test-key.json
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY_PROD }}' > firebase-prod-key.json
-          
+
           echo "🔍 Verifying credential files..."
           if [ -f "firebase-test-key.json" ]; then
             echo "✅ Test service account file created"
             echo "📧 Test service account email: $(cat firebase-test-key.json | jq -r '.client_email')"
             echo "📋 Test project ID from key: $(cat firebase-test-key.json | jq -r '.project_id')"
             echo "📋 Expected test project ID: ${{ env.FIREBASE_PROJECT_ID_TEST }}"
-          
+
             if jq empty firebase-test-key.json 2>/dev/null; then
               echo "✅ Test service account JSON is valid"
             else
@@ -215,13 +336,13 @@ jobs:
             echo "❌ Failed to create test service account file"
             exit 1
           fi
-          
+
           if [ -f "firebase-prod-key.json" ]; then
             echo "✅ Production service account file created"
             echo "📧 Production service account email: $(cat firebase-prod-key.json | jq -r '.client_email')"
             echo "📋 Production project ID from key: $(cat firebase-prod-key.json | jq -r '.project_id')"
             echo "📋 Expected production project ID: ${{ env.FIREBASE_PROJECT_ID_PROD }}"
-          
+
             if jq empty firebase-prod-key.json 2>/dev/null; then
               echo "✅ Production service account JSON is valid"
             else
@@ -254,7 +375,7 @@ jobs:
 
           echo "📤 Exporting from TEST project (${{ env.FIREBASE_PROJECT_ID_TEST }})..."
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-test-key.json
-          
+
           echo "🔐 Testing Firebase CLI authentication with test project..."
           firebase projects:list --json > test_auth_check.json || {
             echo "❌ Failed to authenticate with Firebase CLI using test credentials"
@@ -262,10 +383,10 @@ jobs:
             exit 1
           }
           echo "✅ Firebase CLI authentication successful for test project"
-          
+
           firebase use test
           echo "✅ Switched to test project"
-          
+
           # Export indexes
           echo "📋 Exporting indexes from test project..."
           firebase firestore:indexes > firestore.indexes.json
@@ -292,7 +413,7 @@ jobs:
               console.log('📧 Service account email:', serviceAccount.client_email);
               console.log('📋 Service account project_id:', serviceAccount.project_id);
               console.log('📋 Environment FIREBASE_PROJECT_ID_TEST:', process.env.FIREBASE_PROJECT_ID_TEST);
-          
+
               admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount),
                 projectId: process.env.FIREBASE_PROJECT_ID_TEST
@@ -301,30 +422,30 @@ jobs:
 
               console.log('📋 Getting security rules...');
               const securityRules = admin.securityRules();
-          
+
               console.log('🔍 Attempting to list all rulesets...');
               const rulesetsResponse = await securityRules.listRulesetMetadata();
               console.log('📊 Raw rulesets response type:', typeof rulesetsResponse);
-          
+
               // FIXED: Access the rulesets array from the response object
               const rulesets = rulesetsResponse.rulesets || rulesetsResponse;
               console.log(`📊 Found ${rulesets ? rulesets.length : 0} rulesets`);
-          
+
               if (rulesets && Array.isArray(rulesets) && rulesets.length > 0) {
                 console.log('📤 Getting latest ruleset...');
                 const latestRuleset = rulesets[0];
                 console.log('📋 Latest ruleset details:', JSON.stringify(latestRuleset, null, 2));
-          
+
                 const ruleset = await securityRules.getRuleset(latestRuleset.name);
                 console.log('📋 Retrieved ruleset has source:', !!ruleset.source);
                 console.log('📋 Source type:', typeof ruleset.source);
                 console.log('📋 Source is array:', Array.isArray(ruleset.source));
-          
+
                 // CORRECTED: ruleset.source is directly the array of files
                 if (ruleset.source && Array.isArray(ruleset.source)) {
                   console.log(`📁 Found ${ruleset.source.length} files in ruleset`);
                   console.log('📁 Files in ruleset:', ruleset.source.map(f => f.name));
-          
+
                   const rulesFile = ruleset.source.find(file => file.name === 'firestore.rules');
                   if (rulesFile && rulesFile.content) {
                     fs.writeFileSync('firestore.rules', rulesFile.content);
@@ -355,12 +476,12 @@ jobs:
               console.error('❌ Error in exportRules:', error.message);
               console.error('📋 Error code:', error.code);
               console.error('📋 Full error:', error);
-          
+
               // Create a basic rules file as fallback
               console.log('⚠️ Creating fallback rules file due to error');
               fs.writeFileSync('firestore.rules', `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}`);
               console.log('📄 Fallback rules created');
-          
+
               // Re-throw the error so we know something went wrong
               throw error;
             }
@@ -391,7 +512,7 @@ jobs:
 
           echo "📤 Deploying to PRODUCTION project (${{ env.FIREBASE_PROJECT_ID_PROD }})..."
           export GOOGLE_APPLICATION_CREDENTIALS=firebase-prod-key.json
-          
+
           echo "🔐 Testing Firebase CLI authentication with production project..."
           firebase projects:list --json > prod_auth_check.json || {
             echo "❌ Failed to authenticate with Firebase CLI using production credentials"
@@ -399,7 +520,7 @@ jobs:
             exit 1
           }
           echo "✅ Firebase CLI authentication successful for production"
-          
+
           firebase use prod
           echo "✅ Switched to production project"
 
@@ -440,7 +561,7 @@ jobs:
           echo "✅ Successfully completed Firebase rules and indexes sync"
 
       - name: Cleanup S3 Artifacts
-        if: always() && github.event.inputs.environment != 'only-sync-rules'
+        if: always() && inputs.environment != 'only-sync-rules'
         run: |
           if [ -f ".aws-sam/build/packaged.yaml" ]; then
             S3_URI=$(grep "s3://" .aws-sam/build/packaged.yaml | grep -v "^#" | head -1 | grep -o 's3://[^[:space:]]*' | head -1)
@@ -448,4 +569,74 @@ jobs:
               echo "🧹 Cleaning up S3 artifact: $S3_URI"
               aws s3 rm "$S3_URI" || echo "❌ Failed to delete S3 artifact"
             fi
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 3: Verify — cold start health check against the deployed API
+  # ─────────────────────────────────────────────────────────────────────────────
+  verify:
+    needs: [deploy]
+    if: needs.deploy.result == 'success' && inputs.environment != 'only-sync-rules'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check — TEST
+        if: inputs.environment == 'test' || inputs.environment == 'both'
+        run: |
+          echo "⏱️ Cold start check — https://${API_DOMAIN_TEST}"
+          RESULT=$(curl -o response_test.json -s \
+            -w "%{http_code} %{time_total}" \
+            -X POST "https://${API_DOMAIN_TEST}" \
+            -H "Content-Type: application/json" \
+            --max-time 30 \
+            -d '{"function":"app_startup"}')
+          HTTP_CODE=$(echo $RESULT | awk '{print $1}')
+          COLD_START=$(echo $RESULT | awk '{print $2}')
+          echo "HTTP status : $HTTP_CODE"
+          echo "Cold start  : ${COLD_START}s"
+          echo "Response    : $(cat response_test.json)"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ TEST health check failed"
+            exit 1
+          fi
+          echo "✅ TEST health check passed"
+
+      - name: Health check — PROD
+        if: inputs.environment == 'prod' || inputs.environment == 'both'
+        run: |
+          echo "⏱️ Cold start check — https://${API_DOMAIN_PROD}"
+          RESULT=$(curl -o response_prod.json -s \
+            -w "%{http_code} %{time_total}" \
+            -X POST "https://${API_DOMAIN_PROD}" \
+            -H "Content-Type: application/json" \
+            --max-time 30 \
+            -d '{"function":"app_startup"}')
+          HTTP_CODE=$(echo $RESULT | awk '{print $1}')
+          COLD_START=$(echo $RESULT | awk '{print $2}')
+          echo "HTTP status : $HTTP_CODE"
+          echo "Cold start  : ${COLD_START}s"
+          echo "Response    : $(cat response_prod.json)"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ PROD health check failed"
+            exit 1
+          fi
+          echo "✅ PROD health check passed"
+
+      - name: Verification Summary
+        if: always()
+        run: |
+          echo "## 🔍 Post-Deploy Verification" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.environment }}" = "test" ] || [ "${{ inputs.environment }}" = "both" ]; then
+            echo "### TEST: https://${API_DOMAIN_TEST}" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            cat response_test.json >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(no response captured)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.environment }}" = "prod" ] || [ "${{ inputs.environment }}" = "both" ]; then
+            echo "### PROD: https://${API_DOMAIN_PROD}" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            cat response_prod.json >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(no response captured)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           fi

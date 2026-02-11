@@ -4,16 +4,22 @@ import java.util.List;
 import java.util.Map;
 
 public class RequestBody {
-    private String function;
     private String serviceName; // To buy a service
     private String base64Image;
     private String planName; // To buy a service
-    private String razorpaySubscriptionId; // To verify payment
-    private String razorpayOrderId; // To verify payment
-    private String razorpayPaymentId; // To verify payment
-    private String razorpaySignature; // To verify payment
+
+    // Payment gateway fields (gateway-agnostic)
+    private String gatewayOrderId; // Payment gateway's order ID (for verification)
+    private String gatewayPaymentId; // Payment gateway's payment ID
+    private String gatewaySignature; // Payment gateway's signature for verification
+    private String gatewaySubscriptionId; // Payment gateway's subscription ID
     private String adminSecret;
     private String adminUid;
+
+    // Impersonation: client-provided target user ID
+    private String actAs;
+    // Set server-side after token extraction — never from JSON
+    private transient String callerUserId;
     private String certificateHolderName;
     private String certificateDate;
     private String certificateCourse;
@@ -76,6 +82,69 @@ public class RequestBody {
 
     // Divisional charts fields
     private List<Integer> divisionalChartNumbers;
+
+    // Wallet and On-Demand Consultation fields
+    private String currency; // Currency for wallet operations (e.g., "INR", "USD")
+    private String consultationType; // "audio", "video", or "chat" for on-demand consultations
+    private Double additionalAmount; // For mid-consultation recharge to extend duration
+    private Boolean useWalletBalance; // Whether to use wallet balance for checkout payment
+
+    // Booking metrics fields
+    private Long startDate; // Start date in milliseconds for metrics filtering
+    private Long endDate; // End date in milliseconds for metrics filtering
+    private String bookingType; // "all", "scheduled", "onDemand", "product"
+
+    // Payout fields (for admin recording payouts)
+    private String payoutMethod; // "BANK_TRANSFER", "UPI", etc.
+    private String payoutReference; // Transaction reference ID
+    private String notes; // Optional notes for payout
+
+    // Platform fee config fields (for admin setting platform fees)
+    private Double defaultFeePercent; // Default platform fee percentage (e.g., 10.0 for 10%)
+    private Map<String, Double> feeByType; // Fee by order type (e.g., "CONSULTATION": 10.0, "ON_DEMAND_CONSULTATION": 15.0)
+    private Map<String, Double> feeByCategory; // Fee by category (e.g., "HOROSCOPE": 10.0, "TAROT": 12.0)
+
+    // Billing recalculation fields
+    private String callCid; // Stream call CID for recalculate_charge function (format: {type}:{id})
+
+    // Product ecommerce fields
+    private String productId; // Platform product ID
+    private Integer quantity; // Quantity of product to order
+    private List<Map<String, Object>> items; // Multi-item order: list of {productId, quantity}
+    private String trackingNumber; // Shipping tracking number
+    private String newStatus; // New order status for updates
+    private Double sellerPriceInr; // Seller's price for a product
+    private Boolean isWhiteLabel; // Whether to use white-label (no platform branding)
+    private String shippingMode; // "PLATFORM" or "SELF"
+    private Double selfShippingCostInr; // Seller's shipping cost for self-shipping
+    private Integer selfStockQuantity; // Seller's inventory count for self-shipping
+    private Boolean isEnabled; // Whether product is enabled for selling
+    private String statusFilter; // Filter orders by status
+    private List<PlatformProduct> productsToSeed; // Products to seed into platform catalog
+
+    // Session/Webinar/Course fields
+    private String title;                    // Session title
+    private String description;              // Session description
+    private Long scheduledStartTime;         // Scheduled start time in milliseconds
+    private Integer durationMinutes;         // Planned duration in minutes
+    private Double price;                    // Session price (0 for free)
+    private Integer maxParticipants;         // Maximum registrations allowed
+    private Integer sessionCount;            // 1 for standalone, N for course
+    private String interactionMode;          // "cozy" | "classroom" | "broadcast"
+    private Boolean giftsEnabled;            // Whether gifts are enabled
+    private List<Map<String, Object>> giftOptions; // [{id, amount}, ...]
+    private String targetUserId;             // For promote/demote/kick operations
+    private String targetOrderId;            // For promote/demote/kick operations
+    private String giftId;                   // Gift ID for send_gift
+    private Integer sessionNumber;           // For course sessions (1, 2, 3...)
+    private String userPhotoUrl;             // User's photo URL for participant display
+    private Integer limit;                   // Pagination limit for queries
+
+    // Review fields (for submit_review function)
+    private String bookingId;                // Booking ID to attach review to
+    private Integer rating;                  // Rating value (1-5)
+    private String comment;                  // Optional review comment (max 500 chars)
+    private Integer previousRating;          // Previous rating for edit (for aggregate adjustment)
 
     public Map<String, Object> getScannerDetails() {
         return scannerDetails;
@@ -162,14 +231,6 @@ public class RequestBody {
     public RequestBody() {
     }
 
-    public String getFunction() {
-        return function;
-    }
-
-    public void setFunction(String function) {
-        this.function = function;
-    }
-
     public String getServiceName() {
         return serviceName;
     }
@@ -186,28 +247,37 @@ public class RequestBody {
         this.serviceName = serviceName;
     }
 
-    public String getRazorpayOrderId() {
-        return razorpayOrderId;
+    // Payment gateway getters/setters
+    public String getGatewayOrderId() {
+        return gatewayOrderId;
     }
 
-    public void setRazorpayOrderId(String razorpayOrderId) {
-        this.razorpayOrderId = razorpayOrderId;
+    public void setGatewayOrderId(String gatewayOrderId) {
+        this.gatewayOrderId = gatewayOrderId;
     }
 
-    public String getRazorpayPaymentId() {
-        return razorpayPaymentId;
+    public String getGatewayPaymentId() {
+        return gatewayPaymentId;
     }
 
-    public void setRazorpayPaymentId(String razorpayPaymentId) {
-        this.razorpayPaymentId = razorpayPaymentId;
+    public void setGatewayPaymentId(String gatewayPaymentId) {
+        this.gatewayPaymentId = gatewayPaymentId;
     }
 
-    public String getRazorpaySignature() {
-        return razorpaySignature;
+    public String getGatewaySignature() {
+        return gatewaySignature;
     }
 
-    public void setRazorpaySignature(String razorpaySignature) {
-        this.razorpaySignature = razorpaySignature;
+    public void setGatewaySignature(String gatewaySignature) {
+        this.gatewaySignature = gatewaySignature;
+    }
+
+    public String getGatewaySubscriptionId() {
+        return gatewaySubscriptionId;
+    }
+
+    public void setGatewaySubscriptionId(String gatewaySubscriptionId) {
+        this.gatewaySubscriptionId = gatewaySubscriptionId;
     }
 
     public String getAdminSecret() {
@@ -226,12 +296,20 @@ public class RequestBody {
         this.adminUid = adminUid;
     }
 
-    public String getRazorpaySubscriptionId() {
-        return razorpaySubscriptionId;
+    public String getActAs() {
+        return actAs;
     }
 
-    public void setRazorpaySubscriptionId(String razorpaySubscriptionId) {
-        this.razorpaySubscriptionId = razorpaySubscriptionId;
+    public void setActAs(String actAs) {
+        this.actAs = actAs;
+    }
+
+    public String getCallerUserId() {
+        return callerUserId;
+    }
+
+    public void setCallerUserId(String callerUserId) {
+        this.callerUserId = callerUserId;
     }
 
     public RazorpayWebhookBody getRazorpayWebhookBody() {
@@ -504,5 +582,389 @@ public class RequestBody {
 
     public void setDivisionalChartNumbers(List<Integer> divisionalChartNumbers) {
         this.divisionalChartNumbers = divisionalChartNumbers;
+    }
+
+    // Wallet and On-Demand Consultation getters/setters
+    public String getCurrency() {
+        return currency;
+    }
+
+    public void setCurrency(String currency) {
+        this.currency = currency;
+    }
+
+    public String getConsultationType() {
+        return consultationType;
+    }
+
+    public void setConsultationType(String consultationType) {
+        this.consultationType = consultationType;
+    }
+
+    public Double getAdditionalAmount() {
+        return additionalAmount;
+    }
+
+    public void setAdditionalAmount(Double additionalAmount) {
+        this.additionalAmount = additionalAmount;
+    }
+
+    public Boolean getUseWalletBalance() {
+        return useWalletBalance;
+    }
+
+    public void setUseWalletBalance(Boolean useWalletBalance) {
+        this.useWalletBalance = useWalletBalance;
+    }
+
+    // Booking metrics getters/setters
+    public Long getStartDate() {
+        return startDate;
+    }
+
+    public void setStartDate(Long startDate) {
+        this.startDate = startDate;
+    }
+
+    public Long getEndDate() {
+        return endDate;
+    }
+
+    public void setEndDate(Long endDate) {
+        this.endDate = endDate;
+    }
+
+    public String getBookingType() {
+        return bookingType;
+    }
+
+    public void setBookingType(String bookingType) {
+        this.bookingType = bookingType;
+    }
+
+    // Payout getters/setters
+    public String getPayoutMethod() {
+        return payoutMethod;
+    }
+
+    public void setPayoutMethod(String payoutMethod) {
+        this.payoutMethod = payoutMethod;
+    }
+
+    public String getPayoutReference() {
+        return payoutReference;
+    }
+
+    public void setPayoutReference(String payoutReference) {
+        this.payoutReference = payoutReference;
+    }
+
+    public String getNotes() {
+        return notes;
+    }
+
+    public void setNotes(String notes) {
+        this.notes = notes;
+    }
+
+    // Platform fee config getters/setters
+    public Double getDefaultFeePercent() {
+        return defaultFeePercent;
+    }
+
+    public void setDefaultFeePercent(Double defaultFeePercent) {
+        this.defaultFeePercent = defaultFeePercent;
+    }
+
+    public Map<String, Double> getFeeByType() {
+        return feeByType;
+    }
+
+    public void setFeeByType(Map<String, Double> feeByType) {
+        this.feeByType = feeByType;
+    }
+
+    public Map<String, Double> getFeeByCategory() {
+        return feeByCategory;
+    }
+
+    public void setFeeByCategory(Map<String, Double> feeByCategory) {
+        this.feeByCategory = feeByCategory;
+    }
+
+    // Billing recalculation getters/setters
+    public String getCallCid() {
+        return callCid;
+    }
+
+    public void setCallCid(String callCid) {
+        this.callCid = callCid;
+    }
+
+    // Product ecommerce getters/setters
+    public String getProductId() {
+        return productId;
+    }
+
+    public void setProductId(String productId) {
+        this.productId = productId;
+    }
+
+    public Integer getQuantity() {
+        return quantity;
+    }
+
+    public void setQuantity(Integer quantity) {
+        this.quantity = quantity;
+    }
+
+    public List<Map<String, Object>> getItems() {
+        return items;
+    }
+
+    public void setItems(List<Map<String, Object>> items) {
+        this.items = items;
+    }
+
+    public String getTrackingNumber() {
+        return trackingNumber;
+    }
+
+    public void setTrackingNumber(String trackingNumber) {
+        this.trackingNumber = trackingNumber;
+    }
+
+    public String getNewStatus() {
+        return newStatus;
+    }
+
+    public void setNewStatus(String newStatus) {
+        this.newStatus = newStatus;
+    }
+
+    public Double getSellerPriceInr() {
+        return sellerPriceInr;
+    }
+
+    public void setSellerPriceInr(Double sellerPriceInr) {
+        this.sellerPriceInr = sellerPriceInr;
+    }
+
+    public Boolean getIsWhiteLabel() {
+        return isWhiteLabel;
+    }
+
+    public void setIsWhiteLabel(Boolean isWhiteLabel) {
+        this.isWhiteLabel = isWhiteLabel;
+    }
+
+    public String getShippingMode() {
+        return shippingMode;
+    }
+
+    public void setShippingMode(String shippingMode) {
+        this.shippingMode = shippingMode;
+    }
+
+    public Double getSelfShippingCostInr() {
+        return selfShippingCostInr;
+    }
+
+    public void setSelfShippingCostInr(Double selfShippingCostInr) {
+        this.selfShippingCostInr = selfShippingCostInr;
+    }
+
+    public Integer getSelfStockQuantity() {
+        return selfStockQuantity;
+    }
+
+    public void setSelfStockQuantity(Integer selfStockQuantity) {
+        this.selfStockQuantity = selfStockQuantity;
+    }
+
+    public Boolean getIsEnabled() {
+        return isEnabled;
+    }
+
+    public void setIsEnabled(Boolean isEnabled) {
+        this.isEnabled = isEnabled;
+    }
+
+    public String getStatusFilter() {
+        return statusFilter;
+    }
+
+    public void setStatusFilter(String statusFilter) {
+        this.statusFilter = statusFilter;
+    }
+
+    public List<PlatformProduct> getProductsToSeed() {
+        return productsToSeed;
+    }
+
+    public void setProductsToSeed(List<PlatformProduct> productsToSeed) {
+        this.productsToSeed = productsToSeed;
+    }
+
+    // Session/Webinar/Course getters and setters
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public Long getScheduledStartTime() {
+        return scheduledStartTime;
+    }
+
+    public void setScheduledStartTime(Long scheduledStartTime) {
+        this.scheduledStartTime = scheduledStartTime;
+    }
+
+    public Integer getDurationMinutes() {
+        return durationMinutes;
+    }
+
+    public void setDurationMinutes(Integer durationMinutes) {
+        this.durationMinutes = durationMinutes;
+    }
+
+    public Double getPrice() {
+        return price;
+    }
+
+    public void setPrice(Double price) {
+        this.price = price;
+    }
+
+    public Integer getMaxParticipants() {
+        return maxParticipants;
+    }
+
+    public void setMaxParticipants(Integer maxParticipants) {
+        this.maxParticipants = maxParticipants;
+    }
+
+    public Integer getSessionCount() {
+        return sessionCount;
+    }
+
+    public void setSessionCount(Integer sessionCount) {
+        this.sessionCount = sessionCount;
+    }
+
+    public String getInteractionMode() {
+        return interactionMode;
+    }
+
+    public void setInteractionMode(String interactionMode) {
+        this.interactionMode = interactionMode;
+    }
+
+    public Boolean getGiftsEnabled() {
+        return giftsEnabled;
+    }
+
+    public void setGiftsEnabled(Boolean giftsEnabled) {
+        this.giftsEnabled = giftsEnabled;
+    }
+
+    public List<Map<String, Object>> getGiftOptions() {
+        return giftOptions;
+    }
+
+    public void setGiftOptions(List<Map<String, Object>> giftOptions) {
+        this.giftOptions = giftOptions;
+    }
+
+    public String getTargetUserId() {
+        return targetUserId;
+    }
+
+    public void setTargetUserId(String targetUserId) {
+        this.targetUserId = targetUserId;
+    }
+
+    public String getTargetOrderId() {
+        return targetOrderId;
+    }
+
+    public void setTargetOrderId(String targetOrderId) {
+        this.targetOrderId = targetOrderId;
+    }
+
+    public String getGiftId() {
+        return giftId;
+    }
+
+    public void setGiftId(String giftId) {
+        this.giftId = giftId;
+    }
+
+    public Integer getSessionNumber() {
+        return sessionNumber;
+    }
+
+    public void setSessionNumber(Integer sessionNumber) {
+        this.sessionNumber = sessionNumber;
+    }
+
+    public String getUserPhotoUrl() {
+        return userPhotoUrl;
+    }
+
+    public void setUserPhotoUrl(String userPhotoUrl) {
+        this.userPhotoUrl = userPhotoUrl;
+    }
+
+    public Integer getLimit() {
+        return limit;
+    }
+
+    public void setLimit(Integer limit) {
+        this.limit = limit;
+    }
+
+    // Review getters/setters
+    public String getBookingId() {
+        return bookingId;
+    }
+
+    public void setBookingId(String bookingId) {
+        this.bookingId = bookingId;
+    }
+
+    public Integer getRating() {
+        return rating;
+    }
+
+    public void setRating(Integer rating) {
+        this.rating = rating;
+    }
+
+    public String getComment() {
+        return comment;
+    }
+
+    public void setComment(String comment) {
+        this.comment = comment;
+    }
+
+    public Integer getPreviousRating() {
+        return previousRating;
+    }
+
+    public void setPreviousRating(Integer previousRating) {
+        this.previousRating = previousRating;
     }
 }

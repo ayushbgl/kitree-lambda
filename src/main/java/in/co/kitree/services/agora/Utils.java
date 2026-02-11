@@ -1,5 +1,6 @@
 package in.co.kitree.services.agora;
 
+import in.co.kitree.services.LoggingService;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -96,7 +97,7 @@ public class Utils {
             output = bos.toByteArray();
         } catch (Exception e) {
             output = data;
-            e.printStackTrace();
+            LoggingService.error("agora_compress_failed", e);
         } finally {
             deflater.end();
         }
@@ -116,7 +117,7 @@ public class Utils {
                 bos.write(buf, 0, i);
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            LoggingService.error("agora_decompress_failed", e);
         } finally {
             inflater.end();
         }
