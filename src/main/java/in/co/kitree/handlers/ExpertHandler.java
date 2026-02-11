@@ -41,6 +41,20 @@ public class ExpertHandler {
         return Boolean.TRUE.equals(FirebaseAuth.getInstance().getUser(userId).getCustomClaims().get("admin"));
     }
 
+    public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
+        return switch (action) {
+            case "expert_earnings_balance" -> handleExpertEarningsBalance(userId, requestBody);
+            case "get_expert_booking_metrics" -> handleGetExpertBookingMetrics(userId, requestBody);
+            case "record_expert_payout" -> handleRecordExpertPayout(userId, requestBody);
+            case "get_expert_platform_fee" -> handleGetExpertPlatformFee(userId, requestBody);
+            case "set_expert_platform_fee" -> handleSetExpertPlatformFee(userId, requestBody);
+            case "mark_expert_busy" -> handleMarkExpertBusy(userId, requestBody.getOrderId());
+            case "mark_expert_free" -> handleMarkExpertFree(userId, requestBody.getOrderId());
+            case "expert_metrics" -> handleExpertMetrics(userId, requestBody);
+            default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
+        };
+    }
+
     // ============= Expert Handler Methods =============
 
     /**

@@ -45,6 +45,23 @@ public class ProductOrderHandler {
         return new ProductOrderService(db, catalogService, expertProductService, earningsService);
     }
 
+    public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
+        return switch (action) {
+            case "get_platform_products" -> handleGetPlatformProducts(requestBody);
+            case "get_expert_products" -> handleGetExpertProducts(userId, requestBody);
+            case "update_expert_product" -> handleUpdateExpertProduct(userId, requestBody);
+            case "get_expert_storefront" -> handleGetExpertStorefront(requestBody);
+            case "buy_products" -> handleBuyProducts(userId, requestBody);
+            case "verify_product_payment" -> handleVerifyProductPayment(userId, requestBody);
+            case "get_user_product_orders" -> handleGetUserProductOrders(userId);
+            case "get_expert_product_orders" -> handleGetExpertProductOrders(userId, requestBody);
+            case "get_platform_shipping_orders" -> handleGetPlatformShippingOrders(userId);
+            case "update_product_order_status" -> handleUpdateProductOrderStatus(userId, requestBody);
+            case "cancel_product_order" -> handleCancelProductOrder(userId, requestBody);
+            default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
+        };
+    }
+
     // ============= Product Ecommerce Handler Methods =============
 
     /**

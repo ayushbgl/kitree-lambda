@@ -37,6 +37,19 @@ public class AstrologyHandler {
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     }
 
+    public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
+        return switch (action) {
+            case "get_astrological_details" -> astrologyService.getAstrologicalDetails(requestBody);
+            case "get_dasha_details" -> astrologyService.getDashaDetails(requestBody);
+            case "get_divisional_charts" -> astrologyService.getDivisionalCharts(requestBody);
+            case "get_gochar_details" -> handleGetGocharDetails(requestBody);
+            case "generate_aura_report" -> handleGenerateAuraReport(userId, requestBody);
+            case "get_certificate_courses" -> handleGetCertificateCourses(requestBody);
+            case "generate_certificate" -> handleGenerateCertificate(requestBody);
+            default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
+        };
+    }
+
     // ============= Handler Methods =============
 
     private String handleGetGocharDetails(RequestBody requestBody) throws Exception {

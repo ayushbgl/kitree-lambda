@@ -32,6 +32,14 @@ public class WalletHandler {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
+    public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
+        return switch (action) {
+            case "wallet_balance" -> handleWalletBalance(userId, requestBody);
+            case "create_wallet_recharge_order" -> handleCreateWalletRechargeOrder(userId, requestBody);
+            default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
+        };
+    }
+
     /**
      * Get wallet balance for a user with a specific expert.
      * Requires expertId - wallets are per-expert.

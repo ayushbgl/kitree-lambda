@@ -127,6 +127,23 @@ public class ConsultationHandler {
         return null;
     }
 
+    public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
+        return switch (action) {
+            case "on_demand_consultation_initiate" -> handleOnDemandConsultationInitiate(userId, requestBody);
+            case "on_demand_consultation_connect" -> handleOnDemandConsultationConnect(userId, requestBody);
+            case "on_demand_consultation_heartbeat" -> handleOnDemandConsultationHeartbeat(userId, requestBody);
+            case "update_consultation_max_duration" -> handleUpdateConsultationMaxDuration(userId, requestBody);
+            case "on_demand_consultation_end" -> handleOnDemandConsultationEnd(userId, requestBody);
+            case "cleanup_stale_order" -> handleCleanupStaleOrder(userId, requestBody);
+            case "recalculate_charge" -> handleRecalculateCharge(requestBody);
+            case "generate_consultation_summary" -> handleGenerateConsultationSummary(userId, requestBody);
+            case "get_consultation_summary" -> handleGetConsultationSummary(userId, requestBody);
+            case "get_active_call_for_user" -> handleGetActiveCallForUser(userId, requestBody);
+            case "submit_review" -> handleSubmitReview(userId, requestBody);
+            default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
+        };
+    }
+
     // ============= Consultation Handler Methods =============
 
     /**

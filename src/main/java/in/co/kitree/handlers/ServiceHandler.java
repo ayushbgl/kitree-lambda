@@ -33,6 +33,17 @@ public class ServiceHandler {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
+    public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
+        return switch (action) {
+            case "buy_service" -> handleBuyService(userId, requestBody);
+            case "verify_payment" -> handleVerifyPayment(userId, requestBody);
+            case "confirm_appointment" -> handleConfirmAppointment(userId, requestBody);
+            case "apply_coupon" -> handleApplyCoupon(userId, requestBody);
+            case "get_expert_availability" -> handleGetExpertAvailability(userId, requestBody);
+            default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
+        };
+    }
+
     // ============= Service Handler Methods =============
 
     private String handleBuyService(String userId, RequestBody requestBody) throws Exception {

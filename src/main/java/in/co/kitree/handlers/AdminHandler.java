@@ -43,6 +43,16 @@ public class AdminHandler {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
+    public String handleRequest(String action, RequestBody requestBody) throws Exception {
+        return switch (action) {
+            case "app_startup" -> handleAppStartup(requestBody);
+            case "make_admin" -> handleMakeAdmin(requestBody);
+            case "remove_admin" -> handleRemoveAdmin(requestBody);
+            case "razorpay_webhook" -> handleRazorpayWebhook(requestBody);
+            default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
+        };
+    }
+
     private String handleMakeAdmin(RequestBody requestBody) throws FirebaseAuthException {
         if (!ADMIN_SECRET.equals(requestBody.getAdminSecret())) {
             return "Not Authorized";

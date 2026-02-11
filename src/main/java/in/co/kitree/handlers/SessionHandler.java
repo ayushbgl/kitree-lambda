@@ -30,6 +30,31 @@ public class SessionHandler {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
+    public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
+        return switch (action) {
+            case "get_stream_user_token" -> handleGetStreamUserToken(userId, requestBody);
+            case "create_session_plan" -> handleCreateSessionPlan(userId, requestBody);
+            case "add_course_session" -> handleAddCourseSession(userId, requestBody);
+            case "start_session" -> handleStartSession(userId, requestBody);
+            case "stop_session" -> handleStopSession(userId, requestBody);
+            case "join_session" -> handleJoinSession(userId, requestBody);
+            case "leave_session" -> handleLeaveSession(userId, requestBody);
+            case "raise_hand" -> handleRaiseHand(userId, requestBody);
+            case "lower_hand" -> handleLowerHand(userId, requestBody);
+            case "promote_participant" -> handlePromoteParticipant(userId, requestBody);
+            case "demote_participant" -> handleDemoteParticipant(userId, requestBody);
+            case "mute_participant" -> handleMuteParticipant(userId, requestBody);
+            case "kick_participant" -> handleKickParticipant(userId, requestBody);
+            case "toggle_session_gifts" -> handleToggleSessionGifts(userId, requestBody);
+            case "get_session_participants" -> handleGetSessionParticipants(userId, requestBody);
+            case "get_raised_hands" -> handleGetRaisedHands(userId, requestBody);
+            case "get_live_sessions" -> handleGetLiveSessions(requestBody);
+            case "get_upcoming_sessions" -> handleGetUpcomingSessions(requestBody);
+            case "send_gift" -> handleSendGift(userId, requestBody);
+            default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
+        };
+    }
+
     // ============= Handler Methods =============
 
     private String handleGetStreamUserToken(String userId, RequestBody requestBody) throws Exception {
