@@ -17,14 +17,11 @@ import static org.mockito.Mockito.*;
 
 /**
  * Integration security tests for the actAs impersonation flow through the full Handler.
- * Uses the Firebase auth emulator to verify:
+ * Uses REST path-based routing and the Firebase auth emulator to verify:
  *   - Non-admins are rejected when using actAs
- *   - Admins are rejected for blocked functions (call/session/purchase)
- *   - Admins succeed for allowed management functions
+ *   - Admins are rejected for blocked paths (sessions/consultations/orders)
+ *   - Admins succeed for allowed management paths (expert earnings, metrics)
  *   - callerUserId always reflects the real caller, never the impersonated expert
- *
- * Uses a TestableHandler subclass that injects the test user without real token verification,
- * while still hitting the real Firebase auth emulator for admin claim checks.
  */
 public class ActAsHandlerSecurityTest extends TestBase {
 
@@ -32,14 +29,21 @@ public class ActAsHandlerSecurityTest extends TestBase {
     private static final String EXPERT_USER_ID = "test-expert-actas-001";
     private static final String REGULAR_USER_ID = "test-user-actas-001";
 
+    // Allowed REST paths (not in BLOCKED_ACT_AS_PATHS)
+    private static final String EXPERT_EARNINGS_PATH = "/api/v1/experts/" + EXPERT_USER_ID + "/earnings";
+    private static final String EXPERT_METRICS_PATH = "/api/v1/experts/" + EXPERT_USER_ID + "/metrics";
+    private static final String EXPERT_PAYOUT_PATH = "/api/v1/experts/" + EXPERT_USER_ID + "/payouts";
+
+    // Blocked REST paths (match BLOCKED_ACT_AS_PATHS prefixes)
+    private static final String STREAM_TOKEN_PATH = "/api/v1/stream/token";
+    private static final String SESSION_START_PATH = "/api/v1/sessions/plan123/start";
+    private static final String REVIEW_PATH = "/api/v1/reviews";
+    private static final String BUY_PRODUCTS_PATH = "/api/v1/orders/products";
+
     static {
         System.setProperty("ENVIRONMENT", "test");
     }
 
-    /**
-     * Handler subclass that bypasses real token verification,
-     * allowing us to simulate any authenticated user in tests.
-     */
     private static class TestableHandler extends Handler {
         private String currentUserId;
 
@@ -65,14 +69,9 @@ public class ActAsHandlerSecurityTest extends TestBase {
 
         handler = new TestableHandler();
 
-        // Admin user with admin claim
         try { createAuthUser(ADMIN_USER_ID); } catch (Exception ignored) {}
         setUserClaims(ADMIN_USER_ID, Map.of("admin", true));
-
-        // Expert user — no special claims
         try { createAuthUser(EXPERT_USER_ID); } catch (Exception ignored) {}
-
-        // Regular user — no admin claim
         try { createAuthUser(REGULAR_USER_ID); } catch (Exception ignored) {}
     }
 
@@ -84,7 +83,7 @@ public class ActAsHandlerSecurityTest extends TestBase {
         handler.setCurrentUser(REGULAR_USER_ID);
 
         Object response = handler.handleRequest(
-            eventWithBody("{\"function\":\"expert_earnings_balance\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
+            eventWithBodyAndPath("{\"actAs\":\"" + EXPERT_USER_ID + "\"}", EXPERT_EARNINGS_PATH),
             context
         );
 
@@ -93,67 +92,60 @@ public class ActAsHandlerSecurityTest extends TestBase {
     }
 
     @Test
-    @DisplayName("Non-admin actAs for multiple management functions is consistently rejected")
-    void nonAdminActAsRejectedForAllManagementFunctions() {
+    @DisplayName("Non-admin actAs for multiple management paths is consistently rejected")
+    void nonAdminActAsRejectedForAllManagementPaths() {
         handler.setCurrentUser(REGULAR_USER_ID);
-        String[] functions = {
-            "expert_earnings_balance", "expert_metrics", "get_expert_booking_metrics",
-            "get_expert_products", "update_expert_product"
-        };
-        for (String fn : functions) {
+        String[] paths = { EXPERT_EARNINGS_PATH, EXPERT_METRICS_PATH, EXPERT_PAYOUT_PATH };
+        for (String path : paths) {
             Object response = handler.handleRequest(
-                eventWithBody("{\"function\":\"" + fn + "\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
+                eventWithBodyAndPath("{\"actAs\":\"" + EXPERT_USER_ID + "\"}", path),
                 context
             );
             assertTrue(String.valueOf(response).contains("Not authorized"),
-                "Non-admin must be rejected for '" + fn + "'. Got: " + response);
+                "Non-admin must be rejected for '" + path + "'. Got: " + response);
         }
     }
 
-    // ==================== BLOCKED FUNCTION REJECTION ====================
+    // ==================== BLOCKED PATH REJECTION ====================
 
     @Test
-    @DisplayName("Admin using actAs for create_call is rejected")
-    void adminActAsForCreateCallIsRejected() {
+    @DisplayName("Admin using actAs for stream token path is rejected")
+    void adminActAsForStreamTokenIsRejected() {
         handler.setCurrentUser(ADMIN_USER_ID);
 
         Object response = handler.handleRequest(
-            eventWithBody("{\"function\":\"create_call\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
+            eventWithBodyAndPath("{\"actAs\":\"" + EXPERT_USER_ID + "\"}", STREAM_TOKEN_PATH),
             context
         );
 
         assertTrue(String.valueOf(response).contains("Not authorized"),
-            "Admin must not be able to start a call as expert via actAs. Got: " + response);
+            "Admin must not be able to get stream token via actAs. Got: " + response);
     }
 
     @Test
-    @DisplayName("Admin using actAs for all blocked functions is rejected")
-    void adminActAsRejectedForAllBlockedFunctions() {
+    @DisplayName("Admin using actAs for all blocked paths is rejected")
+    void adminActAsRejectedForAllBlockedPaths() {
         handler.setCurrentUser(ADMIN_USER_ID);
-        String[] blockedFunctions = {
-            "get_stream_user_token", "create_call", "start_session", "join_session",
-            "leave_session", "stop_session", "send_gift", "buy_products",
-            "submit_review", "cancel_subscription", "get_user_product_orders"
-        };
-        for (String fn : blockedFunctions) {
+        String[] blockedPaths = { STREAM_TOKEN_PATH, SESSION_START_PATH, REVIEW_PATH, BUY_PRODUCTS_PATH };
+        for (String path : blockedPaths) {
             Object response = handler.handleRequest(
-                eventWithBody("{\"function\":\"" + fn + "\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
+                eventWithBodyAndPath("{\"actAs\":\"" + EXPERT_USER_ID + "\"}", path),
                 context
             );
             assertTrue(String.valueOf(response).contains("Not authorized"),
-                "Admin must not be able to use '" + fn + "' via actAs. Got: " + response);
+                "Admin must not be able to use actAs for '" + path + "'. Got: " + response);
         }
     }
 
     // ==================== ADMIN SUCCESS ====================
 
     @Test
-    @DisplayName("Admin using actAs for expert_earnings_balance is allowed")
+    @DisplayName("Admin using actAs for expert earnings is allowed")
     void adminActAsForEarningsIsAllowed() {
         handler.setCurrentUser(ADMIN_USER_ID);
 
         Object response = handler.handleRequest(
-            eventWithBody("{\"function\":\"expert_earnings_balance\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
+            eventWithBodyAndPath("{\"actAs\":\"" + EXPERT_USER_ID + "\"}", EXPERT_EARNINGS_PATH),
             context
         );
 
@@ -162,12 +154,15 @@ public class ActAsHandlerSecurityTest extends TestBase {
     }
 
     @Test
-    @DisplayName("Admin using actAs for expert_metrics is allowed")
+    @DisplayName("Admin using actAs for expert metrics is allowed")
     void adminActAsForMetricsIsAllowed() {
         handler.setCurrentUser(ADMIN_USER_ID);
 
         Object response = handler.handleRequest(
-            eventWithBody("{\"function\":\"expert_metrics\",\"expertId\":\"" + EXPERT_USER_ID + "\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
+            eventWithBodyAndPath(
+                "{\"expertId\":\"" + EXPERT_USER_ID + "\",\"actAs\":\"" + EXPERT_USER_ID + "\"}",
+                EXPERT_METRICS_PATH
+            ),
             context
         );
 
@@ -182,20 +177,17 @@ public class ActAsHandlerSecurityTest extends TestBase {
     void callerUserIdRemainsAdminDuringImpersonation() {
         handler.setCurrentUser(ADMIN_USER_ID);
 
-        // record_expert_payout requires admin in callerUserId — if callerUserId was replaced
-        // with the impersonated expert, the admin check would fail
         Object response = handler.handleRequest(
-            eventWithBody(
-                "{\"function\":\"record_expert_payout\""
-                + ",\"actAs\":\"" + EXPERT_USER_ID + "\""
+            eventWithBodyAndPath(
+                "{\"actAs\":\"" + EXPERT_USER_ID + "\""
                 + ",\"expertId\":\"" + EXPERT_USER_ID + "\""
                 + ",\"amount\":100.0,\"currency\":\"INR\""
-                + ",\"payoutMethod\":\"UPI\",\"payoutReference\":\"test-ref-001\"}"
+                + ",\"payoutMethod\":\"UPI\",\"payoutReference\":\"test-ref-001\"}",
+                EXPERT_PAYOUT_PATH
             ),
             context
         );
 
-        // Should NOT hit admin rejection — callerUserId is still the admin
         assertFalse(String.valueOf(response).contains("Admin access required"),
             "Admin action should succeed with admin callerUserId. Got: " + response);
         assertFalse(String.valueOf(response).contains("Not authorized"),
@@ -207,19 +199,17 @@ public class ActAsHandlerSecurityTest extends TestBase {
     void nonAdminCannotEscalateViaActAs() {
         handler.setCurrentUser(REGULAR_USER_ID);
 
-        // Try to perform admin action (record_expert_payout) while impersonating expert
         Object response = handler.handleRequest(
-            eventWithBody(
-                "{\"function\":\"record_expert_payout\""
-                + ",\"actAs\":\"" + EXPERT_USER_ID + "\""
+            eventWithBodyAndPath(
+                "{\"actAs\":\"" + EXPERT_USER_ID + "\""
                 + ",\"expertId\":\"" + EXPERT_USER_ID + "\""
                 + ",\"amount\":100.0,\"currency\":\"INR\""
-                + ",\"payoutMethod\":\"UPI\",\"payoutReference\":\"escalation-attempt\"}"
+                + ",\"payoutMethod\":\"UPI\",\"payoutReference\":\"escalation-attempt\"}",
+                EXPERT_PAYOUT_PATH
             ),
             context
         );
 
-        // Must be rejected at the actAs gate before even reaching the admin check
         assertTrue(String.valueOf(response).contains("Not authorized"),
             "Non-admin must be blocked by actAs check. Got: " + response);
     }
@@ -232,11 +222,10 @@ public class ActAsHandlerSecurityTest extends TestBase {
         handler.setCurrentUser(REGULAR_USER_ID);
 
         Object response = handler.handleRequest(
-            eventWithBody("{\"function\":\"expert_earnings_balance\"}"),
+            eventWithBodyAndPath("{}", EXPERT_EARNINGS_PATH),
             context
         );
 
-        // No auth rejection — user is requesting their own data
         assertFalse(String.valueOf(response).contains("Not authorized"),
             "Own data access should not be rejected. Got: " + response);
     }
@@ -247,7 +236,7 @@ public class ActAsHandlerSecurityTest extends TestBase {
         handler.setCurrentUser(ADMIN_USER_ID);
 
         Object response = handler.handleRequest(
-            eventWithBody("{\"function\":\"expert_earnings_balance\",\"actAs\":\"" + ADMIN_USER_ID + "\"}"),
+            eventWithBodyAndPath("{\"actAs\":\"" + ADMIN_USER_ID + "\"}", EXPERT_EARNINGS_PATH),
             context
         );
 
@@ -256,14 +245,6 @@ public class ActAsHandlerSecurityTest extends TestBase {
     }
 
     // ==================== HELPER ====================
-
-    private RequestEvent eventWithBody(String body) {
-        RequestEvent event = new RequestEvent();
-        event.setBody(body);
-        event.setRawPath("/api/v1/expert/earnings");
-        event.setRequestContext(new RequestContext());
-        return event;
-    }
 
     private RequestEvent eventWithBodyAndPath(String body, String path) {
         RequestEvent event = new RequestEvent();
