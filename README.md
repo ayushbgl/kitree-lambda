@@ -49,25 +49,39 @@ These files are stored in the `kitree-secrets` private repo under `kitree-lambda
 2. Select environment: `test`, `prod`, or `both`
 3. Pipeline: CI tests -> SAM build/deploy -> Health check verification
 
-### Manual Setup (one-time)
+### What the deploy does
 
-1. **AWS IAM deployer user** — `kitree-lambda-github-deployer` with permissions for:
-   - CloudFormation, Lambda, S3, IAM (for SAM deployment)
-   - CloudFront distribution management
-   - EventBridge rule management
+**Note:** There are no local deploy scripts — all deployments go through GitHub Actions.
+
+- Creates an S3 deployment bucket `kitree-backend-{AccountId}` if it doesn't exist (SAM artifacts stored under `kitree-lambda/` prefix)
+- Deploys CloudFormation stack `kitree-lambda-{env}` with Lambda Function URL + CloudFront distribution
+- Creates a CloudWatch log group `/aws/lambda/kitree-lambda-{env}` with retention (7 days prod, 1 day test)
+- Creates an EventBridge rule for auto-terminating stale consultations
+
+### New AWS Account Setup
+
+1. **IAM deployer user** — create a user (e.g. `github`) with `AdministratorAccess` (or scoped to CloudFormation, Lambda, S3, IAM, CloudFront, EventBridge). This user's credentials are used by GitHub Actions.
 
 2. **GitHub Secrets** (repository settings):
-   - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
-   - `REPO_ACCESS_TOKEN` — GitHub PAT to clone `kitree-secrets`
-   - `FIREBASE_SERVICE_ACCOUNT_KEY_TEST`, `FIREBASE_SERVICE_ACCOUNT_KEY_PROD`
+   | Secret | Description |
+   |--------|-------------|
+   | `AWS_ACCESS_KEY_ID` | IAM deployer user access key |
+   | `AWS_SECRET_ACCESS_KEY` | IAM deployer user secret key |
+   | `REPO_ACCESS_TOKEN` | GitHub PAT to clone `kitree-secrets` |
+   | `FIREBASE_SERVICE_ACCOUNT_KEY_TEST` | Firebase service account JSON (test project) |
+   | `FIREBASE_SERVICE_ACCOUNT_KEY_PROD` | Firebase service account JSON (prod project) |
 
 3. **kitree-secrets repo** must contain:
    - `kitree-lambda/secrets.json`
    - `kitree-lambda/serviceAccountKey.json` (Firebase prod)
    - `kitree-lambda/serviceAccountKeyTest.json` (Firebase test)
 
-4. **DNS** — CNAME records pointing custom domains to CloudFront:
-   - `api-test.kitree.co.in` -> CloudFront distribution (test)
-   - `api.kitree.co.in` -> CloudFront distribution (prod)
+4. **ACM Certificate** — create a `*.kitree.co.in` wildcard certificate in **us-east-1** (required by CloudFront). Update `API_CERTIFICATE_ARN` in `deploy.yml` with the new ARN.
 
-5. **ACM Certificate** — `*.kitree.co.in` in `us-east-1` (required for CloudFront)
+5. **DNS** — after the first deploy, the workflow output shows the CloudFront domain (e.g. `d1234abc.cloudfront.net`). Create CNAME records:
+   - `api-test.kitree.co.in` -> CloudFront distribution domain (test)
+   - `api.kitree.co.in` -> CloudFront distribution domain (prod)
+
+   The CloudFront domain is printed in the deploy job output and in the GitHub Actions step summary.
+
+6. **Deploy kitree-astrology and kitree-python-scripts first** — this Lambda invokes both via AWS SDK. The SAM template grants `lambda:InvokeFunction` on `kitree-astrology-api-{env}` and `kitree-python-scripts-{env}`, so those functions must exist before this Lambda can call them.
