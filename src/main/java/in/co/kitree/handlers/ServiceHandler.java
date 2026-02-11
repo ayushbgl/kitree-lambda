@@ -460,12 +460,6 @@ public class ServiceHandler {
         return null;
     }
 
-    private String handleMakeCall(String userId, RequestBody requestBody) {
-        Booking booking = new Booking(this.db);
-        Map<String, String> response = booking.makeCall(userId, requestBody.getOrderId());
-        return gson.toJson(response);
-    }
-
     private String handleConfirmAppointment(String userId, RequestBody requestBody) throws Exception {
         String userIdFromRequest = requestBody.getUserId();
         String orderId = requestBody.getOrderId();

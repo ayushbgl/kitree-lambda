@@ -3,14 +3,20 @@ package in.co.kitree.services;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import in.co.kitree.TestBase;
 import in.co.kitree.pojos.RequestBody;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-public class AstrologyServiceTest extends TestBase {
+/**
+ * Integration tests for AstrologyService.
+ * These make real HTTP calls to the kitree-astrology Lambda, so they only run
+ * when ASTROLOGY_TESTS_ENABLED=true is set (e.g., for manual integration testing).
+ */
+@EnabledIfEnvironmentVariable(named = "ASTROLOGY_TESTS_ENABLED", matches = "true")
+public class AstrologyServiceTest {
     
     private AstrologyService astrologyService;
     private Gson gson;

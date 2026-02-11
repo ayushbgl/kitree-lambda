@@ -585,10 +585,8 @@ jobs:
           echo "⏱️ Cold start check — https://${API_DOMAIN_TEST}"
           RESULT=$(curl -o response_test.json -s \
             -w "%{http_code} %{time_total}" \
-            -X POST "https://${API_DOMAIN_TEST}" \
-            -H "Content-Type: application/json" \
-            --max-time 30 \
-            -d '{"function":"app_startup"}')
+            -X GET "https://${API_DOMAIN_TEST}/health" \
+            --max-time 30)
           HTTP_CODE=$(echo $RESULT | awk '{print $1}')
           COLD_START=$(echo $RESULT | awk '{print $2}')
           echo "HTTP status : $HTTP_CODE"
@@ -606,10 +604,8 @@ jobs:
           echo "⏱️ Cold start check — https://${API_DOMAIN_PROD}"
           RESULT=$(curl -o response_prod.json -s \
             -w "%{http_code} %{time_total}" \
-            -X POST "https://${API_DOMAIN_PROD}" \
-            -H "Content-Type: application/json" \
-            --max-time 30 \
-            -d '{"function":"app_startup"}')
+            -X GET "https://${API_DOMAIN_PROD}/health" \
+            --max-time 30)
           HTTP_CODE=$(echo $RESULT | awk '{print $1}')
           COLD_START=$(echo $RESULT | awk '{print $2}')
           echo "HTTP status : $HTTP_CODE"

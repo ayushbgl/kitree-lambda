@@ -237,8 +237,13 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 return "Warmed up!";
             }
 
-            // Path-based webhook routing
+            // Health check — no auth required
             String rawPath = event.getRawPath();
+            if ("/health".equals(rawPath)) {
+                return ApiResponse.ok(gson.toJson(Map.of("status", "ok"))).toLambdaResponse();
+            }
+
+            // Path-based webhook routing
             if (WebhookHandler.handlesPath(rawPath)) {
                 LoggingService.setFunction("webhook_handler");
                 return webhookHandler.handleWebhookRequest(event, rawPath);

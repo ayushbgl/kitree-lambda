@@ -4,7 +4,6 @@ import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.CollectionReference;
-import in.co.kitree.TestBase;
 import in.co.kitree.pojos.FirebaseUser;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,7 +17,7 @@ import java.util.concurrent.ExecutionException;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-public class UserServiceUnitTest extends TestBase {
+public class UserServiceUnitTest {
     @Mock
     private Firestore mockDb;
     @Mock

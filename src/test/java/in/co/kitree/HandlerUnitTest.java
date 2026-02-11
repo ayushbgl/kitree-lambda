@@ -33,6 +33,7 @@ class HandlerTest extends TestBase {
     void setUp() throws Exception {
         MockitoAnnotations.openMocks(this);
         when(context.getLogger()).thenReturn(logger);
+        if (!emulatorAvailable) return;
         handler = new Handler();
         try {
             createAuthUser(TEST_USER_ID);
@@ -43,6 +44,7 @@ class HandlerTest extends TestBase {
 
     @AfterEach
     void tearDown() throws Exception {
+        if (!emulatorAvailable || auth == null) return;
         try {
             deleteAuthUser(TEST_USER_ID);
         } catch (FirebaseAuthException e) {
