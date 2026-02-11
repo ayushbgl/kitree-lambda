@@ -48,7 +48,7 @@ public class ActAsHandlerSecurityTest extends TestBase {
         }
 
         @Override
-        protected String extractUserIdFromToken(RequestEvent event, String functionName) {
+        protected String extractUserIdFromToken(RequestEvent event) {
             return currentUserId;
         }
     }
@@ -83,12 +83,12 @@ public class ActAsHandlerSecurityTest extends TestBase {
     void nonAdminActAsIsRejected() {
         handler.setCurrentUser(REGULAR_USER_ID);
 
-        String response = handler.handleRequest(
+        Object response = handler.handleRequest(
             eventWithBody("{\"function\":\"expert_earnings_balance\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
             context
         );
 
-        assertTrue(response.contains("Not authorized"),
+        assertTrue(String.valueOf(response).contains("Not authorized"),
             "Non-admin must not be allowed to use actAs. Got: " + response);
     }
 
@@ -101,11 +101,11 @@ public class ActAsHandlerSecurityTest extends TestBase {
             "get_expert_products", "update_expert_product"
         };
         for (String fn : functions) {
-            String response = handler.handleRequest(
+            Object response = handler.handleRequest(
                 eventWithBody("{\"function\":\"" + fn + "\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
                 context
             );
-            assertTrue(response.contains("Not authorized"),
+            assertTrue(String.valueOf(response).contains("Not authorized"),
                 "Non-admin must be rejected for '" + fn + "'. Got: " + response);
         }
     }
@@ -117,12 +117,12 @@ public class ActAsHandlerSecurityTest extends TestBase {
     void adminActAsForCreateCallIsRejected() {
         handler.setCurrentUser(ADMIN_USER_ID);
 
-        String response = handler.handleRequest(
+        Object response = handler.handleRequest(
             eventWithBody("{\"function\":\"create_call\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
             context
         );
 
-        assertTrue(response.contains("Not authorized"),
+        assertTrue(String.valueOf(response).contains("Not authorized"),
             "Admin must not be able to start a call as expert via actAs. Got: " + response);
     }
 
@@ -136,11 +136,11 @@ public class ActAsHandlerSecurityTest extends TestBase {
             "submit_review", "cancel_subscription", "get_user_product_orders"
         };
         for (String fn : blockedFunctions) {
-            String response = handler.handleRequest(
+            Object response = handler.handleRequest(
                 eventWithBody("{\"function\":\"" + fn + "\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
                 context
             );
-            assertTrue(response.contains("Not authorized"),
+            assertTrue(String.valueOf(response).contains("Not authorized"),
                 "Admin must not be able to use '" + fn + "' via actAs. Got: " + response);
         }
     }
@@ -152,12 +152,12 @@ public class ActAsHandlerSecurityTest extends TestBase {
     void adminActAsForEarningsIsAllowed() {
         handler.setCurrentUser(ADMIN_USER_ID);
 
-        String response = handler.handleRequest(
+        Object response = handler.handleRequest(
             eventWithBody("{\"function\":\"expert_earnings_balance\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
             context
         );
 
-        assertFalse(response.contains("Not authorized"),
+        assertFalse(String.valueOf(response).contains("Not authorized"),
             "Admin should be allowed to view earnings via actAs. Got: " + response);
     }
 
@@ -166,12 +166,12 @@ public class ActAsHandlerSecurityTest extends TestBase {
     void adminActAsForMetricsIsAllowed() {
         handler.setCurrentUser(ADMIN_USER_ID);
 
-        String response = handler.handleRequest(
+        Object response = handler.handleRequest(
             eventWithBody("{\"function\":\"expert_metrics\",\"expertId\":\"" + EXPERT_USER_ID + "\",\"actAs\":\"" + EXPERT_USER_ID + "\"}"),
             context
         );
 
-        assertFalse(response.contains("Not authorized"),
+        assertFalse(String.valueOf(response).contains("Not authorized"),
             "Admin should be allowed to view expert metrics via actAs. Got: " + response);
     }
 
@@ -184,7 +184,7 @@ public class ActAsHandlerSecurityTest extends TestBase {
 
         // record_expert_payout requires admin in callerUserId — if callerUserId was replaced
         // with the impersonated expert, the admin check would fail
-        String response = handler.handleRequest(
+        Object response = handler.handleRequest(
             eventWithBody(
                 "{\"function\":\"record_expert_payout\""
                 + ",\"actAs\":\"" + EXPERT_USER_ID + "\""
@@ -196,9 +196,9 @@ public class ActAsHandlerSecurityTest extends TestBase {
         );
 
         // Should NOT hit admin rejection — callerUserId is still the admin
-        assertFalse(response.contains("Admin access required"),
+        assertFalse(String.valueOf(response).contains("Admin access required"),
             "Admin action should succeed with admin callerUserId. Got: " + response);
-        assertFalse(response.contains("Not authorized"),
+        assertFalse(String.valueOf(response).contains("Not authorized"),
             "actAs should not block admin-only functions when caller is admin. Got: " + response);
     }
 
@@ -208,7 +208,7 @@ public class ActAsHandlerSecurityTest extends TestBase {
         handler.setCurrentUser(REGULAR_USER_ID);
 
         // Try to perform admin action (record_expert_payout) while impersonating expert
-        String response = handler.handleRequest(
+        Object response = handler.handleRequest(
             eventWithBody(
                 "{\"function\":\"record_expert_payout\""
                 + ",\"actAs\":\"" + EXPERT_USER_ID + "\""
@@ -220,7 +220,7 @@ public class ActAsHandlerSecurityTest extends TestBase {
         );
 
         // Must be rejected at the actAs gate before even reaching the admin check
-        assertTrue(response.contains("Not authorized"),
+        assertTrue(String.valueOf(response).contains("Not authorized"),
             "Non-admin must be blocked by actAs check. Got: " + response);
     }
 
@@ -231,13 +231,13 @@ public class ActAsHandlerSecurityTest extends TestBase {
     void withoutActAsRequestProceedsNormally() {
         handler.setCurrentUser(REGULAR_USER_ID);
 
-        String response = handler.handleRequest(
+        Object response = handler.handleRequest(
             eventWithBody("{\"function\":\"expert_earnings_balance\"}"),
             context
         );
 
         // No auth rejection — user is requesting their own data
-        assertFalse(response.contains("Not authorized"),
+        assertFalse(String.valueOf(response).contains("Not authorized"),
             "Own data access should not be rejected. Got: " + response);
     }
 
@@ -246,12 +246,12 @@ public class ActAsHandlerSecurityTest extends TestBase {
     void adminSelfImpersonationIsAllowed() {
         handler.setCurrentUser(ADMIN_USER_ID);
 
-        String response = handler.handleRequest(
+        Object response = handler.handleRequest(
             eventWithBody("{\"function\":\"expert_earnings_balance\",\"actAs\":\"" + ADMIN_USER_ID + "\"}"),
             context
         );
 
-        assertFalse(response.contains("Not authorized"),
+        assertFalse(String.valueOf(response).contains("Not authorized"),
             "Admin self-impersonation should be allowed. Got: " + response);
     }
 
@@ -260,6 +260,15 @@ public class ActAsHandlerSecurityTest extends TestBase {
     private RequestEvent eventWithBody(String body) {
         RequestEvent event = new RequestEvent();
         event.setBody(body);
+        event.setRawPath("/api/v1/expert/earnings");
+        event.setRequestContext(new RequestContext());
+        return event;
+    }
+
+    private RequestEvent eventWithBodyAndPath(String body, String path) {
+        RequestEvent event = new RequestEvent();
+        event.setBody(body);
+        event.setRawPath(path);
         event.setRequestContext(new RequestContext());
         return event;
     }
