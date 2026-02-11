@@ -153,7 +153,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
         this.sessionHandler = new SessionHandler(db, streamService, pythonLambdaService, isTest());
         this.consultationHandler = new ConsultationHandler(db, pythonLambdaService, isTest());
         this.expertHandler = new ExpertHandler(db);
-        this.productOrderHandler = new ProductOrderHandler(db, razorpay);
+        this.productOrderHandler = new ProductOrderHandler(db, razorpay, pythonLambdaService);
         this.walletHandler = new WalletHandler(db, razorpay);
         this.webhookHandler = new WebhookHandler(db, isTest());
         this.restRouter = new RestRouter(

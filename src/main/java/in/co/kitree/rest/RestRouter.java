@@ -302,6 +302,12 @@ public class RestRouter {
             return ResponseConverter.fromHandlerResponse(result);
         });
 
+        post("/api/v1/orders/products/{orderId}/fulfill", "fulfill_digital_order", (userId, body, pathParams, queryParams) -> {
+            body.setOrderId(pathParams.get("orderId"));
+            String result = productOrderHandler.handleRequest("fulfill_digital_order", userId, body);
+            return ResponseConverter.fromHandlerResponse(result);
+        });
+
         patch("/api/v1/orders/products/{orderId}/status", "update_product_order_status", (userId, body, pathParams, queryParams) -> {
             body.setOrderId(pathParams.get("orderId"));
             String result = productOrderHandler.handleRequest("update_product_order_status", userId, body);

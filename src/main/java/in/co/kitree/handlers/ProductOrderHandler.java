@@ -1,6 +1,7 @@
 package in.co.kitree.handlers;
 
 import com.google.api.core.ApiFuture;
+import com.google.cloud.Timestamp;
 import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
@@ -24,11 +25,13 @@ public class ProductOrderHandler {
 
     private final Firestore db;
     private final Razorpay razorpay;
+    private final PythonLambdaService pythonLambdaService;
     private final Gson gson;
 
-    public ProductOrderHandler(Firestore db, Razorpay razorpay) {
+    public ProductOrderHandler(Firestore db, Razorpay razorpay, PythonLambdaService pythonLambdaService) {
         this.db = db;
         this.razorpay = razorpay;
+        this.pythonLambdaService = pythonLambdaService;
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
@@ -58,6 +61,7 @@ public class ProductOrderHandler {
             case "get_platform_shipping_orders" -> handleGetPlatformShippingOrders(userId);
             case "update_product_order_status" -> handleUpdateProductOrderStatus(userId, requestBody);
             case "cancel_product_order" -> handleCancelProductOrder(userId, requestBody);
+            case "fulfill_digital_order" -> handleFulfillDigitalOrder(userId, requestBody);
             default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
         };
     }
@@ -346,7 +350,47 @@ public class ProductOrderHandler {
 
             orderService.verifyOrderPayment(userId, requestBody.getOrderId());
 
-            return gson.toJson(Map.of("success", true, "orderId", requestBody.getOrderId()));
+            // Auto-fulfill digital orders after successful payment verification
+            Map<String, Object> verifyResponse = new HashMap<>();
+            verifyResponse.put("success", true);
+            verifyResponse.put("orderId", requestBody.getOrderId());
+
+            try {
+                DocumentSnapshot orderDoc = db.collection("users").document(userId)
+                        .collection("orders").document(requestBody.getOrderId()).get().get();
+                if (orderDoc.exists()) {
+                    String productType = orderDoc.getString("productType");
+                    if ("digital_report".equals(productType)) {
+                        // Attempt auto-fulfillment (best-effort, don't fail the verify response)
+                        try {
+                            RequestBody fulfillBody = new RequestBody();
+                            fulfillBody.setOrderId(requestBody.getOrderId());
+                            fulfillBody.setDob(requestBody.getDob());
+                            fulfillBody.setUserName(requestBody.getUserName());
+                            fulfillBody.setLanguage(requestBody.getLanguage());
+                            String fulfillResult = handleFulfillDigitalOrder(userId, fulfillBody);
+                            Map<String, Object> fulfillMap = gson.fromJson(fulfillResult, Map.class);
+                            if (Boolean.TRUE.equals(fulfillMap.get("success")) && fulfillMap.get("reportLink") != null) {
+                                verifyResponse.put("reportLink", fulfillMap.get("reportLink"));
+                            }
+                        } catch (Exception fulfillEx) {
+                            LoggingService.warn("auto_fulfill_digital_order_failed", Map.of(
+                                "userId", userId,
+                                "orderId", requestBody.getOrderId(),
+                                "error", fulfillEx.getMessage() != null ? fulfillEx.getMessage() : "unknown"
+                            ));
+                        }
+                    }
+                }
+            } catch (Exception autoFulfillEx) {
+                LoggingService.warn("auto_fulfill_check_failed", Map.of(
+                    "userId", userId,
+                    "orderId", requestBody.getOrderId(),
+                    "error", autoFulfillEx.getMessage() != null ? autoFulfillEx.getMessage() : "unknown"
+                ));
+            }
+
+            return gson.toJson(verifyResponse);
         } catch (Exception e) {
             LoggingService.error("verify_product_payment_error", e);
             return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
@@ -521,6 +565,133 @@ public class ProductOrderHandler {
         } catch (Exception e) {
             LoggingService.error("cancel_product_order_error", e);
             return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
+        }
+    }
+
+    /**
+     * Fulfill a digital order (e.g., generate a numerology report).
+     * Validates the order is PAID, invokes the Python Lambda to generate the report,
+     * and updates the order with the report link and DELIVERED status.
+     * Idempotent: if the order already has a reportLink, returns it without re-generating.
+     */
+    private String handleFulfillDigitalOrder(String userId, RequestBody requestBody) {
+        try {
+            if (requestBody.getOrderId() == null || requestBody.getOrderId().isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
+            }
+
+            if (pythonLambdaService == null) {
+                LoggingService.error("fulfill_digital_order_no_python_lambda_service");
+                return gson.toJson(Map.of("success", false, "errorMessage", "Report generation service is not available"));
+            }
+
+            String orderId = requestBody.getOrderId();
+
+            // Read the order from Firestore
+            DocumentReference orderRef = db.collection("users").document(userId)
+                    .collection("orders").document(orderId);
+            DocumentSnapshot orderDoc = orderRef.get().get();
+
+            if (!orderDoc.exists()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
+            }
+
+            // Check order status is PAID
+            String status = orderDoc.getString("status");
+            if (!ProductOrderDetails.STATUS_PAID.equals(status) && !ProductOrderDetails.STATUS_DELIVERED.equals(status)) {
+                return gson.toJson(Map.of("success", false, "errorMessage",
+                        "Order cannot be fulfilled. Current status: " + status));
+            }
+
+            // Idempotency: if order already has reportLink, return it
+            String existingReportLink = orderDoc.getString("reportLink");
+            if (existingReportLink != null && !existingReportLink.isEmpty()) {
+                LoggingService.info("fulfill_digital_order_idempotent", Map.of(
+                    "userId", userId, "orderId", orderId));
+                return gson.toJson(Map.of("success", true, "orderId", orderId, "reportLink", existingReportLink));
+            }
+
+            // Resolve DOB: requestBody -> order document -> user profile
+            String dob = requestBody.getDob();
+            if (dob == null || dob.isEmpty()) {
+                dob = orderDoc.getString("dob");
+            }
+            if (dob == null || dob.isEmpty()) {
+                try {
+                    DocumentSnapshot userDoc = db.collection("users").document(userId).get().get();
+                    if (userDoc.exists()) {
+                        dob = userDoc.getString("dob");
+                    }
+                } catch (Exception e) {
+                    LoggingService.warn("fulfill_digital_order_user_profile_fetch_failed", Map.of(
+                        "userId", userId, "error", e.getMessage() != null ? e.getMessage() : "unknown"));
+                }
+            }
+
+            // Resolve userName: requestBody -> order document -> user profile
+            String userName = requestBody.getUserName();
+            if (userName == null || userName.isEmpty()) {
+                userName = orderDoc.getString("userName");
+            }
+            if (userName == null || userName.isEmpty()) {
+                try {
+                    FirebaseUser userDetails = UserService.getUserDetails(db, userId);
+                    if (userDetails != null && userDetails.getName() != null) {
+                        userName = userDetails.getName();
+                    }
+                } catch (Exception e) {
+                    LoggingService.warn("fulfill_digital_order_user_details_fetch_failed", Map.of(
+                        "userId", userId, "error", e.getMessage() != null ? e.getMessage() : "unknown"));
+                }
+            }
+
+            // Resolve language
+            String language = requestBody.getLanguage();
+            if (language == null || language.isEmpty()) {
+                language = orderDoc.getString("language");
+            }
+            if (language == null || language.isEmpty()) {
+                language = "en";
+            }
+
+            // Build PythonLambdaEventRequest
+            PythonLambdaEventRequest lambdaRequest = new PythonLambdaEventRequest();
+            lambdaRequest.setFunction("generate_numerology_report");
+            lambdaRequest.setUserId(userId);
+            lambdaRequest.setUserName(userName);
+            lambdaRequest.setDob(dob);
+            lambdaRequest.setLanguage(language);
+            lambdaRequest.setOrderId(orderId);
+
+            // Invoke the Python Lambda
+            PythonLambdaResponseBody pythonResponse = pythonLambdaService.invokePythonLambda(lambdaRequest);
+
+            if (pythonResponse != null && pythonResponse.getReportLink() != null && !pythonResponse.getReportLink().isEmpty()) {
+                // Update order with report link and DELIVERED status
+                Map<String, Object> updates = new HashMap<>();
+                updates.put("reportLink", pythonResponse.getReportLink());
+                updates.put("status", ProductOrderDetails.STATUS_DELIVERED);
+                updates.put("fulfilledAt", Timestamp.now());
+                updates.put("fulfillmentType", "DIGITAL");
+                orderRef.update(updates).get();
+
+                LoggingService.info("fulfill_digital_order_success", Map.of(
+                    "userId", userId, "orderId", orderId, "reportLink", pythonResponse.getReportLink()));
+
+                return gson.toJson(Map.of(
+                    "success", true,
+                    "orderId", orderId,
+                    "reportLink", pythonResponse.getReportLink()
+                ));
+            } else {
+                LoggingService.error("fulfill_digital_order_no_report_link", Map.of(
+                    "userId", userId, "orderId", orderId));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Report generation failed - no report link returned"));
+            }
+        } catch (Exception e) {
+            LoggingService.error("fulfill_digital_order_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage",
+                    e.getMessage() != null ? e.getMessage() : "Failed to fulfill digital order"));
         }
     }
 

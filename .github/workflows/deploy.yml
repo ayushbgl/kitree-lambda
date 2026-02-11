@@ -143,6 +143,68 @@ jobs:
           ENVIRONMENT: test
         run: ./gradlew test --info --console=plain
 
+      - name: Test Results Summary
+        if: always()
+        run: |
+          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          TOTAL=0
+          PASSED=0
+          FAILED=0
+          SKIPPED=0
+
+          for f in build/test-results/test/*.xml; do
+            [ -f "$f" ] || continue
+            T=$(grep -o 'tests="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')
+            F=$(grep -o 'failures="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')
+            E=$(grep -o 'errors="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')
+            S=$(grep -o 'skipped="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')
+            T=${T:-0}; F=${F:-0}; E=${E:-0}; S=${S:-0}
+            TOTAL=$((TOTAL + T))
+            FAILED=$((FAILED + F + E))
+            SKIPPED=$((SKIPPED + S))
+          done
+          PASSED=$((TOTAL - FAILED - SKIPPED))
+
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⏭️ Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "### ❌ $FAILED test(s) failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Class | Test |" >> $GITHUB_STEP_SUMMARY
+            echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
+            for f in build/test-results/test/*.xml; do
+              [ -f "$f" ] || continue
+              CLASS=$(grep -o 'classname="[^"]*"' "$f" | head -1 | sed 's/classname="//;s/"//')
+              # Find failed testcases
+              grep '<testcase' "$f" | while IFS= read -r line; do
+                TNAME=$(echo "$line" | grep -o 'name="[^"]*"' | head -1 | sed 's/name="//;s/"//')
+                # Check if this testcase has a failure or error child element
+                # In single-line XML, failure/error follows the testcase opening tag
+                if echo "$line" | grep -q '<failure\|<error'; then
+                  TCLASS=$(echo "$line" | grep -o 'classname="[^"]*"' | head -1 | sed 's/classname="//;s/"//')
+                  echo "| $TCLASS | $TNAME |" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+              # Also handle multi-line XML: look for testcases followed by failure/error
+              awk '/<testcase/{tc=$0} /<failure|<error/{if(tc) print tc; tc=""}' "$f" | while IFS= read -r line; do
+                TNAME=$(echo "$line" | grep -o 'name="[^"]*"' | head -1 | sed 's/name="//;s/"//')
+                TCLASS=$(echo "$line" | grep -o 'classname="[^"]*"' | head -1 | sed 's/classname="//;s/"//')
+                echo "| $TCLASS | $TNAME |" >> $GITHUB_STEP_SUMMARY
+              done
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ✅ All tests passed!" >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -597,6 +659,15 @@ jobs:
             exit 1
           fi
           echo "✅ TEST health check passed"
+          echo "$COLD_START" > cold_start_test.txt
+          echo "🎉 Cold start completed in ${COLD_START}s"
+          if (( $(echo "$COLD_START < 5" | bc -l) )); then
+              echo "⚡ Excellent cold start performance!"
+          elif (( $(echo "$COLD_START < 10" | bc -l) )); then
+              echo "👍 Good cold start performance"
+          else
+              echo "⚠️ Cold start is slow (${COLD_START}s) — consider optimization"
+          fi
 
       - name: Health check — PROD
         if: inputs.environment == 'prod' || inputs.environment == 'both'
@@ -616,6 +687,15 @@ jobs:
             exit 1
           fi
           echo "✅ PROD health check passed"
+          echo "$COLD_START" > cold_start_prod.txt
+          echo "🎉 Cold start completed in ${COLD_START}s"
+          if (( $(echo "$COLD_START < 5" | bc -l) )); then
+              echo "⚡ Excellent cold start performance!"
+          elif (( $(echo "$COLD_START < 10" | bc -l) )); then
+              echo "👍 Good cold start performance"
+          else
+              echo "⚠️ Cold start is slow (${COLD_START}s) — consider optimization"
+          fi
 
       - name: Verification Summary
         if: always()
@@ -628,6 +708,19 @@ jobs:
             cat response_test.json >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(no response captured)" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            if [ -f cold_start_test.txt ]; then
+              TEST_CS=$(cat cold_start_test.txt)
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "🎉 **Cold start completed in ${TEST_CS}s**" >> $GITHUB_STEP_SUMMARY
+              if (( $(echo "$TEST_CS < 5" | bc -l) )); then
+                echo "⚡ Excellent cold start performance!" >> $GITHUB_STEP_SUMMARY
+              elif (( $(echo "$TEST_CS < 10" | bc -l) )); then
+                echo "👍 Good cold start performance" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "⚠️ Cold start is slow (${TEST_CS}s) — consider optimization" >> $GITHUB_STEP_SUMMARY
+              fi
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
           if [ "${{ inputs.environment }}" = "prod" ] || [ "${{ inputs.environment }}" = "both" ]; then
             echo "### PROD: https://${API_DOMAIN_PROD}" >> $GITHUB_STEP_SUMMARY
@@ -635,4 +728,17 @@ jobs:
             cat response_prod.json >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(no response captured)" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            if [ -f cold_start_prod.txt ]; then
+              PROD_CS=$(cat cold_start_prod.txt)
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "🎉 **Cold start completed in ${PROD_CS}s**" >> $GITHUB_STEP_SUMMARY
+              if (( $(echo "$PROD_CS < 5" | bc -l) )); then
+                echo "⚡ Excellent cold start performance!" >> $GITHUB_STEP_SUMMARY
+              elif (( $(echo "$PROD_CS < 10" | bc -l) )); then
+                echo "👍 Good cold start performance" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "⚠️ Cold start is slow (${PROD_CS}s) — consider optimization" >> $GITHUB_STEP_SUMMARY
+              fi
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
