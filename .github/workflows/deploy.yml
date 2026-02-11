@@ -305,6 +305,8 @@ jobs:
               FirebaseProject=${{ env.FIREBASE_PROJECT_ID_TEST }} \
               ApiDomainName=${{ env.API_DOMAIN_TEST }} \
               CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
+              AstrologyLambdaUrl=${{ secrets.ASTROLOGY_LAMBDA_URL_TEST }} \
+              AstrologyApiToken=${{ secrets.ASTROLOGY_API_TOKEN }} \
             --no-fail-on-empty-changeset
 
           echo "📤 Fetching important TEST stack outputs..."
@@ -352,6 +354,8 @@ jobs:
               FirebaseProject=${{ env.FIREBASE_PROJECT_ID_PROD }} \
               ApiDomainName=${{ env.API_DOMAIN_PROD }} \
               CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
+              AstrologyLambdaUrl=${{ secrets.ASTROLOGY_LAMBDA_URL_PROD }} \
+              AstrologyApiToken=${{ secrets.ASTROLOGY_API_TOKEN }} \
             --no-fail-on-empty-changeset
 
           echo "📤 Fetching important PROD stack outputs..."
@@ -366,6 +370,44 @@ jobs:
           echo "👉 Add a CNAME/ALIAS in Netlify:"
           echo "   ${API_DOMAIN_PROD} → $PROD_CF_DOMAIN"
           echo "──────────────────────────────────────────────"
+
+      - name: Deployment Summary
+        if: always() && inputs.environment != 'only-sync-rules'
+        run: |
+          echo "## 🚀 Lambda Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.environment }}" = "test" ] || [ "${{ inputs.environment }}" = "both" ]; then
+            echo "### TEST Environment" >> $GITHUB_STEP_SUMMARY
+            TEST_OUTPUTS=$(aws cloudformation describe-stacks --stack-name java-lambda-test --query 'Stacks[0].Outputs' --output json 2>/dev/null || echo "[]")
+            TEST_API_URL=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiCustomDomainUrl") | .OutputValue' 2>/dev/null || echo "N/A")
+            TEST_CF=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue' 2>/dev/null || echo "N/A")
+            TEST_FN_URL=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiEndpoint") | .OutputValue' 2>/dev/null || echo "N/A")
+            echo "| Resource | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🌐 API URL | \`${TEST_API_URL}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| ☁️ CloudFront | \`${TEST_CF}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⚡ Function URL | \`${TEST_FN_URL}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "👉 CNAME: \`${{ env.API_DOMAIN_TEST }}\` → \`${TEST_CF}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ inputs.environment }}" = "prod" ] || [ "${{ inputs.environment }}" = "both" ]; then
+            echo "### PROD Environment" >> $GITHUB_STEP_SUMMARY
+            PROD_OUTPUTS=$(aws cloudformation describe-stacks --stack-name java-lambda-prod --query 'Stacks[0].Outputs' --output json 2>/dev/null || echo "[]")
+            PROD_API_URL=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiCustomDomainUrl") | .OutputValue' 2>/dev/null || echo "N/A")
+            PROD_CF=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue' 2>/dev/null || echo "N/A")
+            PROD_FN_URL=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiEndpoint") | .OutputValue' 2>/dev/null || echo "N/A")
+            echo "| Resource | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🌐 API URL | \`${PROD_API_URL}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| ☁️ CloudFront | \`${PROD_CF}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⚡ Function URL | \`${PROD_FN_URL}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "👉 CNAME: \`${{ env.API_DOMAIN_PROD }}\` → \`${PROD_CF}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Sync Firebase Rules and Indexes
         if: inputs.environment == 'prod' || inputs.environment == 'both' || inputs.environment == 'only-sync-rules'

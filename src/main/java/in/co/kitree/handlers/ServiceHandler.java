@@ -23,12 +23,14 @@ public class ServiceHandler {
 
     private final Firestore db;
     private final Razorpay razorpay;
+    private final StripeService stripeService;
     private final ServicePlanService servicePlanService;
     private final Gson gson;
 
-    public ServiceHandler(Firestore db, Razorpay razorpay) {
+    public ServiceHandler(Firestore db, Razorpay razorpay, StripeService stripeService) {
         this.db = db;
         this.razorpay = razorpay;
+        this.stripeService = stripeService;
         this.servicePlanService = new ServicePlanService(db);
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
@@ -264,48 +266,54 @@ public class ServiceHandler {
         }
 
         Map<String, Object> response = new HashMap<>();
-        if (servicePlan.getCurrency().equals("INR")) {
-            if (servicePlan.isSubscription()) {
-                String gatewaySubscriptionId = razorpay.createSubscription(servicePlan.getRazorpayId(), CustomerCipher.encryptCaesarCipher(userId));
-                String orderId = UUID.randomUUID().toString();
-                orderDetails.put("order_id", orderId);
-                orderDetails.put("gateway_subscription_id", gatewaySubscriptionId);
-                orderDetails.put("subscription", true);
-                orderDetails.put("gateway_type", "RAZORPAY");
-                createOrderInDB(userId, orderId, orderDetails);
-                response.put("orderId", orderId);
-                response.put("gatewaySubscriptionId", gatewaySubscriptionId);
-                response.put("gatewayType", "RAZORPAY");
-                response.put("gatewayKey", razorpay.getRazorpayKey());
-            } else {
-                String gatewayOrderId = razorpay.createOrder(gatewayAmount, CustomerCipher.encryptCaesarCipher(userId));
-                String orderId = UUID.randomUUID().toString();
-                orderDetails.put("order_id", orderId);
-                orderDetails.put("gateway_order_id", gatewayOrderId);
-                orderDetails.put("subscription", false);
-                orderDetails.put("gateway_type", "RAZORPAY");
-                createOrderInDB(userId, orderId, orderDetails);
-                response.put("orderId", orderId);
-                response.put("gatewayOrderId", gatewayOrderId);
-                response.put("gatewayType", "RAZORPAY");
-                response.put("gatewayKey", razorpay.getRazorpayKey());
-                response.put("walletDeduction", walletDeduction);
-                response.put("gatewayAmount", gatewayAmount);
-                response.put("totalAmount", finalAmount);
-                response.put("paymentMethod", paymentMethod);
+        String encryptedCustomerId = CustomerCipher.encryptCaesarCipher(userId);
+        PaymentGateway gateway = PaymentGatewayRouter.getGateway(currency, razorpay, stripeService);
+
+        // Razorpay subscriptions (Razorpay-only feature)
+        if (servicePlan.isSubscription() && gateway instanceof Razorpay rpGateway) {
+            String gatewaySubscriptionId = rpGateway.createSubscription(servicePlan.getRazorpayId(), encryptedCustomerId);
+            String orderId = UUID.randomUUID().toString();
+            orderDetails.put("order_id", orderId);
+            orderDetails.put("gateway_subscription_id", gatewaySubscriptionId);
+            orderDetails.put("subscription", true);
+            orderDetails.put("gateway_type", gateway.getGatewayType());
+            createOrderInDB(userId, orderId, orderDetails);
+            response.put("orderId", orderId);
+            response.put("gatewaySubscriptionId", gatewaySubscriptionId);
+            response.put("gatewayType", gateway.getGatewayType());
+            response.put("gatewayKey", gateway.getPublishableKey());
+        } else {
+            // One-time payment via common interface
+            PaymentOrderResult orderResult = gateway.createOrder(gatewayAmount, currency, encryptedCustomerId);
+            String orderId = UUID.randomUUID().toString();
+            orderDetails.put("order_id", orderId);
+            orderDetails.put("gateway_order_id", orderResult.getGatewayOrderId());
+            orderDetails.put("subscription", false);
+            orderDetails.put("gateway_type", gateway.getGatewayType());
+            createOrderInDB(userId, orderId, orderDetails);
+            response.put("orderId", orderId);
+            response.put("gatewayOrderId", orderResult.getGatewayOrderId());
+            response.put("gatewayType", gateway.getGatewayType());
+            response.put("gatewayKey", gateway.getPublishableKey());
+            if (orderResult.getClientSecret() != null) {
+                response.put("clientSecret", orderResult.getClientSecret());
             }
+            response.put("walletDeduction", walletDeduction);
+            response.put("gatewayAmount", gatewayAmount);
+            response.put("totalAmount", finalAmount);
+            response.put("paymentMethod", paymentMethod);
         }
 
         return gson.toJson(response);
     }
 
     private String handleBuyGift(String userId, RequestBody requestBody) throws Exception {
-        String giftOrderId = razorpay.createOrder(Double.valueOf(requestBody.getGiftAmount()), CustomerCipher.encryptCaesarCipher(userId));
+        PaymentOrderResult giftResult = razorpay.createOrder(Double.valueOf(requestBody.getGiftAmount()), "INR", CustomerCipher.encryptCaesarCipher(userId));
         Map<String, String> response = new HashMap<>();
-        response.put("gift_order_id", giftOrderId);
+        response.put("gift_order_id", giftResult.getGatewayOrderId());
 
         Map<String, Object> giftDetails = new HashMap<>();
-        giftDetails.put("gift_order_id", giftOrderId);
+        giftDetails.put("gift_order_id", giftResult.getGatewayOrderId());
         giftDetails.put("amount", requestBody.getGiftAmount());
         DocumentReference doc = this.db.collection("users").document(userId).collection("orders").document(requestBody.getOrderId());
         doc.update("gifts", FieldValue.arrayUnion(giftDetails)).get();
@@ -355,6 +363,7 @@ public class ServiceHandler {
         String gatewaySignature = requestBody.getGatewaySignature();
         String verificationType = requestBody.getType();
 
+        // Razorpay subscription verification (subscriptions are Razorpay-only)
         if (gatewaySubscriptionId != null) {
             if (razorpay.verifySubscription(gatewaySubscriptionId)) {
                 String firestoreSubscriptionOrderId = requestBody.getOrderId() != null ? requestBody.getOrderId() : gatewaySubscriptionId;
@@ -365,11 +374,22 @@ public class ServiceHandler {
             return gson.toJson(Map.of("success", false, "errorMessage", "Subscription verification failed"));
         }
 
-        if (gatewayOrderId == null || gatewayPaymentId == null || gatewaySignature == null) {
-            return gson.toJson(Map.of("success", false, "errorMessage", "Missing payment details"));
+        // Determine gateway from order document
+        PaymentGateway gateway = razorpay; // default
+        if (requestBody.getOrderId() != null && !requestBody.getOrderId().isEmpty()) {
+            DocumentSnapshot orderDoc = this.db.collection("users").document(userId)
+                    .collection("orders").document(requestBody.getOrderId()).get().get();
+            if (orderDoc.exists()) {
+                String orderGatewayType = orderDoc.getString("gateway_type");
+                gateway = PaymentGatewayRouter.STRIPE.equals(orderGatewayType) ? stripeService : razorpay;
+            }
         }
 
-        if (!razorpay.verifyPayment(gatewayOrderId, gatewayPaymentId, gatewaySignature)) {
+        // Verify via the common interface
+        if (gatewayOrderId == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "Gateway order ID is required"));
+        }
+        if (!gateway.verifyPayment(gatewayOrderId, gatewayPaymentId, gatewaySignature)) {
             return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed"));
         }
 
@@ -433,7 +453,7 @@ public class ServiceHandler {
         }
 
         // Process pending wallet deduction for partial wallet payments
-        WalletHandler walletHandler = new WalletHandler(db, razorpay);
+        WalletHandler walletHandler = new WalletHandler(db, razorpay, stripeService);
         walletHandler.processWalletDeductionOnPaymentVerification(userId, firestoreOrderId);
 
         verifyOrderInDB(userId, firestoreOrderId);

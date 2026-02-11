@@ -9,7 +9,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Map;
 
-public class Razorpay {
+public class Razorpay implements PaymentGateway {
 
     private final Boolean isTest;
 
@@ -55,18 +55,20 @@ public class Razorpay {
         }
     }
 
-    public String createOrder(double amount, String encryptedCustomerId) throws RazorpayException {
+    @Override
+    public PaymentOrderResult createOrder(double amount, String currency, String receipt) throws RazorpayException {
         long amountInPaise = getAmountInPaise(amount);
         JSONObject options = new JSONObject();
         JSONObject notes = new JSONObject();
-        notes.put("receipt", encryptedCustomerId);
+        notes.put("receipt", receipt);
         options.put("amount", amountInPaise);
         options.put("currency", "INR");
         options.put("notes", notes);
         Order order = razorpayClient.orders.create(options);
-        return order.get("id");
+        return new PaymentOrderResult(order.get("id"), null);
     }
 
+    @Override
     public boolean verifyPayment(String razorpayOrderId, String razorpayPaymentId, String razorpaySign) throws RazorpayException {
         JSONObject options = new JSONObject();
         options.put("razorpay_order_id", razorpayOrderId);
@@ -117,9 +119,16 @@ public class Razorpay {
      * This method returns only the public key, not the secret
      * @return The Razorpay key for the current environment
      */
-    public String getRazorpayKey() {
+    @Override
+    public String getPublishableKey() {
         return this.isTest ? this.RAZORPAY_TEST_KEY : this.RAZORPAY_KEY;
     }
+
+    @Override
+    public String getGatewayType() {
+        return PaymentGatewayRouter.RAZORPAY;
+    }
+
 
     private long getAmountInPaise(double amountInINR) {
         return (long) (amountInINR * 100);

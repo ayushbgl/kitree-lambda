@@ -30,6 +30,12 @@ public class AstrologyService {
         this.gson = new GsonBuilder().create();
     }
 
+    // Package-private constructor for unit testing with a mock HttpClient
+    AstrologyService(HttpClient httpClient) {
+        this.httpClient = httpClient;
+        this.gson = new GsonBuilder().create();
+    }
+
     private HttpResponse<String> makeTracedPost(HttpRequest.Builder builder, String description) throws Exception {
         ISpan currentSpan = Sentry.getSpan();
         if (currentSpan != null) {
@@ -73,7 +79,7 @@ public class AstrologyService {
         body.put("minute", requestBody.getHoroscopeMinute());
         body.put("latitude", requestBody.getHoroscopeLatitude());
         body.put("longitude", requestBody.getHoroscopeLongitude());
-        body.put("api_token", AstrologyServiceConfig.API_TOKEN);
+        body.put("api_token", AstrologyServiceConfig.getApiToken());
 
         return callLambda("/get_horoscope", body);
     }
@@ -95,7 +101,7 @@ public class AstrologyService {
         body.put("latitude", requestBody.getDashaLatitude());
         body.put("longitude", requestBody.getDashaLongitude());
         body.put("prefix", requestBody.getDashaPrefix());
-        body.put("api_token", AstrologyServiceConfig.API_TOKEN);
+        body.put("api_token", AstrologyServiceConfig.getApiToken());
 
         return callLambda("/dasha", body);
     }
@@ -117,7 +123,7 @@ public class AstrologyService {
         body.put("latitude", requestBody.getHoroscopeLatitude());
         body.put("longitude", requestBody.getHoroscopeLongitude());
         body.put("divisional_chart_numbers", requestBody.getDivisionalChartNumbers());
-        body.put("api_token", AstrologyServiceConfig.API_TOKEN);
+        body.put("api_token", AstrologyServiceConfig.getApiToken());
 
         return callLambda("/divisional_charts", body);
     }
@@ -138,13 +144,13 @@ public class AstrologyService {
         body.put("minute", requestBody.getHoroscopeMinute());
         body.put("latitude", requestBody.getHoroscopeLatitude());
         body.put("longitude", requestBody.getHoroscopeLongitude());
-        body.put("api_token", AstrologyServiceConfig.API_TOKEN);
+        body.put("api_token", AstrologyServiceConfig.getApiToken());
 
         return callLambda("/gochar", body);
     }
 
     private String callLambda(String path, Map<String, Object> body) throws Exception {
-        String url = AstrologyServiceConfig.LAMBDA_BASE_URL + path;
+        String url = AstrologyServiceConfig.getLambdaBaseUrl() + path;
         HttpResponse<String> httpResponse = makeTracedPost(
                 HttpRequest.newBuilder()
                         .uri(URI.create(url))

@@ -264,7 +264,7 @@ public class RashifalService {
     private String callPythonRashifal(int year, int month, int day, int hour, int minute,
                                        double latitude, double longitude) throws Exception {
         Map<String, Object> requestBody = new HashMap<>();
-        requestBody.put("api_token", AstrologyServiceConfig.API_TOKEN);
+        requestBody.put("api_token", AstrologyServiceConfig.getApiToken());
         requestBody.put("date", day);
         requestBody.put("month", month);
         requestBody.put("year", year);
@@ -273,7 +273,7 @@ public class RashifalService {
         requestBody.put("latitude", latitude);
         requestBody.put("longitude", longitude);
 
-        String apiUrl = AstrologyServiceConfig.LAMBDA_BASE_URL + "/rashifal";
+        String apiUrl = AstrologyServiceConfig.getLambdaBaseUrl() + "/rashifal";
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(apiUrl))

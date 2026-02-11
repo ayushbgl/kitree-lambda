@@ -53,6 +53,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
     Gson gson = (new GsonBuilder()).setPrettyPrinting().create();
     private Firestore db;
     private Razorpay razorpay;
+    private StripeService stripeService;
     protected PythonLambdaService pythonLambdaService;
 
     private RashifalService rashifalService;
@@ -101,11 +102,13 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             }
             this.db = FirestoreClient.getFirestore();
             this.razorpay = new Razorpay(isTest());
+            this.stripeService = new StripeService(isTest());
             this.pythonLambdaService = createPythonLambdaService();
             AstrologyService astrologyService = new AstrologyService();
             RashifalService rashifalService = new RashifalService(db, isTest());
             StreamService streamService = new StreamService(isTest());
-            initHandlers(astrologyService, rashifalService, streamService);
+            CloudinaryService cloudinaryService = new CloudinaryService(isTest());
+            initHandlers(astrologyService, rashifalService, streamService, cloudinaryService);
         } catch (Exception e) {
             LoggingService.error("handler_init_failed", e);
             if (isTest()) {
@@ -126,6 +129,9 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 try { this.razorpay = new Razorpay(true); } catch (RazorpayException ex) {
                     LoggingService.warn("razorpay_init_skipped_test_env", Map.of("error", ex.getMessage()));
                 }
+                try { this.stripeService = new StripeService(true); } catch (Exception ex) {
+                    LoggingService.warn("stripe_init_skipped_test_env", Map.of("error", ex.getMessage()));
+                }
                 try {
                     System.setProperty("aws.region", "ap-south-1");
                     this.pythonLambdaService = createPythonLambdaService();
@@ -135,26 +141,28 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 AstrologyService astrologyService = null;
                 RashifalService rashifalService = null;
                 StreamService streamService = null;
+                CloudinaryService cloudinaryService = null;
                 try { astrologyService = new AstrologyService(); } catch (Exception ignored) {}
                 try { rashifalService = new RashifalService(db, isTest()); } catch (Exception ignored) {}
                 try { streamService = new StreamService(isTest()); } catch (Exception ignored) {}
-                try { initHandlers(astrologyService, rashifalService, streamService); } catch (Exception ignored) {}
+                try { cloudinaryService = new CloudinaryService(isTest()); } catch (Exception ignored) {}
+                try { initHandlers(astrologyService, rashifalService, streamService, cloudinaryService); } catch (Exception ignored) {}
             } else {
                 throw new RuntimeException("Failed to initialize Handler", e);
             }
         }
     }
 
-    private void initHandlers(AstrologyService astrologyService, RashifalService rashifalService, StreamService streamService) {
+    private void initHandlers(AstrologyService astrologyService, RashifalService rashifalService, StreamService streamService, CloudinaryService cloudinaryService) {
         this.rashifalService = rashifalService;
         this.adminHandler = new AdminHandler(db, razorpay);
-        this.serviceHandler = new ServiceHandler(db, razorpay);
+        this.serviceHandler = new ServiceHandler(db, razorpay, stripeService);
         this.astrologyHandler = new AstrologyHandler(db, astrologyService, pythonLambdaService, rashifalService);
         this.sessionHandler = new SessionHandler(db, streamService, pythonLambdaService, isTest());
         this.consultationHandler = new ConsultationHandler(db, pythonLambdaService, isTest());
-        this.expertHandler = new ExpertHandler(db);
-        this.productOrderHandler = new ProductOrderHandler(db, razorpay, pythonLambdaService);
-        this.walletHandler = new WalletHandler(db, razorpay);
+        this.expertHandler = new ExpertHandler(db, cloudinaryService);
+        this.productOrderHandler = new ProductOrderHandler(db, razorpay, stripeService, pythonLambdaService);
+        this.walletHandler = new WalletHandler(db, razorpay, stripeService);
         this.webhookHandler = new WebhookHandler(db, isTest());
         this.restRouter = new RestRouter(
                 adminHandler, walletHandler, consultationHandler, expertHandler,
@@ -180,8 +188,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                         }
                     }
                     String payload = gson.toJson(request);
+                    String functionName = isTest()
+                            ? "kitree-python-scripts-test"
+                            : "kitree-python-scripts-prod";
                     InvokeRequest invokeRequest = InvokeRequest.builder()
-                            .functionName("certgen")
+                            .functionName(functionName)
                             .payload(SdkBytes.fromUtf8String(payload))
                             .build();
 

@@ -244,6 +244,12 @@ public class RestRouter {
             return ResponseConverter.fromHandlerResponse(result);
         });
 
+        post("/api/v1/experts/{expertId}/image", "upload_expert_image", (userId, body, pathParams, queryParams) -> {
+            body.setExpertId(pathParams.get("expertId"));
+            String result = expertHandler.handleRequest("upload_expert_image", userId, body);
+            return ResponseConverter.fromHandlerResponse(result);
+        });
+
         get("/api/v1/experts/{expertId}/products", "get_expert_products", (userId, body, pathParams, queryParams) -> {
             body.setExpertId(pathParams.get("expertId"));
             String result = productOrderHandler.handleRequest("get_expert_products", userId, body);

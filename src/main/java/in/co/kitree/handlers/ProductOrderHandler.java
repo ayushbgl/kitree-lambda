@@ -23,12 +23,14 @@ public class ProductOrderHandler {
 
     private final Firestore db;
     private final Razorpay razorpay;
+    private final StripeService stripeService;
     private final PythonLambdaService pythonLambdaService;
     private final Gson gson;
 
-    public ProductOrderHandler(Firestore db, Razorpay razorpay, PythonLambdaService pythonLambdaService) {
+    public ProductOrderHandler(Firestore db, Razorpay razorpay, StripeService stripeService, PythonLambdaService pythonLambdaService) {
         this.db = db;
         this.razorpay = razorpay;
+        this.stripeService = stripeService;
         this.pythonLambdaService = pythonLambdaService;
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
@@ -221,18 +223,30 @@ public class ProductOrderHandler {
                 requestBody.getCouponCode()
             );
 
-            // Create Razorpay order for payment
+            // Create payment gateway order
             Double amount = (Double) orderResult.get("amount");
             String orderId = (String) orderResult.get("orderId");
+            String currency = (String) orderResult.getOrDefault("currency", "INR");
 
             if (amount != null && amount > 0) {
                 try {
-                    // Encrypt userId for Razorpay notes
                     String encryptedCustomerId = CustomerCipher.encryptCaesarCipher(userId);
-                    String razorpayOrderId = razorpay.createOrder(amount, encryptedCustomerId);
-                    orderResult.put("razorpayOrderId", razorpayOrderId);
-                } catch (RazorpayException e) {
-                    LoggingService.error("razorpay_order_creation_failed", e);
+                    PaymentGateway gateway = PaymentGatewayRouter.getGateway(currency, razorpay, stripeService);
+                    PaymentOrderResult paymentResult = gateway.createOrder(amount, currency, encryptedCustomerId);
+                    orderResult.put("gatewayOrderId", paymentResult.getGatewayOrderId());
+                    orderResult.put("gatewayType", gateway.getGatewayType());
+                    orderResult.put("gatewayKey", gateway.getPublishableKey());
+                    if (paymentResult.getClientSecret() != null) {
+                        orderResult.put("clientSecret", paymentResult.getClientSecret());
+                    }
+                    // Store gateway_type in order doc
+                    if (orderId != null) {
+                        this.db.collection("users").document(userId)
+                                .collection("orders").document(orderId)
+                                .update("gateway_type", gateway.getGatewayType(), "gateway_order_id", paymentResult.getGatewayOrderId());
+                    }
+                } catch (Exception e) {
+                    LoggingService.error("payment_order_creation_failed", e);
                     return gson.toJson(Map.of("success", false, "errorMessage", "Failed to create payment order"));
                 }
             }
@@ -254,30 +268,34 @@ public class ProductOrderHandler {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Order ID is required"));
             }
 
-            // SECURITY: All payment gateway fields are REQUIRED - never process without verification
-            if (requestBody.getGatewayOrderId() == null ||
-                requestBody.getGatewayPaymentId() == null ||
-                requestBody.getGatewaySignature() == null) {
-                LoggingService.warn("verify_product_payment_missing_gateway_fields", Map.of(
-                    "userId", userId,
-                    "orderId", requestBody.getOrderId()
-                ));
-                return gson.toJson(Map.of("success", false, "errorMessage", "Payment gateway details are required for verification"));
+            if (requestBody.getGatewayOrderId() == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Gateway order ID is required for verification"));
             }
 
-            // Verify Razorpay payment signature - MANDATORY check
-            boolean isValid = razorpay.verifyPayment(
+            // Determine gateway from order document
+            PaymentGateway gateway = razorpay; // default
+            DocumentSnapshot orderDoc = db.collection("users").document(userId)
+                    .collection("orders").document(requestBody.getOrderId()).get().get();
+            if (orderDoc.exists()) {
+                String orderGatewayType = orderDoc.getString("gateway_type");
+                if (PaymentGatewayRouter.STRIPE.equals(orderGatewayType)) {
+                    gateway = stripeService;
+                }
+            }
+
+            // Verify payment via the common interface
+            boolean isValid = gateway.verifyPayment(
                 requestBody.getGatewayOrderId(),
                 requestBody.getGatewayPaymentId(),
                 requestBody.getGatewaySignature()
             );
             if (!isValid) {
-                LoggingService.warn("verify_product_payment_invalid_signature", Map.of(
+                LoggingService.warn("verify_product_payment_invalid", Map.of(
                     "userId", userId,
                     "orderId", requestBody.getOrderId(),
-                    "gatewayOrderId", requestBody.getGatewayOrderId()
+                    "gatewayType", gateway.getGatewayType()
                 ));
-                return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed - invalid signature"));
+                return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed"));
             }
 
             ProductOrderService orderService = createOrderService();
@@ -290,10 +308,10 @@ public class ProductOrderHandler {
             verifyResponse.put("orderId", requestBody.getOrderId());
 
             try {
-                DocumentSnapshot orderDoc = db.collection("users").document(userId)
+                DocumentSnapshot fulfillDoc = db.collection("users").document(userId)
                         .collection("orders").document(requestBody.getOrderId()).get().get();
-                if (orderDoc.exists()) {
-                    String productType = orderDoc.getString("productType");
+                if (fulfillDoc.exists()) {
+                    String productType = fulfillDoc.getString("productType");
                     if ("digital_report".equals(productType)) {
                         // Attempt auto-fulfillment (best-effort, don't fail the verify response)
                         try {

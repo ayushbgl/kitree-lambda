@@ -21,10 +21,12 @@ import static com.google.cloud.firestore.AggregateField.sum;
 public class ExpertHandler {
 
     private final Firestore db;
+    private final CloudinaryService cloudinaryService;
     private final Gson gson;
 
-    public ExpertHandler(Firestore db) {
+    public ExpertHandler(Firestore db, CloudinaryService cloudinaryService) {
         this.db = db;
+        this.cloudinaryService = cloudinaryService;
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
@@ -40,6 +42,7 @@ public class ExpertHandler {
             case "mark_expert_busy" -> handleMarkExpertBusy(userId, requestBody.getOrderId());
             case "mark_expert_free" -> handleMarkExpertFree(userId, requestBody.getOrderId());
             case "expert_metrics" -> handleExpertMetrics(userId, requestBody);
+            case "upload_expert_image" -> handleUploadExpertImage(userId, requestBody);
             default -> gson.toJson(Map.of("success", false, "errorMessage", "Unknown action: " + action));
         };
     }
@@ -595,6 +598,52 @@ public class ExpertHandler {
             return "Not authorized";
         }
         return gson.toJson(response);
+    }
+
+    /**
+     * Upload expert store image via Cloudinary.
+     * Accepts base64-encoded image, uploads server-side, updates Firestore store document.
+     * Public read URL is returned for the expert's storefront.
+     */
+    private String handleUploadExpertImage(String userId, RequestBody requestBody) {
+        LoggingService.setFunction("upload_expert_image");
+        LoggingService.info("upload_expert_image_started");
+
+        try {
+            String base64Image = requestBody.getBase64Image();
+            if (base64Image == null || base64Image.isEmpty()) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Image data is required"));
+            }
+
+            if (cloudinaryService == null) {
+                return gson.toJson(Map.of("success", false, "errorMessage", "Image upload service not configured"));
+            }
+
+            // Strip data URI prefix if present (e.g. "data:image/jpeg;base64,")
+            if (base64Image.contains(",")) {
+                base64Image = base64Image.substring(base64Image.indexOf(",") + 1);
+            }
+
+            byte[] imageBytes = Base64.getDecoder().decode(base64Image);
+
+            String imageUrl = cloudinaryService.uploadImage(imageBytes, "experts", userId);
+
+            // Update Firestore: users/{userId}/public/store → photoUrl
+            DocumentReference storeRef = db.collection("users").document(userId)
+                    .collection("public").document("store");
+            storeRef.set(Map.of("photoUrl", imageUrl), SetOptions.merge()).get();
+
+            LoggingService.info("upload_expert_image_success", Map.of("userId", userId));
+
+            return gson.toJson(Map.of("success", true, "imageUrl", imageUrl));
+
+        } catch (IllegalArgumentException e) {
+            LoggingService.warn("upload_expert_image_invalid_base64", Map.of("userId", userId));
+            return gson.toJson(Map.of("success", false, "errorMessage", "Invalid image data"));
+        } catch (Exception e) {
+            LoggingService.error("upload_expert_image_error", e);
+            return gson.toJson(Map.of("success", false, "errorMessage", "Failed to upload image: " + e.getMessage()));
+        }
     }
 
 }

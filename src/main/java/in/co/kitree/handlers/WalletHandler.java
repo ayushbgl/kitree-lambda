@@ -5,9 +5,7 @@ import com.google.cloud.firestore.*;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import in.co.kitree.pojos.RequestBody;
-import in.co.kitree.services.LoggingService;
-import in.co.kitree.services.Razorpay;
-import in.co.kitree.services.WalletService;
+import in.co.kitree.services.*;
 import in.co.kitree.pojos.WalletTransaction;
 
 import java.util.*;
@@ -24,11 +22,13 @@ public class WalletHandler {
 
     private final Firestore db;
     private final Razorpay razorpay;
+    private final StripeService stripeService;
     private final Gson gson;
 
-    public WalletHandler(Firestore db, Razorpay razorpay) {
+    public WalletHandler(Firestore db, Razorpay razorpay, StripeService stripeService) {
         this.db = db;
         this.razorpay = razorpay;
+        this.stripeService = stripeService;
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
@@ -156,8 +156,10 @@ public class WalletHandler {
             }
         }
 
-        // Create payment gateway order
-        String gatewayOrderId = razorpay.createOrder(amount, in.co.kitree.services.CustomerCipher.encryptCaesarCipher(userId));
+        // Create payment gateway order via common interface
+        String encryptedCustomerId = CustomerCipher.encryptCaesarCipher(userId);
+        PaymentGateway gateway = PaymentGatewayRouter.getGateway(currency, razorpay, stripeService);
+        PaymentOrderResult paymentResult = gateway.createOrder(amount, currency, encryptedCustomerId);
 
         // Create PENDING transaction directly in expert_wallets transactions
         // This shows immediately in passbook for better UX
@@ -168,7 +170,7 @@ public class WalletHandler {
         pendingTransaction.setAmount(amount);
         pendingTransaction.setCurrency(currency);
         pendingTransaction.setStatus("PENDING");
-        pendingTransaction.setGatewayOrderId(gatewayOrderId);
+        pendingTransaction.setGatewayOrderId(paymentResult.getGatewayOrderId());
         pendingTransaction.setCreatedAt(com.google.cloud.Timestamp.now());
         if (bonus > 0) {
             pendingTransaction.setBonusAmount(bonus);
@@ -178,9 +180,12 @@ public class WalletHandler {
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
-        response.put("gatewayOrderId", gatewayOrderId);
-        response.put("gatewayKey", razorpay.getRazorpayKey());
-        response.put("gatewayType", "RAZORPAY");
+        response.put("gatewayOrderId", paymentResult.getGatewayOrderId());
+        response.put("gatewayKey", gateway.getPublishableKey());
+        response.put("gatewayType", gateway.getGatewayType());
+        if (paymentResult.getClientSecret() != null) {
+            response.put("clientSecret", paymentResult.getClientSecret());
+        }
         response.put("amount", amount);
         response.put("bonus", bonus);
         response.put("currency", currency);
