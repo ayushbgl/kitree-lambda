@@ -264,7 +264,7 @@ public class RashifalService {
     private String callPythonRashifal(int year, int month, int day, int hour, int minute,
                                        double latitude, double longitude) throws Exception {
         Map<String, Object> requestBody = new HashMap<>();
-        requestBody.put("api_token", AstrologyServiceConfig.PYTHON_SERVER_API_TOKEN);
+        requestBody.put("api_token", AstrologyServiceConfig.API_TOKEN);
         requestBody.put("date", day);
         requestBody.put("month", month);
         requestBody.put("year", year);
@@ -273,10 +273,7 @@ public class RashifalService {
         requestBody.put("latitude", latitude);
         requestBody.put("longitude", longitude);
 
-        String baseUrl = AstrologyServiceConfig.isAwsLambdaProviderSelected()
-                ? AstrologyServiceConfig.AWS_LAMBDA_BASE_URL
-                : AstrologyServiceConfig.PYTHON_SERVER_BASE_URL;
-        String apiUrl = baseUrl + "/rashifal";
+        String apiUrl = AstrologyServiceConfig.LAMBDA_BASE_URL + "/rashifal";
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(apiUrl))
@@ -286,15 +283,13 @@ public class RashifalService {
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new RuntimeException("Rashifal Python API failed: " + response.statusCode());
+            throw new RuntimeException("Rashifal Lambda API failed: " + response.statusCode());
         }
 
-        // Lambda Function URL wraps body in a JSON envelope
-        if (AstrologyServiceConfig.isAwsLambdaProviderSelected()) {
-            JsonNode responseNode = objectMapper.readTree(response.body());
-            if (responseNode.has("body")) {
-                return responseNode.get("body").asText();
-            }
+        // Lambda Function URL may wrap body in a JSON envelope
+        JsonNode responseNode = objectMapper.readTree(response.body());
+        if (responseNode.has("body")) {
+            return responseNode.get("body").asText();
         }
         return response.body();
     }

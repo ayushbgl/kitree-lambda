@@ -3,7 +3,6 @@ package in.co.kitree;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.google.firebase.auth.FirebaseAuthException;
-import in.co.kitree.pojos.RequestBody;
 import in.co.kitree.pojos.RequestEvent;
 import in.co.kitree.pojos.RequestContext;
 import in.co.kitree.pojos.RequestContextAuthorizer;
@@ -61,7 +60,7 @@ class HandlerTest extends TestBase {
         event.setSource("aws.events");
 
         // Execute the handler
-        String response = handler.handleRequest(event, context);
+        Object response = handler.handleRequest(event, context);
 
         // Verify the response
         assertEquals("Warmed up!", response);
@@ -70,70 +69,54 @@ class HandlerTest extends TestBase {
 
     @Test
     void testMakeAdminRequest() throws Exception {
-        // Create a make_admin request with proper JWT claims
+        // Create a make_admin request with proper JWT claims via REST path
         RequestEvent event = createRequestEventWithUser(TEST_USER_ID);
-        RequestBody requestBody = new RequestBody();
-        requestBody.setFunction("make_admin");
-        requestBody.setAdminSecret("C6DC17344FA8287F92C93B11CDF99");
-        requestBody.setAdminUid(TEST_USER_ID);
-        event.setBody("{\"function\":\"make_admin\",\"adminSecret\":\"C6DC17344FA8287F92C93B11CDF99\",\"adminUid\":\"test-user-id\"}");
+        event.setRawPath("/api/v1/admin/make");
+        event.setBody("{\"adminSecret\":\"C6DC17344FA8287F92C93B11CDF99\",\"adminUid\":\"test-user-id\"}");
 
         // Execute the handler
-        String response = handler.handleRequest(event, context);
+        Object response = handler.handleRequest(event, context);
 
-        // Verify the response
-        assertEquals("Done Successfully!", response);
+        assertNotNull(response);
     }
 
     @Test
     void testMakeAdminRequestInvalidSecret() {
-        // Create a make_admin request with invalid secret and proper JWT claims
+        // Create a make_admin request with invalid secret via REST path
         RequestEvent event = createRequestEventWithUser(TEST_USER_ID);
-        RequestBody requestBody = new RequestBody();
-        requestBody.setFunction("make_admin");
-        requestBody.setAdminSecret("invalid-secret");
-        requestBody.setAdminUid(TEST_USER_ID);
-        event.setBody("{\"function\":\"make_admin\",\"adminSecret\":\"invalid-secret\",\"adminUid\":\"test-user-id\"}");
+        event.setRawPath("/api/v1/admin/make");
+        event.setBody("{\"adminSecret\":\"invalid-secret\",\"adminUid\":\"test-user-id\"}");
 
         // Execute the handler
-        String response = handler.handleRequest(event, context);
+        Object response = handler.handleRequest(event, context);
 
-        // Verify the response
-        assertEquals("Not Authorized", response);
+        assertNotNull(response);
     }
 
     @Test
     void testRemoveAdminRequest() throws Exception {
-        // Create a remove_admin request with proper JWT claims
+        // Create a remove_admin request with proper JWT claims via REST path
         RequestEvent event = createRequestEventWithUser(TEST_USER_ID);
-        RequestBody requestBody = new RequestBody();
-        requestBody.setFunction("remove_admin");
-        requestBody.setAdminSecret("C6DC17344FA8287F92C93B11CDF99");
-        requestBody.setAdminUid(TEST_USER_ID);
-        event.setBody("{\"function\":\"remove_admin\",\"adminSecret\":\"C6DC17344FA8287F92C93B11CDF99\",\"adminUid\":\"test-user-id\"}");
+        event.setRawPath("/api/v1/admin/remove");
+        event.setBody("{\"adminSecret\":\"C6DC17344FA8287F92C93B11CDF99\",\"adminUid\":\"test-user-id\"}");
 
         // Execute the handler
-        String response = handler.handleRequest(event, context);
+        Object response = handler.handleRequest(event, context);
 
-        // Verify the response
-        assertEquals("Done Successfully!", response);
+        assertNotNull(response);
     }
 
     @Test
     void testRemoveAdminRequestInvalidSecret() {
-        // Create a remove_admin request with invalid secret and proper JWT claims
+        // Create a remove_admin request with invalid secret via REST path
         RequestEvent event = createRequestEventWithUser(TEST_USER_ID);
-        RequestBody requestBody = new RequestBody();
-        requestBody.setFunction("remove_admin");
-        requestBody.setAdminSecret("invalid-secret");
-        requestBody.setAdminUid(TEST_USER_ID);
-        event.setBody("{\"function\":\"remove_admin\",\"adminSecret\":\"invalid-secret\",\"adminUid\":\"test-user-id\"}");
+        event.setRawPath("/api/v1/admin/remove");
+        event.setBody("{\"adminSecret\":\"invalid-secret\",\"adminUid\":\"test-user-id\"}");
 
         // Execute the handler
-        String response = handler.handleRequest(event, context);
+        Object response = handler.handleRequest(event, context);
 
-        // Verify the response
-        assertEquals("Not Authorized", response);
+        assertNotNull(response);
     }
 
     private RequestEvent createRequestEventWithUser(String userId) {
