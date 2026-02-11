@@ -27,104 +27,16 @@ public class ConsultationHandler {
 
     private final Firestore db;
     private final PythonLambdaService pythonLambdaService;
+    private final ServicePlanService servicePlanService;
     private final boolean isTest;
     private final Gson gson;
 
     public ConsultationHandler(Firestore db, PythonLambdaService pythonLambdaService, boolean isTest) {
         this.db = db;
         this.pythonLambdaService = pythonLambdaService;
+        this.servicePlanService = new ServicePlanService(db);
         this.isTest = isTest;
         this.gson = new GsonBuilder().setPrettyPrinting().create();
-    }
-
-    // ============= Helper Methods =============
-
-    /**
-     * Get plan details from Firestore.
-     * Moved from Handler.java to support consultation initiation.
-     */
-    private ServicePlan getPlanDetails(String planId, String expertId) throws ExecutionException, InterruptedException {
-        ServicePlan servicePlan = null;
-        DocumentReference doc = this.db.collection("users").document(expertId).collection("plans").document(planId);
-        ApiFuture<DocumentSnapshot> ref = doc.get();
-        DocumentSnapshot documentSnapshot = ref.get();
-
-        if (documentSnapshot.exists()) {
-            servicePlan = new ServicePlan();
-            servicePlan.setPlanId(planId);
-            LoggingService.debug("plan_details_loaded", Map.of("planId", planId, "expertId", expertId));
-
-            Map<String, Object> data = Objects.requireNonNull(documentSnapshot.getData());
-
-            servicePlan.setAmount(((Long) data.getOrDefault("amount", 0L)).doubleValue());
-            servicePlan.setCurrency((String) data.getOrDefault("currency", ""));
-            servicePlan.setSubscription((Boolean) data.getOrDefault("isSubscription", false));
-            servicePlan.setVideo((Boolean) data.getOrDefault("isVideo", false));
-            servicePlan.setRazorpayId((String) data.getOrDefault("razorpayId", ""));
-            servicePlan.setType((String) data.getOrDefault("type", ""));
-            servicePlan.setSubtype((String) data.getOrDefault("subtype", ""));
-            servicePlan.setCategory((String) data.getOrDefault("category", ""));
-
-            // Handle both Integer and Long for duration
-            Object durationObj = data.getOrDefault("duration", 30L);
-            Long duration;
-            if (durationObj instanceof Integer) {
-                duration = ((Integer) durationObj).longValue();
-            } else if (durationObj instanceof Long) {
-                duration = (Long) durationObj;
-            } else {
-                duration = 30L;
-            }
-            servicePlan.setDuration(duration);
-            servicePlan.setDurationUnit((String) data.getOrDefault("durationUnit", "MINUTES"));
-
-            if (documentSnapshot.contains("date")) {
-                servicePlan.setDate((com.google.cloud.Timestamp) documentSnapshot.get("date"));
-            }
-            if (documentSnapshot.contains("sessionStartedAt")) {
-                servicePlan.setSessionStartedAt((com.google.cloud.Timestamp) documentSnapshot.get("sessionStartedAt"));
-            }
-            if (documentSnapshot.contains("sessionCompletedAt")) {
-                servicePlan.setSessionCompletedAt((com.google.cloud.Timestamp) documentSnapshot.get("sessionCompletedAt"));
-            }
-            servicePlan.setTitle((String) data.getOrDefault("title", ""));
-
-            // Read on-demand consultation rate fields
-            if (data.containsKey("onDemandRatePerMinuteAudio")) {
-                Object audioRateObj = data.get("onDemandRatePerMinuteAudio");
-                if (audioRateObj != null) {
-                    servicePlan.setOnDemandRatePerMinuteAudio(convertToDouble(audioRateObj));
-                }
-            }
-            if (data.containsKey("onDemandRatePerMinuteVideo")) {
-                Object videoRateObj = data.get("onDemandRatePerMinuteVideo");
-                if (videoRateObj != null) {
-                    servicePlan.setOnDemandRatePerMinuteVideo(convertToDouble(videoRateObj));
-                }
-            }
-            if (data.containsKey("onDemandRatePerMinuteChat")) {
-                Object chatRateObj = data.get("onDemandRatePerMinuteChat");
-                if (chatRateObj != null) {
-                    servicePlan.setOnDemandRatePerMinuteChat(convertToDouble(chatRateObj));
-                }
-            }
-            if (data.containsKey("onDemandCurrency")) {
-                servicePlan.setOnDemandCurrency((String) data.get("onDemandCurrency"));
-            }
-        }
-
-        return servicePlan;
-    }
-
-    private Double convertToDouble(Object obj) {
-        if (obj instanceof Double) {
-            return (Double) obj;
-        } else if (obj instanceof Integer) {
-            return ((Integer) obj).doubleValue();
-        } else if (obj instanceof Long) {
-            return ((Long) obj).doubleValue();
-        }
-        return null;
     }
 
     public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
@@ -187,7 +99,7 @@ public class ConsultationHandler {
         String currency = WalletService.getDefaultCurrency();
 
         if (planId != null && !planId.isEmpty()) {
-            ServicePlan plan = getPlanDetails(planId, expertId);
+            ServicePlan plan = servicePlanService.getPlanDetails(planId, expertId);
             if (plan != null) {
                 rate = consultationService.getOnDemandRate(plan, consultationType);
                 currency = consultationService.getOnDemandCurrency(plan);

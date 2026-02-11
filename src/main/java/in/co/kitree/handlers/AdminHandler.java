@@ -170,7 +170,4 @@ public class AdminHandler {
             .update("cancelled_at", new Timestamp(System.currentTimeMillis())).get();
     }
 
-    private boolean isAdmin(String userId) throws FirebaseAuthException {
-        return Boolean.TRUE.equals(FirebaseAuth.getInstance().getUser(userId).getCustomClaims().get("admin"));
-    }
 }

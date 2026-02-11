@@ -67,7 +67,7 @@ public class AstrologyHandler {
             return gson.toJson(Map.of("success", false, "errorMessage", "Missing required user details or scanner data."));
         }
         try {
-            if (!isAdmin(userId)) {
+            if (!AuthenticationService.isAdmin(userId)) {
                 LoggingService.warn("aura_report_unauthorized_attempt", Map.of("userId", userId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized action."));
             }
@@ -93,7 +93,4 @@ public class AstrologyHandler {
         }
     }
 
-    private boolean isAdmin(String userId) throws com.google.firebase.auth.FirebaseAuthException {
-        return Boolean.TRUE.equals(com.google.firebase.auth.FirebaseAuth.getInstance().getUser(userId).getCustomClaims().get("admin"));
-    }
 }

@@ -1,19 +1,12 @@
 package in.co.kitree.handlers;
 
 import com.google.cloud.firestore.*;
-import com.google.firebase.auth.FirebaseAuth;
-import com.google.firebase.auth.FirebaseAuthException;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import in.co.kitree.pojos.PlatformFeeConfig;
 import in.co.kitree.pojos.RequestBody;
 import in.co.kitree.services.*;
 
-import com.cloudinary.Cloudinary;
-import com.cloudinary.utils.ObjectUtils;
-import org.json.JSONObject;
-
-import java.io.FileInputStream;
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -36,10 +29,6 @@ public class ExpertHandler {
     }
 
     // ============= Helper Methods =============
-
-    private boolean isAdmin(String userId) throws FirebaseAuthException {
-        return Boolean.TRUE.equals(FirebaseAuth.getInstance().getUser(userId).getCustomClaims().get("admin"));
-    }
 
     public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
         return switch (action) {
@@ -258,7 +247,7 @@ public class ExpertHandler {
         try {
             // Verify admin access against the original caller
             String callerUserId = requestBody.getCallerUserId() != null ? requestBody.getCallerUserId() : adminUserId;
-            if (!isAdmin(callerUserId)) {
+            if (!AuthenticationService.isAdmin(callerUserId)) {
                 LoggingService.warn("record_expert_payout_unauthorized", Map.of("userId", callerUserId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
             }
@@ -341,7 +330,7 @@ public class ExpertHandler {
         try {
             // Verify admin access - CRITICAL security check against original caller
             String callerUserId = requestBody.getCallerUserId() != null ? requestBody.getCallerUserId() : adminUserId;
-            if (!isAdmin(callerUserId)) {
+            if (!AuthenticationService.isAdmin(callerUserId)) {
                 LoggingService.warn("set_expert_platform_fee_unauthorized", Map.of("userId", callerUserId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
             }
@@ -423,7 +412,7 @@ public class ExpertHandler {
         try {
             // Verify admin access - CRITICAL security check against original caller
             String callerUserId = requestBody.getCallerUserId() != null ? requestBody.getCallerUserId() : adminUserId;
-            if (!isAdmin(callerUserId)) {
+            if (!AuthenticationService.isAdmin(callerUserId)) {
                 LoggingService.warn("get_expert_platform_fee_unauthorized", Map.of("userId", callerUserId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Admin access required"));
             }
@@ -547,7 +536,7 @@ public class ExpertHandler {
         Map<String, Object> response = new HashMap<>();
         String expertId = requestBody.getExpertId();
         String callerUserId = requestBody.getCallerUserId() != null ? requestBody.getCallerUserId() : userId;
-        if (isAdmin(callerUserId) || userId.equals(expertId)) {
+        if (AuthenticationService.isAdmin(callerUserId) || userId.equals(expertId)) {
             Query ordersQuery = db.collectionGroup("orders");
             Query subscriptionsQuery = db.collectionGroup("subscription_payments");
 
@@ -606,45 +595,6 @@ public class ExpertHandler {
             return "Not authorized";
         }
         return gson.toJson(response);
-    }
-
-    /**
-     * Update expert display picture via Cloudinary upload.
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private String handleUpdateExpertImage(String userId, RequestBody requestBody) throws Exception {
-        String base64Image = requestBody.getBase64Image();
-        if (base64Image == null || base64Image.isBlank()) {
-            return "Image not found";
-        }
-        String cloudinaryUrl = loadCloudinaryUrl();
-        if (cloudinaryUrl == null || cloudinaryUrl.isBlank()) {
-            return "Cloudinary not configured";
-        }
-        boolean isTest = "test".equals(System.getenv("ENVIRONMENT"));
-        Cloudinary cloudinary = new Cloudinary(cloudinaryUrl);
-        cloudinary.config.secure = true;
-        String path = isTest ? "test/" : "";
-        Map uploadResult = cloudinary.uploader().upload(base64Image, ObjectUtils.asMap(
-            "public_id", path + "expertDisplayPictures/" + userId,
-            "unique_filename", false,
-            "overwrite", true
-        ));
-        String url = String.valueOf(uploadResult.get("secure_url"));
-        LoggingService.info("expert_image_updated", Map.of("userId", userId, "url", url));
-        db.collection("users").document(userId).collection("public").document("store")
-            .set(Map.of("displayPicture", url), SetOptions.merge()).get();
-        return "Done";
-    }
-
-    private String loadCloudinaryUrl() {
-        try (FileInputStream fis = new FileInputStream("secrets.json")) {
-            String content = new String(fis.readAllBytes());
-            return new JSONObject(content).getString("CLOUDINARY_URL");
-        } catch (Exception e) {
-            LoggingService.error("handler_cloudinary_secrets_read_failed", e);
-            return null;
-        }
     }
 
 }

@@ -396,10 +396,7 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 }
             }
         }
-        boolean adminClaim = Boolean.TRUE.equals(
-            com.google.firebase.auth.FirebaseAuth.getInstance().getUser(callerUserId).getCustomClaims().get("admin")
-        );
-        if (!adminClaim) {
+        if (!AuthenticationService.isAdmin(callerUserId)) {
             LoggingService.warn("act_as_non_admin", Map.of("callerUserId", callerUserId));
             return null;
         }

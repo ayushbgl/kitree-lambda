@@ -3,6 +3,7 @@ package in.co.kitree.services;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseAuthException;
 import com.google.firebase.auth.FirebaseToken;
+import com.google.firebase.auth.UserRecord;
 
 /**
  * Service for handling Firebase authentication in Lambda
@@ -59,6 +60,14 @@ public class AuthenticationService {
             LoggingService.warn("firebase_token_verification_failed", java.util.Map.of("error", e.getMessage()));
             throw e;
         }
+    }
+
+    /**
+     * Checks if the given user has the "admin" custom claim set to true.
+     */
+    public static boolean isAdmin(String userId) throws FirebaseAuthException {
+        UserRecord user = FirebaseAuth.getInstance().getUser(userId);
+        return Boolean.TRUE.equals(user.getCustomClaims().get("admin"));
     }
 
     /**

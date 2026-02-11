@@ -2,8 +2,6 @@ package in.co.kitree.handlers;
 
 import com.google.api.core.ApiFuture;
 import com.google.cloud.firestore.*;
-import com.google.firebase.auth.FirebaseAuth;
-import com.google.firebase.auth.FirebaseAuthException;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.razorpay.RazorpayException;
@@ -25,11 +23,13 @@ public class ServiceHandler {
 
     private final Firestore db;
     private final Razorpay razorpay;
+    private final ServicePlanService servicePlanService;
     private final Gson gson;
 
     public ServiceHandler(Firestore db, Razorpay razorpay) {
         this.db = db;
         this.razorpay = razorpay;
+        this.servicePlanService = new ServicePlanService(db);
         this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
@@ -60,7 +60,7 @@ public class ServiceHandler {
             return gson.toJson(orderDetails);
         }
 
-        ServicePlan servicePlan = getPlanDetails(requestBody.getPlanId(), requestBody.getExpertId());
+        ServicePlan servicePlan = servicePlanService.getPlanDetails(requestBody.getPlanId(), requestBody.getExpertId());
 
         if (servicePlan.getCategory().equals("CUSTOMIZED_BRACELET")) {
             if (requestBody.getAmount() == null || requestBody.getAmount() < 250 || requestBody.getBeads() == null || requestBody.getBeads().isEmpty() || requestBody.getAddress() == null) {
@@ -331,7 +331,7 @@ public class ServiceHandler {
                     referrals = new HashMap<>();
                 }
                 if (referrals == null || referrals.isEmpty()) {
-                    ServicePlan servicePlan = getPlanDetails(requestBody.getPlanId(), requestBody.getExpertId());
+                    ServicePlan servicePlan = servicePlanService.getPlanDetails(requestBody.getPlanId(), requestBody.getExpertId());
                     DocumentSnapshot referralDetails = this.db.collection("users").document(requestBody.getExpertId()).collection("public").document("store").get().get();
                     int referredDiscount = Integer.parseInt(String.valueOf(Objects.requireNonNull(referralDetails.getData()).getOrDefault("referredDiscount", 0)));
                     Double newAmount = servicePlan.getAmount() * (1.00 - referredDiscount / 100.0);
@@ -449,7 +449,7 @@ public class ServiceHandler {
     private String handleCancelSubscription(String userId, RequestBody requestBody) throws Exception {
         try {
             String gatewaySubscriptionId = requestBody.getGatewaySubscriptionId();
-            if (!(checkIfOrderOwnedByUser(gatewaySubscriptionId, userId) || isAdmin(userId))) {
+            if (!(checkIfOrderOwnedByUser(gatewaySubscriptionId, userId) || AuthenticationService.isAdmin(userId))) {
                 return "Not authorized";
             }
             razorpay.cancel(gatewaySubscriptionId);
@@ -481,7 +481,7 @@ public class ServiceHandler {
         }
         String expertId = order.getExpertId();
 
-        if (!userIdFromRequest.equals(userId) && !userId.equals(expertId) && !isAdmin(userId)) {
+        if (!userIdFromRequest.equals(userId) && !userId.equals(expertId) && !AuthenticationService.isAdmin(userId)) {
             return gson.toJson(Map.of("success", false, "error", "Not authorized."));
         }
 
@@ -515,7 +515,7 @@ public class ServiceHandler {
 
         String expertId = order.getExpertId();
 
-        if (!userIdFromRequest.equals(userId) && !userId.equals(expertId) && !isAdmin(userId)) {
+        if (!userIdFromRequest.equals(userId) && !userId.equals(expertId) && !AuthenticationService.isAdmin(userId)) {
             return gson.toJson(Map.of("success", false, "error", "Not authorized."));
         }
 
@@ -542,7 +542,7 @@ public class ServiceHandler {
         }
 
         String planId = order.getPlanId();
-        ServicePlan servicePlan = getPlanDetails(planId, expertId);
+        ServicePlan servicePlan = servicePlanService.getPlanDetails(planId, expertId);
         long durationOfSlot = servicePlan.getDuration();
         String durationUnitString = servicePlan.getDurationUnit();
         SchedulingService.DurationUnit durationUnit = SchedulingService.DurationUnit.MINUTES;
@@ -569,47 +569,6 @@ public class ServiceHandler {
     }
 
     // ============= Private Helpers =============
-
-    private ServicePlan getPlanDetails(String planId, String expertId) throws ExecutionException, InterruptedException {
-        ServicePlan servicePlan = null;
-        DocumentReference doc = this.db.collection("users").document(expertId).collection("plans").document(planId);
-        ApiFuture<DocumentSnapshot> ref = doc.get();
-        DocumentSnapshot documentSnapshot = ref.get();
-        if (documentSnapshot.exists()) {
-            servicePlan = new ServicePlan();
-            servicePlan.setPlanId(planId);
-            servicePlan.setAmount(((Long) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("amount", 0L)).doubleValue());
-            servicePlan.setCurrency((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("currency", ""));
-            servicePlan.setSubscription((Boolean) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("isSubscription", false));
-            servicePlan.setVideo((Boolean) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("isVideo", false));
-            servicePlan.setRazorpayId((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("razorpayId", ""));
-            servicePlan.setType((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("type", ""));
-            servicePlan.setSubtype((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("subtype", ""));
-            servicePlan.setCategory((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("category", ""));
-            Object durationObj = Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("duration", 30L);
-            Long duration;
-            if (durationObj instanceof Integer) {
-                duration = ((Integer) durationObj).longValue();
-            } else if (durationObj instanceof Long) {
-                duration = (Long) durationObj;
-            } else {
-                duration = 30L;
-            }
-            servicePlan.setDuration(duration);
-            servicePlan.setDurationUnit((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("durationUnit", "MINUTES"));
-            if (documentSnapshot.contains("date")) {
-                servicePlan.setDate((com.google.cloud.Timestamp) documentSnapshot.get("date"));
-            }
-            if (documentSnapshot.contains("sessionStartedAt")) {
-                servicePlan.setSessionStartedAt((com.google.cloud.Timestamp) documentSnapshot.get("sessionStartedAt"));
-            }
-            if (documentSnapshot.contains("sessionCompletedAt")) {
-                servicePlan.setSessionCompletedAt((com.google.cloud.Timestamp) documentSnapshot.get("sessionCompletedAt"));
-            }
-            servicePlan.setTitle((String) Objects.requireNonNull(documentSnapshot.getData()).getOrDefault("title", ""));
-        }
-        return servicePlan;
-    }
 
     private void createOrderInDB(String userId, String orderId, Map<String, Object> orderDetails) throws ExecutionException, InterruptedException {
         this.db.collection("users").document(userId).collection("orders").document(orderId).create(orderDetails).get();
@@ -753,7 +712,7 @@ public class ServiceHandler {
         } else {
             throw new RuntimeException("Invalid coupon type: null");
         }
-        ServicePlan servicePlan = getPlanDetails(planName, expertId);
+        ServicePlan servicePlan = servicePlanService.getPlanDetails(planName, expertId);
 
         FirebaseUser user = new FirebaseUser();
         Map<String, Long> userCouponFrequency = new HashMap<>();
@@ -808,10 +767,6 @@ public class ServiceHandler {
     private void cancelSubscriptionInDb(String userId, String subscriptionId) throws ExecutionException, InterruptedException {
         this.db.collection("users").document(userId).collection("orders").document(subscriptionId)
             .update("cancelled_at", new Timestamp(System.currentTimeMillis())).get();
-    }
-
-    private boolean isAdmin(String userId) throws FirebaseAuthException {
-        return Boolean.TRUE.equals(FirebaseAuth.getInstance().getUser(userId).getCustomClaims().get("admin"));
     }
 
     private List<Map<String, ZonedDateTime>> getExistingBookings(String expertId, String startDate, String endDate, String expertTimeZone) {

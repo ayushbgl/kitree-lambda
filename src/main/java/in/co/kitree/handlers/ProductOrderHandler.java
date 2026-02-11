@@ -5,8 +5,6 @@ import com.google.cloud.Timestamp;
 import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
-import com.google.firebase.auth.FirebaseAuth;
-import com.google.firebase.auth.FirebaseAuthException;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.razorpay.RazorpayException;
@@ -36,10 +34,6 @@ public class ProductOrderHandler {
     }
 
     // ============= Helper Methods =============
-
-    private boolean isAdmin(String userId) throws FirebaseAuthException {
-        return Boolean.TRUE.equals(FirebaseAuth.getInstance().getUser(userId).getCustomClaims().get("admin"));
-    }
 
     private ProductOrderService createOrderService() {
         ProductCatalogService catalogService = new ProductCatalogService(db);
@@ -188,60 +182,6 @@ public class ProductOrderHandler {
     }
 
     /**
-     * Create product order (buy product).
-     */
-    private String handleBuyProduct(String userId, RequestBody requestBody) {
-        try {
-            if (requestBody.getExpertId() == null) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Expert ID is required"));
-            }
-            if (requestBody.getProductId() == null) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Product ID is required"));
-            }
-
-            int quantity = requestBody.getQuantity() != null ? requestBody.getQuantity() : 1;
-            if (quantity < 1) {
-                return gson.toJson(Map.of("success", false, "errorMessage", "Quantity must be at least 1"));
-            }
-
-            ProductCatalogService catalogService = new ProductCatalogService(db);
-            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
-            ExpertEarningsService earningsService = new ExpertEarningsService(db);
-            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
-
-            Map<String, Object> orderResult = orderService.createOrder(
-                userId,
-                requestBody.getExpertId(),
-                requestBody.getProductId(),
-                quantity,
-                requestBody.getAddress(),
-                requestBody.getCouponCode()
-            );
-
-            // Create Razorpay order for payment
-            Double amount = (Double) orderResult.get("amount");
-            String orderId = (String) orderResult.get("orderId");
-
-            if (amount != null && amount > 0) {
-                try {
-                    // Encrypt userId for Razorpay notes
-                    String encryptedCustomerId = CustomerCipher.encryptCaesarCipher(userId);
-                    String razorpayOrderId = razorpay.createOrder(amount, encryptedCustomerId);
-                    orderResult.put("razorpayOrderId", razorpayOrderId);
-                } catch (RazorpayException e) {
-                    LoggingService.error("razorpay_order_creation_failed", e);
-                    return gson.toJson(Map.of("success", false, "errorMessage", "Failed to create payment order"));
-                }
-            }
-
-            return gson.toJson(orderResult);
-        } catch (Exception e) {
-            LoggingService.error("buy_product_error", e);
-            return gson.toJson(Map.of("success", false, "errorMessage", e.getMessage()));
-        }
-    }
-
-    /**
      * Create multi-item product order (buy products).
      * Items should be passed as a list with productId and quantity for each.
      */
@@ -271,10 +211,7 @@ public class ProductOrderHandler {
                 }
             }
 
-            ProductCatalogService catalogService = new ProductCatalogService(db);
-            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
-            ExpertEarningsService earningsService = new ExpertEarningsService(db);
-            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+            ProductOrderService orderService = createOrderService();
 
             Map<String, Object> orderResult = orderService.createMultiItemOrder(
                 userId,
@@ -343,10 +280,7 @@ public class ProductOrderHandler {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Payment verification failed - invalid signature"));
             }
 
-            ProductCatalogService catalogService = new ProductCatalogService(db);
-            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
-            ExpertEarningsService earningsService = new ExpertEarningsService(db);
-            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+            ProductOrderService orderService = createOrderService();
 
             orderService.verifyOrderPayment(userId, requestBody.getOrderId());
 
@@ -402,10 +336,7 @@ public class ProductOrderHandler {
      */
     private String handleGetUserProductOrders(String userId) {
         try {
-            ProductCatalogService catalogService = new ProductCatalogService(db);
-            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
-            ExpertEarningsService earningsService = new ExpertEarningsService(db);
-            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+            ProductOrderService orderService = createOrderService();
 
             List<Map<String, Object>> orders = orderService.getUserProductOrders(userId);
 
@@ -436,10 +367,7 @@ public class ProductOrderHandler {
                 return gson.toJson(Map.of("success", false, "errorMessage", "User is not registered as an expert"));
             }
 
-            ProductCatalogService catalogService = new ProductCatalogService(db);
-            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
-            ExpertEarningsService earningsService = new ExpertEarningsService(db);
-            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+            ProductOrderService orderService = createOrderService();
 
             // Use authenticated userId as expertId - user can only see their own orders
             List<Map<String, Object>> orders = orderService.getExpertProductOrders(userId, requestBody.getStatusFilter());
@@ -461,15 +389,12 @@ public class ProductOrderHandler {
     private String handleGetPlatformShippingOrders(String userId) {
         try {
             // SECURITY: Verify admin access - CRITICAL security check
-            if (!isAdmin(userId)) {
+            if (!AuthenticationService.isAdmin(userId)) {
                 LoggingService.warn("get_platform_shipping_orders_unauthorized", Map.of("userId", userId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Admin access required"));
             }
 
-            ProductCatalogService catalogService = new ProductCatalogService(db);
-            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
-            ExpertEarningsService earningsService = new ExpertEarningsService(db);
-            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+            ProductOrderService orderService = createOrderService();
 
             List<Map<String, Object>> orders = orderService.getPlatformShippingOrders();
             Map<String, Object> stats = orderService.getOrderStatistics();
@@ -496,10 +421,7 @@ public class ProductOrderHandler {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Order ID, User ID, and new status are required"));
             }
 
-            ProductCatalogService catalogService = new ProductCatalogService(db);
-            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
-            ExpertEarningsService earningsService = new ExpertEarningsService(db);
-            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+            ProductOrderService orderService = createOrderService();
 
             // SECURITY: Verify authorization based on shipping mode
             ProductOrderDetails order = orderService.getOrder(requestBody.getUserId(), requestBody.getOrderId());
@@ -507,7 +429,7 @@ public class ProductOrderHandler {
                 return gson.toJson(Map.of("success", false, "errorMessage", "Order not found"));
             }
 
-            boolean isAdminUser = isAdmin(userId);
+            boolean isAdminUser = AuthenticationService.isAdmin(userId);
             boolean isOrderExpert = userId.equals(order.getExpertId());
             boolean isSelfShipping = "SELF".equals(order.getShippingMode());
 
@@ -549,10 +471,7 @@ public class ProductOrderHandler {
 
             String targetUserId = requestBody.getUserId() != null ? requestBody.getUserId() : userId;
 
-            ProductCatalogService catalogService = new ProductCatalogService(db);
-            ExpertProductService expertProductService = new ExpertProductService(db, catalogService);
-            ExpertEarningsService earningsService = new ExpertEarningsService(db);
-            ProductOrderService orderService = new ProductOrderService(db, catalogService, expertProductService, earningsService);
+            ProductOrderService orderService = createOrderService();
 
             orderService.cancelOrder(
                 targetUserId,
@@ -702,7 +621,7 @@ public class ProductOrderHandler {
     private String handleSeedPlatformProducts(String userId, RequestBody requestBody) {
         try {
             // SECURITY: Verify admin access - CRITICAL security check
-            if (!isAdmin(userId)) {
+            if (!AuthenticationService.isAdmin(userId)) {
                 LoggingService.warn("seed_platform_products_unauthorized", Map.of("userId", userId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Admin access required"));
             }
@@ -728,7 +647,7 @@ public class ProductOrderHandler {
     private String handleAdminUpsertProduct(String userId, RequestBody requestBody) {
         try {
             // SECURITY: Verify admin access - CRITICAL security check
-            if (!isAdmin(userId)) {
+            if (!AuthenticationService.isAdmin(userId)) {
                 LoggingService.warn("admin_upsert_product_unauthorized", Map.of("userId", userId));
                 return gson.toJson(Map.of("success", false, "errorMessage", "Unauthorized: Admin access required"));
             }
