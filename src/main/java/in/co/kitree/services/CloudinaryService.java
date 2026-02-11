@@ -2,11 +2,7 @@ package in.co.kitree.services;
 
 import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.Map;
 
 /**
@@ -19,8 +15,8 @@ public class CloudinaryService {
     private final boolean isTest;
 
     public CloudinaryService(boolean isTest) {
-        String cloudinaryUrl = loadCloudinaryUrl();
-        if (cloudinaryUrl == null || cloudinaryUrl.isEmpty()) {
+        String cloudinaryUrl = SecretsProvider.getString("CLOUDINARY_URL");
+        if (cloudinaryUrl.isEmpty()) {
             throw new RuntimeException("CLOUDINARY_URL not configured in secrets.json");
         }
         this.cloudinary = new Cloudinary(cloudinaryUrl);
@@ -50,14 +46,4 @@ public class CloudinaryService {
         return String.valueOf(uploadResult.get("secure_url"));
     }
 
-    private static String loadCloudinaryUrl() {
-        try {
-            ObjectMapper objectMapper = new ObjectMapper();
-            JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
-            return rootNode.path("CLOUDINARY_URL").asText("");
-        } catch (IOException e) {
-            LoggingService.error("cloudinary_secrets_read_failed", e);
-            return null;
-        }
-    }
 }

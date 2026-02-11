@@ -1,14 +1,10 @@
 package in.co.kitree.services;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stripe.Stripe;
 import com.stripe.exception.StripeException;
 import com.stripe.model.PaymentIntent;
 import com.stripe.param.PaymentIntentCreateParams;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.Map;
 
 /**
@@ -20,22 +16,15 @@ public class StripeService implements PaymentGateway {
     private final String publishableKey;
 
     public StripeService(boolean isTest) {
-        String secretKey = "";
-        String pubKey = "";
+        String secretKey;
+        String pubKey;
 
-        try {
-            ObjectMapper objectMapper = new ObjectMapper();
-            JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
-
-            if (isTest) {
-                secretKey = rootNode.path("STRIPE_TEST_SECRET_KEY").asText("");
-                pubKey = rootNode.path("STRIPE_TEST_PUBLISHABLE_KEY").asText("");
-            } else {
-                secretKey = rootNode.path("STRIPE_SECRET_KEY").asText("");
-                pubKey = rootNode.path("STRIPE_PUBLISHABLE_KEY").asText("");
-            }
-        } catch (IOException e) {
-            LoggingService.error("stripe_secrets_read_failed", e);
+        if (isTest) {
+            secretKey = SecretsProvider.getString("STRIPE_TEST_SECRET_KEY");
+            pubKey = SecretsProvider.getString("STRIPE_TEST_PUBLISHABLE_KEY");
+        } else {
+            secretKey = SecretsProvider.getString("STRIPE_SECRET_KEY");
+            pubKey = SecretsProvider.getString("STRIPE_PUBLISHABLE_KEY");
         }
 
         this.publishableKey = pubKey;

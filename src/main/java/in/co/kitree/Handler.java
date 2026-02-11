@@ -104,8 +104,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
             this.razorpay = new Razorpay(isTest());
             this.stripeService = new StripeService(isTest());
             this.pythonLambdaService = createPythonLambdaService();
-            AstrologyService astrologyService = new AstrologyService();
-            RashifalService rashifalService = new RashifalService(db, isTest());
+            LambdaClient astrologyLambdaClient = LambdaClient.builder()
+                    .region(software.amazon.awssdk.regions.Region.AP_SOUTH_1)
+                    .build();
+            AstrologyService astrologyService = new AstrologyService(astrologyLambdaClient, isTest());
+            RashifalService rashifalService = new RashifalService(db, astrologyService, isTest());
             StreamService streamService = new StreamService(isTest());
             CloudinaryService cloudinaryService = new CloudinaryService(isTest());
             initHandlers(astrologyService, rashifalService, streamService, cloudinaryService);
@@ -142,8 +145,13 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 RashifalService rashifalService = null;
                 StreamService streamService = null;
                 CloudinaryService cloudinaryService = null;
-                try { astrologyService = new AstrologyService(); } catch (Exception ignored) {}
-                try { rashifalService = new RashifalService(db, isTest()); } catch (Exception ignored) {}
+                try {
+                    LambdaClient astrologyLambdaClient = LambdaClient.builder()
+                            .region(software.amazon.awssdk.regions.Region.AP_SOUTH_1)
+                            .build();
+                    astrologyService = new AstrologyService(astrologyLambdaClient, isTest());
+                } catch (Exception ignored) {}
+                try { rashifalService = new RashifalService(db, astrologyService, isTest()); } catch (Exception ignored) {}
                 try { streamService = new StreamService(isTest()); } catch (Exception ignored) {}
                 try { cloudinaryService = new CloudinaryService(isTest()); } catch (Exception ignored) {}
                 try { initHandlers(astrologyService, rashifalService, streamService, cloudinaryService); } catch (Exception ignored) {}

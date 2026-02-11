@@ -23,10 +23,6 @@ Parameters:
     Type: String
     Description: ACM certificate ARN for ApiDomainName (must be in us-east-1 for CloudFront)
 
-  AstrologyLambdaUrl:
-    Type: String
-    Description: Function URL of the kitree-astrology-api Lambda for this environment
-
 
 Globals:
   Function:
@@ -52,7 +48,6 @@ Resources:
         Variables:
           ENVIRONMENT: !Ref Environment
           SENTRY_DSN: "https://dc337a8e397dd75f982b60a24018dd22@o1209671.ingest.us.sentry.io/4510843972354048"
-          ASTROLOGY_LAMBDA_URL: !Ref AstrologyLambdaUrl
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:
@@ -61,6 +56,7 @@ Resources:
                 - lambda:InvokeFunction
               Resource:
                 - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:kitree-python-scripts-${Environment}"
+                - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:kitree-astrology-api-${Environment}"
                 - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:java-lambda-${Environment}"
       AutoPublishAlias: !Ref Environment
       DeploymentPreference:

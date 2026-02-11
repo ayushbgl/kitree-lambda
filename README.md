@@ -1,167 +1,73 @@
 # Kitree Lambda
 
-This repository contains the Lambda functions for the Kitree platform.
+Java 21 Lambda backend for the Kitree platform, deployed via AWS SAM + CloudFront.
 
-## Testing Philosophy
+## Architecture
 
-Our testing strategy follows a multi-layered approach to ensure code quality and reliability:
+- **Runtime:** Java 21 on AWS Lambda, exposed via Lambda Function URL + CloudFront
+- **Auth:** Firebase Authentication (token verified on every request)
+- **Database:** Cloud Firestore
+- **Payments:** Razorpay + Stripe (via PaymentGateway interface)
+- **Astrology:** Invokes `kitree-astrology-api` Lambda via AWS SDK (IAM-authorized)
+- **Python scripts:** Invokes `kitree-python-scripts` Lambda via AWS SDK (IAM-authorized)
+- **Streaming:** Stream Chat SDK for real-time messaging
+- **Monitoring:** Sentry for error tracking and performance monitoring
 
-### 1. Unit Tests
-- Test individual components in isolation
-- Mock external dependencies
-- Focus on business logic validation
-- Located in `src/test/java/in/co/kitree/unit/`
+## secrets.json Keys
 
-### 2. Integration Tests
-- Test interactions between components
-- Use real dependencies where possible
-- Focus on component integration
-- Located in `src/test/java/in/co/kitree/integration/`
+All secrets are loaded via `SecretsProvider` (package-private, cached singleton). Required keys:
 
-### 3. End-to-End (E2E) Tests
-- Test complete user workflows
-- Use Firebase emulators for local testing
-- Validate entire business processes
-- Located in `src/test/java/in/co/kitree/e2e/`
+| Key | Service |
+|-----|---------|
+| `RAZORPAY_KEY`, `RAZORPAY_SECRET` | Razorpay (prod) |
+| `RAZORPAY_TEST_KEY`, `RAZORPAY_TEST_SECRET` | Razorpay (test) |
+| `RAZORPAY_WEBHOOK_SECRET`, `RAZORPAY_WEBHOOK_SECRET_TEST` | Razorpay webhooks |
+| `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY` | Stripe (prod) |
+| `STRIPE_TEST_SECRET_KEY`, `STRIPE_TEST_PUBLISHABLE_KEY` | Stripe (test) |
+| `CLOUDINARY_URL` | Cloudinary media uploads |
+| `GEMINI_API_KEY`, `GEMINI_API_KEY_TEST` | Google Gemini AI |
+| `STREAM_API_KEY`, `STREAM_API_SECRET` | Stream Chat (prod) |
+| `STREAM_API_KEY_TEST`, `STREAM_API_SECRET_TEST` | Stream Chat (test) |
 
-## Running Tests Locally
+These files are stored in the `kitree-secrets` private repo under `kitree-lambda/`.
 
-### Prerequisites
-1. Java 17 or higher
-2. Gradle
-3. Docker (for Firebase emulators)
+## Running Tests
 
-### Setup and Running Tests
 ```bash
-# Start Firebase emulators using Docker
-docker-compose up -d
-
-# Run all tests
+# All tests
 ./gradlew test
 
-# Run specific test categories
-./gradlew test --tests "*UnitTest"
-./gradlew test --tests "*IntegrationTest"
-./gradlew test --tests "*E2ETest"
-
-# Run specific test class
-./gradlew test --tests "ServicePurchaseFlowTest"
+# Specific test class
+./gradlew test --tests "in.co.kitree.services.AstrologyServiceTest"
 ```
-
-## CI/CD Pipeline
-
-Our CI/CD pipeline runs on GitHub Actions and includes:
-
-1. **Build & Test**
-   - Compiles the code
-   - Runs all tests
-   - Generates test reports
-
-2. **Code Quality**
-   - Runs static code analysis
-   - Checks code coverage
-   - Validates code style
-
-3. **Deployment**
-   - Deploys to staging environment
-   - Runs smoke tests
-   - Deploys to production if all checks pass
-
-## Test Data Management
-
-- Each test class manages its own test data
-- Test data is cleaned up after each test
-- Use `@BeforeEach` and `@AfterEach` for test data setup/cleanup
-- Avoid test data dependencies between test classes
-
-## Best Practices
-
-1. **Test Isolation**
-   - Each test should be independent
-   - Clean up test data after each test
-   - Don't rely on test execution order
-
-2. **Test Naming**
-   - Use descriptive test names
-   - Follow pattern: `test[Scenario]_[ExpectedResult]`
-   - Example: `testCompleteServicePurchaseFlow`
-
-3. **Assertions**
-   - Use specific assertions
-   - Test one concept per test
-   - Include both positive and negative test cases
-
-4. **Mocking**
-   - Mock external services
-   - Use Firebase emulators for Firestore/Auth
-   - Keep mocks simple and focused
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Firebase Emulator Connection**
-   - Ensure Docker containers are running (`docker-compose ps`)
-   - Check emulator ports (default: Firestore 8080, Auth 9099)
-   - Verify environment variables are set
-
-2. **Test Failures**
-   - Check test data setup
-   - Verify emulator state
-   - Look for concurrent test interference
-
-3. **CI Pipeline Failures**
-   - Check test logs
-   - Verify emulator configuration
-   - Review code coverage reports
-
-## Contributing
-
-1. Write tests for new features
-2. Maintain or improve test coverage
-3. Follow existing test patterns
-4. Document test scenarios
-5. Run all tests before submitting PRs
 
 ## Deployment
 
-### Prerequisites
-1. AWS CLI configured with appropriate credentials
-2. AWS SAM CLI installed
-3. Docker (for local testing)
+### Via GitHub Actions (recommended)
 
-### Installing AWS SAM CLI
-```bash
-# For macOS
-brew tap aws/tap
-brew install aws-sam-cli
+1. Go to **Actions > Deploy Lambda Stack > Run workflow**
+2. Select environment: `test`, `prod`, or `both`
+3. Pipeline: CI tests -> SAM build/deploy -> Health check verification
 
-# For other platforms, see:
-# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html
-```
+### Manual Setup (one-time)
 
-### Deployment Process
-1. Build the application:
-```bash
-sam build
-```
+1. **AWS IAM deployer user** — `kitree-lambda-github-deployer` with permissions for:
+   - CloudFormation, Lambda, S3, IAM (for SAM deployment)
+   - CloudFront distribution management
+   - EventBridge rule management
 
-2. Deploy to AWS:
-```bash
-./deploy.sh
-```
+2. **GitHub Secrets** (repository settings):
+   - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
+   - `REPO_ACCESS_TOKEN` — GitHub PAT to clone `kitree-secrets`
+   - `FIREBASE_SERVICE_ACCOUNT_KEY_TEST`, `FIREBASE_SERVICE_ACCOUNT_KEY_PROD`
 
-### Important Notes
-- The application is currently using AWS API Gateway, which is free only for the first year
-- Consider migrating to a different API gateway solution for long-term cost optimization
-- Monitor AWS costs regularly through the AWS Console
+3. **kitree-secrets repo** must contain:
+   - `kitree-lambda/secrets.json`
+   - `kitree-lambda/serviceAccountKey.json` (Firebase prod)
+   - `kitree-lambda/serviceAccountKeyTest.json` (Firebase test)
 
-### Environment Configuration
-- Development: `sam deploy --config-env dev`
-- Staging: `sam deploy --config-env staging`
-- Production: `sam deploy --config-env prod`
+4. **DNS** — CNAME records pointing custom domains to CloudFront:
+   - `api-test.kitree.co.in` -> CloudFront distribution (test)
+   - `api.kitree.co.in` -> CloudFront distribution (prod)
 
-### Monitoring and Logs
-- View logs: `sam logs -n [FunctionName] --stack-name [StackName]`
-- Monitor metrics: AWS CloudWatch Console
-- Set up alerts for critical errors and performance issues
+5. **ACM Certificate** — `*.kitree.co.in` in `us-east-1` (required for CloudFront)

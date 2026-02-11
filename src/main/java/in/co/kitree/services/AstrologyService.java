@@ -3,64 +3,35 @@ package in.co.kitree.services;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import in.co.kitree.pojos.RequestBody;
+import software.amazon.awssdk.core.SdkBytes;
+import software.amazon.awssdk.services.lambda.LambdaClient;
+import software.amazon.awssdk.services.lambda.model.InvokeRequest;
+import software.amazon.awssdk.services.lambda.model.InvokeResponse;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import io.sentry.Sentry;
 import io.sentry.ISpan;
 import io.sentry.SpanStatus;
-import io.sentry.BaggageHeader;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 public class AstrologyService {
 
-    private final HttpClient httpClient;
+    private final LambdaClient lambdaClient;
+    private final String functionName;
     private final Gson gson;
 
-    public AstrologyService() {
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(AstrologyServiceConfig.HTTP_TIMEOUT_SECONDS))
-                .build();
+    public AstrologyService(LambdaClient lambdaClient, boolean isTest) {
+        this.lambdaClient = lambdaClient;
+        this.functionName = isTest ? "kitree-astrology-api-test" : "kitree-astrology-api-prod";
         this.gson = new GsonBuilder().create();
     }
 
-    // Package-private constructor for unit testing with a mock HttpClient
-    AstrologyService(HttpClient httpClient) {
-        this.httpClient = httpClient;
+    // Package-private constructor for unit testing with a specific function name
+    AstrologyService(LambdaClient lambdaClient, String functionName) {
+        this.lambdaClient = lambdaClient;
+        this.functionName = functionName;
         this.gson = new GsonBuilder().create();
-    }
-
-    private HttpResponse<String> makeTracedPost(HttpRequest.Builder builder, String description) throws Exception {
-        ISpan currentSpan = Sentry.getSpan();
-        if (currentSpan != null) {
-            builder.header("sentry-trace", currentSpan.toSentryTrace().getValue());
-            BaggageHeader baggage = currentSpan.toBaggageHeader(List.of());
-            if (baggage != null) {
-                builder.header("baggage", baggage.getValue());
-            }
-        }
-        ISpan span = currentSpan != null ? currentSpan.startChild("http.client", description) : null;
-        try {
-            HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-            if (span != null) {
-                span.setStatus(SpanStatus.fromHttpStatusCode(response.statusCode()));
-                span.finish();
-            }
-            return response;
-        } catch (Exception e) {
-            if (span != null) {
-                span.setThrowable(e);
-                span.setStatus(SpanStatus.INTERNAL_ERROR);
-                span.finish();
-            }
-            throw e;
-        }
     }
 
     public String getAstrologicalDetails(RequestBody requestBody) throws Exception {
@@ -79,9 +50,8 @@ public class AstrologyService {
         body.put("minute", requestBody.getHoroscopeMinute());
         body.put("latitude", requestBody.getHoroscopeLatitude());
         body.put("longitude", requestBody.getHoroscopeLongitude());
-        body.put("api_token", AstrologyServiceConfig.getApiToken());
 
-        return callLambda("/get_horoscope", body);
+        return invokeLambda("get_horoscope", body);
     }
 
     public String getDashaDetails(RequestBody requestBody) throws Exception {
@@ -101,9 +71,8 @@ public class AstrologyService {
         body.put("latitude", requestBody.getDashaLatitude());
         body.put("longitude", requestBody.getDashaLongitude());
         body.put("prefix", requestBody.getDashaPrefix());
-        body.put("api_token", AstrologyServiceConfig.getApiToken());
 
-        return callLambda("/dasha", body);
+        return invokeLambda("dasha", body);
     }
 
     public String getDivisionalCharts(RequestBody requestBody) throws Exception {
@@ -123,9 +92,8 @@ public class AstrologyService {
         body.put("latitude", requestBody.getHoroscopeLatitude());
         body.put("longitude", requestBody.getHoroscopeLongitude());
         body.put("divisional_chart_numbers", requestBody.getDivisionalChartNumbers());
-        body.put("api_token", AstrologyServiceConfig.getApiToken());
 
-        return callLambda("/divisional_charts", body);
+        return invokeLambda("divisional_charts", body);
     }
 
     public String getGocharDetails(RequestBody requestBody) throws Exception {
@@ -144,29 +112,67 @@ public class AstrologyService {
         body.put("minute", requestBody.getHoroscopeMinute());
         body.put("latitude", requestBody.getHoroscopeLatitude());
         body.put("longitude", requestBody.getHoroscopeLongitude());
-        body.put("api_token", AstrologyServiceConfig.getApiToken());
 
-        return callLambda("/gochar", body);
+        return invokeLambda("gochar", body);
     }
 
-    private String callLambda(String path, Map<String, Object> body) throws Exception {
-        String url = AstrologyServiceConfig.getLambdaBaseUrl() + path;
-        HttpResponse<String> httpResponse = makeTracedPost(
-                HttpRequest.newBuilder()
-                        .uri(URI.create(url))
-                        .header("Content-Type", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(body))),
-                "POST " + url
-        );
-        if (httpResponse.statusCode() >= 200 && httpResponse.statusCode() < 300) {
-            return parseLambdaResponse(httpResponse.body());
-        } else {
-            throw new RuntimeException("Astrology Lambda " + path + " failed with status: " + httpResponse.statusCode());
+    /**
+     * Invoke the astrology lambda's /rashifal endpoint.
+     * Used by RashifalService for daily rashifal generation.
+     */
+    public String getRashifalData(int year, int month, int day, int hour, int minute,
+                                   double latitude, double longitude) throws Exception {
+        Map<String, Object> body = new HashMap<>();
+        body.put("date", day);
+        body.put("month", month);
+        body.put("year", year);
+        body.put("hour", hour);
+        body.put("minute", minute);
+        body.put("latitude", latitude);
+        body.put("longitude", longitude);
+
+        return invokeLambda("rashifal", body);
+    }
+
+    private String invokeLambda(String action, Map<String, Object> body) throws Exception {
+        body.put("action", action);
+
+        ISpan currentSpan = Sentry.getSpan();
+        ISpan span = currentSpan != null
+                ? currentSpan.startChild("lambda.invoke", functionName + " " + action)
+                : null;
+        try {
+            InvokeRequest request = InvokeRequest.builder()
+                    .functionName(functionName)
+                    .payload(SdkBytes.fromUtf8String(gson.toJson(body)))
+                    .build();
+
+            InvokeResponse response = lambdaClient.invoke(request);
+
+            if (response.functionError() != null) {
+                throw new RuntimeException("Astrology Lambda " + action + " failed: " + response.functionError()
+                        + " — " + response.payload().asUtf8String());
+            }
+
+            String responsePayload = response.payload().asUtf8String();
+            if (span != null) {
+                span.setStatus(SpanStatus.OK);
+                span.finish();
+            }
+            return parseLambdaResponse(responsePayload);
+        } catch (Exception e) {
+            if (span != null) {
+                span.setThrowable(e);
+                span.setStatus(SpanStatus.INTERNAL_ERROR);
+                span.finish();
+            }
+            throw e;
         }
     }
 
     private String parseLambdaResponse(String response) {
         try {
+            @SuppressWarnings("unchecked")
             Map<String, Object> responseMap = gson.fromJson(response, Map.class);
             if (responseMap.containsKey("body") && responseMap.get("body") instanceof String) {
                 return (String) responseMap.get("body");

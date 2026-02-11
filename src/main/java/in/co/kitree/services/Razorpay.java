@@ -1,12 +1,8 @@
 package in.co.kitree.services;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.razorpay.*;
 import org.json.JSONObject;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.Map;
 
 public class Razorpay implements PaymentGateway {
@@ -27,25 +23,13 @@ public class Razorpay implements PaymentGateway {
     }
 
     public Razorpay(boolean isTest) throws RazorpayException {
-
-        try {
-            ObjectMapper objectMapper = new ObjectMapper();
-
-            // Read the JSON file into a JsonNode
-            JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
-
-            this.RAZORPAY_KEY = rootNode.path("RAZORPAY_KEY").asText();
-            this.RAZORPAY_SECRET = rootNode.path("RAZORPAY_SECRET").asText();
-            this.RAZORPAY_TEST_KEY = rootNode.path("RAZORPAY_TEST_KEY").asText();
-            this.RAZORPAY_TEST_SECRET = rootNode.path("RAZORPAY_TEST_SECRET").asText();
-            if (isTest) {
-                this.RAZORPAY_WEBHOOK_SECRET = rootNode.path("RAZORPAY_WEBHOOK_SECRET_TEST").asText();
-            } else {
-                this.RAZORPAY_WEBHOOK_SECRET = rootNode.path("RAZORPAY_WEBHOOK_SECRET").asText();
-            }
-        } catch (IOException e) {
-            LoggingService.error("razorpay_secrets_read_failed", e);
-        }
+        this.RAZORPAY_KEY = SecretsProvider.getString("RAZORPAY_KEY");
+        this.RAZORPAY_SECRET = SecretsProvider.getString("RAZORPAY_SECRET");
+        this.RAZORPAY_TEST_KEY = SecretsProvider.getString("RAZORPAY_TEST_KEY");
+        this.RAZORPAY_TEST_SECRET = SecretsProvider.getString("RAZORPAY_TEST_SECRET");
+        this.RAZORPAY_WEBHOOK_SECRET = isTest
+                ? SecretsProvider.getString("RAZORPAY_WEBHOOK_SECRET_TEST")
+                : SecretsProvider.getString("RAZORPAY_WEBHOOK_SECRET");
 
         this.isTest = isTest;
         if (isTest) {

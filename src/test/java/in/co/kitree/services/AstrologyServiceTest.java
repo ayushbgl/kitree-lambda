@@ -9,12 +9,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
+import software.amazon.awssdk.core.SdkBytes;
+import software.amazon.awssdk.services.lambda.LambdaClient;
+import software.amazon.awssdk.services.lambda.model.InvokeRequest;
+import software.amazon.awssdk.services.lambda.model.InvokeResponse;
 
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.util.Arrays;
 import java.util.Map;
 
@@ -25,22 +25,21 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 public class AstrologyServiceTest {
 
-    @Mock
-    private HttpClient mockHttpClient;
+    private static final String FUNCTION_NAME = "kitree-astrology-api-test";
 
     @Mock
-    private HttpResponse<String> mockResponse;
+    private LambdaClient mockLambdaClient;
 
     private AstrologyService astrologyService;
     private Gson gson;
 
     @BeforeEach
     void setUp() {
-        astrologyService = new AstrologyService(mockHttpClient);
+        astrologyService = new AstrologyService(mockLambdaClient, FUNCTION_NAME);
         gson = new Gson();
     }
 
-    // ---- Missing-field validation tests (no HTTP calls) ----
+    // ---- Missing-field validation tests (no Lambda calls) ----
 
     @Test
     void testGetAstrologicalDetailsWithMissingFields() throws Exception {
@@ -51,7 +50,7 @@ public class AstrologyServiceTest {
         JsonObject json = JsonParser.parseString(response).getAsJsonObject();
         assertFalse(json.get("success").getAsBoolean());
         assertEquals("Missing required horoscope details", json.get("errorMessage").getAsString());
-        verifyNoInteractions(mockHttpClient);
+        verifyNoInteractions(mockLambdaClient);
     }
 
     @Test
@@ -63,7 +62,7 @@ public class AstrologyServiceTest {
         JsonObject json = JsonParser.parseString(response).getAsJsonObject();
         assertFalse(json.get("success").getAsBoolean());
         assertEquals("Missing required dasha details", json.get("errorMessage").getAsString());
-        verifyNoInteractions(mockHttpClient);
+        verifyNoInteractions(mockLambdaClient);
     }
 
     @Test
@@ -75,7 +74,7 @@ public class AstrologyServiceTest {
         JsonObject json = JsonParser.parseString(response).getAsJsonObject();
         assertFalse(json.get("success").getAsBoolean());
         assertEquals("Missing required divisional chart details", json.get("errorMessage").getAsString());
-        verifyNoInteractions(mockHttpClient);
+        verifyNoInteractions(mockLambdaClient);
     }
 
     @Test
@@ -87,149 +86,163 @@ public class AstrologyServiceTest {
         JsonObject json = JsonParser.parseString(response).getAsJsonObject();
         assertFalse(json.get("success").getAsBoolean());
         assertEquals("Missing required gochar details", json.get("errorMessage").getAsString());
-        verifyNoInteractions(mockHttpClient);
+        verifyNoInteractions(mockLambdaClient);
     }
 
-    // ---- Successful API response tests (mocked HTTP) ----
+    // ---- Successful Lambda invocation tests ----
 
     @Test
     void testGetAstrologicalDetails() throws Exception {
-        try (MockedStatic<AstrologyServiceConfig> configMock = mockStatic(AstrologyServiceConfig.class)) {
-            stubConfig(configMock);
-            stubHttpResponse(200, lambdaResponse(Map.of("ascendant", "Aries", "sun", "Leo", "moon", "Cancer")));
+        stubLambdaResponse(lambdaEnvelope(Map.of("ascendant", "Aries", "sun", "Leo", "moon", "Cancer")));
 
-            String response = astrologyService.getAstrologicalDetails(createValidHoroscopeRequestBody());
+        String response = astrologyService.getAstrologicalDetails(createValidHoroscopeRequestBody());
 
-            JsonObject json = JsonParser.parseString(response).getAsJsonObject();
-            assertTrue(json.has("ascendant"));
-            assertTrue(json.has("sun"));
-            verifyHttpCallTo("/get_horoscope");
-        }
+        JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+        assertTrue(json.has("ascendant"));
+        assertTrue(json.has("sun"));
+        verifyInvokeWithAction("get_horoscope");
     }
 
     @Test
     void testGetDashaDetails() throws Exception {
-        try (MockedStatic<AstrologyServiceConfig> configMock = mockStatic(AstrologyServiceConfig.class)) {
-            stubConfig(configMock);
-            stubHttpResponse(200, lambdaResponse(Map.of("dashas", "Sun-Moon", "current_level_calculated", true)));
+        stubLambdaResponse(lambdaEnvelope(Map.of("dashas", "Sun-Moon", "current_level_calculated", true)));
 
-            String response = astrologyService.getDashaDetails(createValidDashaRequestBody());
+        String response = astrologyService.getDashaDetails(createValidDashaRequestBody());
 
-            JsonObject json = JsonParser.parseString(response).getAsJsonObject();
-            assertTrue(json.has("dashas"));
-            verifyHttpCallTo("/dasha");
-        }
+        JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+        assertTrue(json.has("dashas"));
+        verifyInvokeWithAction("dasha");
     }
 
     @Test
     void testGetDivisionalCharts() throws Exception {
-        try (MockedStatic<AstrologyServiceConfig> configMock = mockStatic(AstrologyServiceConfig.class)) {
-            stubConfig(configMock);
-            stubHttpResponse(200, lambdaResponse(Map.of("charts", Map.of("D2", "data", "D9", "data"))));
+        stubLambdaResponse(lambdaEnvelope(Map.of("charts", Map.of("D2", "data", "D9", "data"))));
 
-            String response = astrologyService.getDivisionalCharts(createValidDivisionalChartsRequestBody());
+        String response = astrologyService.getDivisionalCharts(createValidDivisionalChartsRequestBody());
 
-            JsonObject json = JsonParser.parseString(response).getAsJsonObject();
-            assertTrue(json.has("charts"));
-            verifyHttpCallTo("/divisional_charts");
-        }
+        JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+        assertTrue(json.has("charts"));
+        verifyInvokeWithAction("divisional_charts");
     }
 
     @Test
     void testGetGocharDetails() throws Exception {
-        try (MockedStatic<AstrologyServiceConfig> configMock = mockStatic(AstrologyServiceConfig.class)) {
-            stubConfig(configMock);
-            stubHttpResponse(200, lambdaResponse(Map.of("gochar", Map.of("saturn", "Aquarius"))));
+        stubLambdaResponse(lambdaEnvelope(Map.of("gochar", Map.of("saturn", "Aquarius"))));
 
-            String response = astrologyService.getGocharDetails(createValidHoroscopeRequestBody());
+        String response = astrologyService.getGocharDetails(createValidHoroscopeRequestBody());
 
-            JsonObject json = JsonParser.parseString(response).getAsJsonObject();
-            assertTrue(json.has("gochar"));
-            verifyHttpCallTo("/gochar");
-        }
+        JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+        assertTrue(json.has("gochar"));
+        verifyInvokeWithAction("gochar");
+    }
+
+    @Test
+    void testGetRashifalData() throws Exception {
+        stubLambdaResponse(lambdaEnvelope(Map.of("natal_moon_sign", 5, "tara_bala", 2)));
+
+        String response = astrologyService.getRashifalData(1990, 8, 15, 10, 30, 28.6139, 77.2090);
+
+        JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+        assertTrue(json.has("natal_moon_sign"));
+        verifyInvokeWithAction("rashifal");
     }
 
     // ---- Error response tests ----
 
     @Test
-    void testGetAstrologicalDetailsLambdaError() throws Exception {
-        try (MockedStatic<AstrologyServiceConfig> configMock = mockStatic(AstrologyServiceConfig.class)) {
-            stubConfig(configMock);
-            stubHttpErrorResponse(500);
+    void testLambdaFunctionError() {
+        InvokeResponse errorResponse = InvokeResponse.builder()
+                .functionError("Unhandled")
+                .payload(SdkBytes.fromUtf8String("{\"errorMessage\":\"Something went wrong\"}"))
+                .build();
+        when(mockLambdaClient.invoke(any(InvokeRequest.class))).thenReturn(errorResponse);
 
-            RuntimeException ex = assertThrows(RuntimeException.class, () ->
-                    astrologyService.getAstrologicalDetails(createValidHoroscopeRequestBody()));
+        RuntimeException ex = assertThrows(RuntimeException.class, () ->
+                astrologyService.getAstrologicalDetails(createValidHoroscopeRequestBody()));
 
-            assertTrue(ex.getMessage().contains("/get_horoscope"));
-            assertTrue(ex.getMessage().contains("500"));
-        }
+        assertTrue(ex.getMessage().contains("get_horoscope"));
+        assertTrue(ex.getMessage().contains("Unhandled"));
     }
 
     @Test
-    void testGetDashaDetailsLambdaError() throws Exception {
-        try (MockedStatic<AstrologyServiceConfig> configMock = mockStatic(AstrologyServiceConfig.class)) {
-            stubConfig(configMock);
-            stubHttpErrorResponse(502);
+    void testLambdaDashaFunctionError() {
+        InvokeResponse errorResponse = InvokeResponse.builder()
+                .functionError("Unhandled")
+                .payload(SdkBytes.fromUtf8String("{\"errorMessage\":\"Timeout\"}"))
+                .build();
+        when(mockLambdaClient.invoke(any(InvokeRequest.class))).thenReturn(errorResponse);
 
-            RuntimeException ex = assertThrows(RuntimeException.class, () ->
-                    astrologyService.getDashaDetails(createValidDashaRequestBody()));
+        RuntimeException ex = assertThrows(RuntimeException.class, () ->
+                astrologyService.getDashaDetails(createValidDashaRequestBody()));
 
-            assertTrue(ex.getMessage().contains("/dasha"));
-            assertTrue(ex.getMessage().contains("502"));
-        }
+        assertTrue(ex.getMessage().contains("dasha"));
+        assertTrue(ex.getMessage().contains("Unhandled"));
     }
 
     // ---- Direct response parsing (no "body" wrapper) ----
 
     @Test
     void testDirectResponseWithoutBodyWrapper() throws Exception {
-        try (MockedStatic<AstrologyServiceConfig> configMock = mockStatic(AstrologyServiceConfig.class)) {
-            stubConfig(configMock);
-            // Response is direct JSON, not wrapped in {"body": "..."}
-            String directJson = gson.toJson(Map.of("ascendant", "Taurus"));
-            stubHttpResponse(200, directJson);
+        String directJson = gson.toJson(Map.of("ascendant", "Taurus"));
+        stubLambdaResponse(directJson);
 
-            String response = astrologyService.getAstrologicalDetails(createValidHoroscopeRequestBody());
+        String response = astrologyService.getAstrologicalDetails(createValidHoroscopeRequestBody());
 
-            JsonObject json = JsonParser.parseString(response).getAsJsonObject();
-            assertTrue(json.has("ascendant"));
-            assertEquals("Taurus", json.get("ascendant").getAsString());
-        }
+        JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+        assertTrue(json.has("ascendant"));
+        assertEquals("Taurus", json.get("ascendant").getAsString());
+    }
+
+    // ---- Verify function name and payload ----
+
+    @Test
+    void testInvokeUsesCorrectFunctionName() throws Exception {
+        stubLambdaResponse(lambdaEnvelope(Map.of("ascendant", "Aries")));
+
+        astrologyService.getAstrologicalDetails(createValidHoroscopeRequestBody());
+
+        ArgumentCaptor<InvokeRequest> captor = ArgumentCaptor.forClass(InvokeRequest.class);
+        verify(mockLambdaClient).invoke(captor.capture());
+        assertEquals(FUNCTION_NAME, captor.getValue().functionName());
+    }
+
+    @Test
+    void testPayloadContainsActionField() throws Exception {
+        stubLambdaResponse(lambdaEnvelope(Map.of("ascendant", "Aries")));
+
+        astrologyService.getAstrologicalDetails(createValidHoroscopeRequestBody());
+
+        ArgumentCaptor<InvokeRequest> captor = ArgumentCaptor.forClass(InvokeRequest.class);
+        verify(mockLambdaClient).invoke(captor.capture());
+        String payload = captor.getValue().payload().asUtf8String();
+        JsonObject payloadJson = JsonParser.parseString(payload).getAsJsonObject();
+        assertEquals("get_horoscope", payloadJson.get("action").getAsString());
+        // Verify no api_token in payload
+        assertFalse(payloadJson.has("api_token"));
     }
 
     // ---- Helpers ----
 
-    private void stubConfig(MockedStatic<AstrologyServiceConfig> configMock) {
-        configMock.when(AstrologyServiceConfig::getLambdaBaseUrl).thenReturn("https://mock-astrology.example.com");
-        configMock.when(AstrologyServiceConfig::getApiToken).thenReturn("mock-token");
-    }
-
-    @SuppressWarnings("unchecked")
-    private void stubHttpResponse(int statusCode, String body) throws Exception {
-        when(mockResponse.statusCode()).thenReturn(statusCode);
-        when(mockResponse.body()).thenReturn(body);
-        when(mockHttpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).thenReturn(mockResponse);
-    }
-
-    @SuppressWarnings("unchecked")
-    private void stubHttpErrorResponse(int statusCode) throws Exception {
-        when(mockResponse.statusCode()).thenReturn(statusCode);
-        when(mockHttpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).thenReturn(mockResponse);
+    private void stubLambdaResponse(String responsePayload) {
+        InvokeResponse response = InvokeResponse.builder()
+                .payload(SdkBytes.fromUtf8String(responsePayload))
+                .build();
+        when(mockLambdaClient.invoke(any(InvokeRequest.class))).thenReturn(response);
     }
 
     /** Wraps payload in a Lambda-style {"statusCode":200,"body":"..."} envelope. */
-    private String lambdaResponse(Map<String, Object> payload) {
+    private String lambdaEnvelope(Map<String, Object> payload) {
         String innerJson = gson.toJson(payload);
         return gson.toJson(Map.of("statusCode", 200, "body", innerJson));
     }
 
-    @SuppressWarnings("unchecked")
-    private void verifyHttpCallTo(String expectedPath) throws Exception {
-        ArgumentCaptor<HttpRequest> captor = ArgumentCaptor.forClass(HttpRequest.class);
-        verify(mockHttpClient).send(captor.capture(), any(HttpResponse.BodyHandler.class));
-        String uri = captor.getValue().uri().toString();
-        assertTrue(uri.endsWith(expectedPath), "Expected URI to end with " + expectedPath + " but was " + uri);
-        assertTrue(uri.startsWith("https://mock-astrology.example.com"), "Expected mock base URL but was " + uri);
+    private void verifyInvokeWithAction(String expectedAction) {
+        ArgumentCaptor<InvokeRequest> captor = ArgumentCaptor.forClass(InvokeRequest.class);
+        verify(mockLambdaClient).invoke(captor.capture());
+        String payload = captor.getValue().payload().asUtf8String();
+        JsonObject payloadJson = JsonParser.parseString(payload).getAsJsonObject();
+        assertEquals(expectedAction, payloadJson.get("action").getAsString());
+        assertEquals(FUNCTION_NAME, captor.getValue().functionName());
     }
 
     private RequestBody createValidHoroscopeRequestBody() {

@@ -1,13 +1,10 @@
 package in.co.kitree.services;
 
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.genai.Client;
 import com.google.genai.types.*;
 
-import java.io.File;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -72,25 +69,12 @@ public class GeminiService {
         }
     }
 
-    /**
-     * Load Gemini API key from secrets.json.
-     */
-    private String loadApiKey(boolean isTest) {
-        try {
-            JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
-            String keyName = isTest ? "GEMINI_API_KEY_TEST" : "GEMINI_API_KEY";
-            String key = rootNode.path(keyName).asText("");
-
-            // Fallback to single key if environment-specific not found
-            if (key.isEmpty()) {
-                key = rootNode.path("GEMINI_API_KEY").asText("");
-            }
-
-            return key;
-        } catch (IOException e) {
-            LoggingService.error("gemini_secrets_read_failed", e);
-            return null;
+    private static String loadApiKey(boolean isTest) {
+        String key = SecretsProvider.getString(isTest ? "GEMINI_API_KEY_TEST" : "GEMINI_API_KEY");
+        if (key.isEmpty()) {
+            key = SecretsProvider.getString("GEMINI_API_KEY");
         }
+        return key;
     }
 
     /**

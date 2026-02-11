@@ -9,15 +9,8 @@ import com.google.cloud.firestore.*;
 import com.google.genai.Client;
 import com.google.genai.types.*;
 
-import java.io.File;
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -44,17 +37,15 @@ public class RashifalService {
 
     private final Firestore db;
     private final Client geminiClient;
-    private final HttpClient httpClient;
+    private final AstrologyService astrologyService;
     private final ObjectMapper objectMapper;
     private final boolean isTest;
 
-    public RashifalService(Firestore db, boolean isTest) {
+    public RashifalService(Firestore db, AstrologyService astrologyService, boolean isTest) {
         this.db = db;
+        this.astrologyService = astrologyService;
         this.isTest = isTest;
         this.objectMapper = new ObjectMapper();
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(30))
-                .build();
 
         String apiKey = loadGeminiApiKey(isTest);
         if (apiKey != null && !apiKey.isEmpty()) {
@@ -66,29 +57,12 @@ public class RashifalService {
         }
     }
 
-    private String loadCloudinaryUrl() {
-        try {
-            JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
-            return rootNode.path("CLOUDINARY_URL").asText("");
-        } catch (IOException e) {
-            LoggingService.error("rashifal_cloudinary_secrets_read_failed", e);
-            return null;
+    private static String loadGeminiApiKey(boolean isTest) {
+        String key = SecretsProvider.getString(isTest ? "GEMINI_API_KEY_TEST" : "GEMINI_API_KEY");
+        if (key.isEmpty()) {
+            key = SecretsProvider.getString("GEMINI_API_KEY");
         }
-    }
-
-    private String loadGeminiApiKey(boolean isTest) {
-        try {
-            JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
-            String keyName = isTest ? "GEMINI_API_KEY_TEST" : "GEMINI_API_KEY";
-            String key = rootNode.path(keyName).asText("");
-            if (key.isEmpty()) {
-                key = rootNode.path("GEMINI_API_KEY").asText("");
-            }
-            return key;
-        } catch (IOException e) {
-            LoggingService.error("rashifal_secrets_read_failed", e);
-            return null;
-        }
+        return key;
     }
 
     private static final int STALE_GENERATING_MINUTES = 15;
@@ -263,35 +237,7 @@ public class RashifalService {
 
     private String callPythonRashifal(int year, int month, int day, int hour, int minute,
                                        double latitude, double longitude) throws Exception {
-        Map<String, Object> requestBody = new HashMap<>();
-        requestBody.put("api_token", AstrologyServiceConfig.getApiToken());
-        requestBody.put("date", day);
-        requestBody.put("month", month);
-        requestBody.put("year", year);
-        requestBody.put("hour", hour);
-        requestBody.put("minute", minute);
-        requestBody.put("latitude", latitude);
-        requestBody.put("longitude", longitude);
-
-        String apiUrl = AstrologyServiceConfig.getLambdaBaseUrl() + "/rashifal";
-
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(apiUrl))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(requestBody)))
-                .build();
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new RuntimeException("Rashifal Lambda API failed: " + response.statusCode());
-        }
-
-        // Lambda Function URL may wrap body in a JSON envelope
-        JsonNode responseNode = objectMapper.readTree(response.body());
-        if (responseNode.has("body")) {
-            return responseNode.get("body").asText();
-        }
-        return response.body();
+        return astrologyService.getRashifalData(year, month, day, hour, minute, latitude, longitude);
     }
 
     private byte[] generateTtsAudio(String text) throws Exception {
@@ -353,8 +299,8 @@ public class RashifalService {
     }
 
     private String uploadToCloudinary(byte[] wavBytes, String userId) throws Exception {
-        String cloudinaryUrl = loadCloudinaryUrl();
-        if (cloudinaryUrl == null || cloudinaryUrl.isEmpty()) {
+        String cloudinaryUrl = SecretsProvider.getString("CLOUDINARY_URL");
+        if (cloudinaryUrl.isEmpty()) {
             throw new RuntimeException("CLOUDINARY_URL not configured in secrets.json");
         }
         Cloudinary cloudinary = new Cloudinary(cloudinaryUrl);

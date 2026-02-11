@@ -273,35 +273,6 @@ jobs:
         if: inputs.environment != 'only-sync-rules'
         run: pip install aws-sam-cli
 
-      - name: Resolve deployment parameters
-        if: inputs.environment != 'only-sync-rules'
-        id: resolve-params
-        run: |
-          # Dynamically fetch astrology lambda Function URL for each environment
-          if [ "${{ inputs.environment }}" = "test" ] || [ "${{ inputs.environment }}" = "both" ]; then
-            TEST_URL=$(aws lambda get-function-url-config \
-              --function-name kitree-astrology-api-test \
-              --query 'FunctionUrl' --output text 2>/dev/null || echo "")
-            if [ -z "$TEST_URL" ]; then
-              echo "❌ Could not fetch Function URL for kitree-astrology-api-test. Is it deployed?"
-              exit 1
-            fi
-            echo "✅ Astrology test URL: $TEST_URL"
-            echo "ASTROLOGY_LAMBDA_URL_TEST=$TEST_URL" >> $GITHUB_ENV
-          fi
-
-          if [ "${{ inputs.environment }}" = "prod" ] || [ "${{ inputs.environment }}" = "both" ]; then
-            PROD_URL=$(aws lambda get-function-url-config \
-              --function-name kitree-astrology-api-prod \
-              --query 'FunctionUrl' --output text 2>/dev/null || echo "")
-            if [ -z "$PROD_URL" ]; then
-              echo "❌ Could not fetch Function URL for kitree-astrology-api-prod. Is it deployed?"
-              exit 1
-            fi
-            echo "✅ Astrology prod URL: $PROD_URL"
-            echo "ASTROLOGY_LAMBDA_URL_PROD=$PROD_URL" >> $GITHUB_ENV
-          fi
-
       - name: Deploy Test Environment
         if: inputs.environment == 'test' || inputs.environment == 'both'
         run: |
@@ -334,7 +305,6 @@ jobs:
               FirebaseProject=${{ env.FIREBASE_PROJECT_ID_TEST }} \
               ApiDomainName=${{ env.API_DOMAIN_TEST }} \
               CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
-              AstrologyLambdaUrl=${ASTROLOGY_LAMBDA_URL_TEST} \
             --no-fail-on-empty-changeset
 
           echo "📤 Fetching important TEST stack outputs..."
@@ -382,7 +352,6 @@ jobs:
               FirebaseProject=${{ env.FIREBASE_PROJECT_ID_PROD }} \
               ApiDomainName=${{ env.API_DOMAIN_PROD }} \
               CertificateArn=${{ env.API_CERTIFICATE_ARN }} \
-              AstrologyLambdaUrl=${ASTROLOGY_LAMBDA_URL_PROD} \
             --no-fail-on-empty-changeset
 
           echo "📤 Fetching important PROD stack outputs..."

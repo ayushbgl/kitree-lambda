@@ -5,8 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import java.io.File;
-import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -161,27 +159,19 @@ public class StreamService {
     public StreamService(boolean isTest) {
         this.isTest = isTest;
         
-        String key = "";
-        String secret = "";
-        
-        try {
-            ObjectMapper objectMapper = new ObjectMapper();
-            JsonNode rootNode = objectMapper.readTree(new File("secrets.json"));
-            
-            if (isTest) {
-                key = rootNode.path("STREAM_API_KEY_TEST").asText("");
-                secret = rootNode.path("STREAM_API_SECRET_TEST").asText("");
-            } else {
-                key = rootNode.path("STREAM_API_KEY").asText("");
-                secret = rootNode.path("STREAM_API_SECRET").asText("");
-            }
-            
-            LoggingService.info("stream_service_initialized", Map.of("environment", isTest ? "TEST" : "PROD", "apiKeyLoaded", !key.isEmpty()));
+        String key;
+        String secret;
 
-        } catch (IOException e) {
-            LoggingService.error("stream_service_secrets_read_failed", e);
+        if (isTest) {
+            key = SecretsProvider.getString("STREAM_API_KEY_TEST");
+            secret = SecretsProvider.getString("STREAM_API_SECRET_TEST");
+        } else {
+            key = SecretsProvider.getString("STREAM_API_KEY");
+            secret = SecretsProvider.getString("STREAM_API_SECRET");
         }
-        
+
+        LoggingService.info("stream_service_initialized", Map.of("environment", isTest ? "TEST" : "PROD", "apiKeyLoaded", !key.isEmpty()));
+
         this.apiKey = key;
         this.apiSecret = secret;
     }
