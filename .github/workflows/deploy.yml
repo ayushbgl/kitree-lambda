@@ -22,7 +22,8 @@ permissions:
   id-token: write
 
 env:
-  DEPLOYMENT_BUCKET: kitree-backend
+  AWS_REGION: ap-south-1
+  # DEPLOYMENT_BUCKET is set dynamically as kitree-backend-{AccountId} in the "Set up deployment bucket" step
   FIREBASE_PROJECT_ID_TEST: kitree-test
   FIREBASE_PROJECT_ID_PROD: mirai-1111
   FIREBASE_TEST_DIR: firebase-test
@@ -267,11 +268,24 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Install AWS SAM CLI
         if: inputs.environment != 'only-sync-rules'
         run: pip install aws-sam-cli
+
+      - name: Set up deployment bucket
+        if: inputs.environment != 'only-sync-rules'
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          DEPLOYMENT_BUCKET="kitree-backend-${ACCOUNT_ID}"
+          echo "DEPLOYMENT_BUCKET=${DEPLOYMENT_BUCKET}" >> $GITHUB_ENV
+
+          if ! aws s3api head-bucket --bucket "$DEPLOYMENT_BUCKET" 2>/dev/null; then
+            echo "Creating deployment bucket: ${DEPLOYMENT_BUCKET}"
+            aws s3api create-bucket --bucket "$DEPLOYMENT_BUCKET" --region ${{ env.AWS_REGION }} \
+              --create-bucket-configuration LocationConstraint=${{ env.AWS_REGION }}
+          fi
 
       - name: Deploy Test Environment
         if: inputs.environment == 'test' || inputs.environment == 'both'
@@ -294,11 +308,12 @@ jobs:
           sam package \
             --template-file .aws-sam/build/template.yaml \
             --output-template-file .aws-sam/build/packaged.yaml \
-            --s3-bucket ${{ env.DEPLOYMENT_BUCKET }}
+            --s3-bucket ${{ env.DEPLOYMENT_BUCKET }} \
+            --s3-prefix kitree-lambda
 
           sam deploy \
             --template-file .aws-sam/build/packaged.yaml \
-            --stack-name java-lambda-test \
+            --stack-name kitree-lambda-test \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides \
               Environment=test \
@@ -308,7 +323,7 @@ jobs:
             --no-fail-on-empty-changeset
 
           echo "📤 Fetching important TEST stack outputs..."
-          TEST_OUTPUTS=$(sam list stack-outputs --stack-name java-lambda-test --output json)
+          TEST_OUTPUTS=$(sam list stack-outputs --stack-name kitree-lambda-test --output json)
 
           TEST_CF_DOMAIN=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue')
           TEST_CUSTOM_DOMAIN=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiCustomDomainUrl") | .OutputValue')
@@ -341,11 +356,12 @@ jobs:
           sam package \
             --template-file .aws-sam/build/template.yaml \
             --output-template-file .aws-sam/build/packaged.yaml \
-            --s3-bucket ${{ env.DEPLOYMENT_BUCKET }}
+            --s3-bucket ${{ env.DEPLOYMENT_BUCKET }} \
+            --s3-prefix kitree-lambda
 
           sam deploy \
             --template-file .aws-sam/build/packaged.yaml \
-            --stack-name java-lambda-prod \
+            --stack-name kitree-lambda-prod \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides \
               Environment=prod \
@@ -355,7 +371,7 @@ jobs:
             --no-fail-on-empty-changeset
 
           echo "📤 Fetching important PROD stack outputs..."
-          PROD_OUTPUTS=$(sam list stack-outputs --stack-name java-lambda-prod --output json)
+          PROD_OUTPUTS=$(sam list stack-outputs --stack-name kitree-lambda-prod --output json)
 
           PROD_CF_DOMAIN=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue')
           PROD_CUSTOM_DOMAIN=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiCustomDomainUrl") | .OutputValue')
@@ -375,7 +391,7 @@ jobs:
 
           if [ "${{ inputs.environment }}" = "test" ] || [ "${{ inputs.environment }}" = "both" ]; then
             echo "### TEST Environment" >> $GITHUB_STEP_SUMMARY
-            TEST_OUTPUTS=$(aws cloudformation describe-stacks --stack-name java-lambda-test --query 'Stacks[0].Outputs' --output json 2>/dev/null || echo "[]")
+            TEST_OUTPUTS=$(aws cloudformation describe-stacks --stack-name kitree-lambda-test --query 'Stacks[0].Outputs' --output json 2>/dev/null || echo "[]")
             TEST_API_URL=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiCustomDomainUrl") | .OutputValue' 2>/dev/null || echo "N/A")
             TEST_CF=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue' 2>/dev/null || echo "N/A")
             TEST_FN_URL=$(echo "$TEST_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiEndpoint") | .OutputValue' 2>/dev/null || echo "N/A")
@@ -391,7 +407,7 @@ jobs:
 
           if [ "${{ inputs.environment }}" = "prod" ] || [ "${{ inputs.environment }}" = "both" ]; then
             echo "### PROD Environment" >> $GITHUB_STEP_SUMMARY
-            PROD_OUTPUTS=$(aws cloudformation describe-stacks --stack-name java-lambda-prod --query 'Stacks[0].Outputs' --output json 2>/dev/null || echo "[]")
+            PROD_OUTPUTS=$(aws cloudformation describe-stacks --stack-name kitree-lambda-prod --query 'Stacks[0].Outputs' --output json 2>/dev/null || echo "[]")
             PROD_API_URL=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiCustomDomainUrl") | .OutputValue' 2>/dev/null || echo "N/A")
             PROD_CF=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue' 2>/dev/null || echo "N/A")
             PROD_FN_URL=$(echo "$PROD_OUTPUTS" | jq -r '.[] | select(.OutputKey=="ApiEndpoint") | .OutputValue' 2>/dev/null || echo "N/A")

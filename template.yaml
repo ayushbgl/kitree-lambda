@@ -32,7 +32,7 @@ Globals:
       Size: 1024  # 1GB temp storage for audio files
     LoggingConfig:
       LogFormat: JSON
-      LogGroup: !Sub "/aws/lambda/java-lambda-${Environment}"
+      LogGroup: !Sub "/aws/lambda/kitree-lambda-${Environment}"
       ApplicationLogLevel: INFO
       SystemLogLevel: WARN
 
@@ -57,7 +57,7 @@ Resources:
               Resource:
                 - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:kitree-python-scripts-${Environment}"
                 - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:kitree-astrology-api-${Environment}"
-                - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:java-lambda-${Environment}"
+                - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:kitree-lambda-${Environment}"
       AutoPublishAlias: !Ref Environment
       DeploymentPreference:
         Type: !If [ IsProd, AllAtOnce, Canary10Percent5Minutes ]
@@ -76,7 +76,7 @@ Resources:
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: !Sub "CloudFront for java-lambda-${Environment}"
+        Comment: !Sub "CloudFront for kitree-lambda-${Environment}"
         Aliases:
           - !Ref ApiDomainName
         DefaultRootObject: ""
@@ -114,7 +114,7 @@ Resources:
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/java-lambda-${Environment}"
+      LogGroupName: !Sub "/aws/lambda/kitree-lambda-${Environment}"
       RetentionInDays: !If [ IsProd, 7, 1 ]
 
   # EventBridge Rule for auto-terminating stale on-demand consultations
