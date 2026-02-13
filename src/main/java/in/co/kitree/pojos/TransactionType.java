@@ -6,6 +6,7 @@ package in.co.kitree.pojos;
  */
 public enum TransactionType {
     RECHARGE,
+    BONUS,          // Promotional credit added alongside a recharge (not real cash)
     CONSULTATION_DEDUCTION,
     PRODUCT_DEDUCTION,
     DIGITAL_PRODUCT_DEDUCTION,
