@@ -32,7 +32,11 @@ public class AuthenticationService {
             FirebaseToken decodedToken = FirebaseAuth.getInstance().verifyIdToken(idToken);
             return decodedToken.getUid();
         } catch (FirebaseAuthException e) {
-            LoggingService.warn("firebase_token_verification_failed", java.util.Map.of("error", e.getMessage()));
+            LoggingService.warn("firebase_token_verification_failed", java.util.Map.of(
+                "error", e.getMessage(),
+                "errorCode", e.getAuthErrorCode() != null ? e.getAuthErrorCode().name() : "unknown",
+                "tokenPrefix", idToken.length() > 20 ? idToken.substring(0, 20) + "..." : idToken
+            ));
             throw e;
         }
     }

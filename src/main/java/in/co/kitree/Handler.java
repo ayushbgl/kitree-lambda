@@ -278,6 +278,15 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                         ? this.gson.fromJson(event.getBody(), RequestBody.class)
                         : new RequestBody();
 
+                // Debug: log incoming REST request with auth header presence
+                String authHeader = event.getHeaders() != null ? AuthenticationService.extractTokenFromHeaders(event.getHeaders()) : null;
+                LoggingService.info("rest_request_received", Map.of(
+                    "method", httpMethod,
+                    "path", rawPath,
+                    "hasAuthHeader", authHeader != null && !authHeader.isEmpty(),
+                    "authHeaderPrefix", authHeader != null && authHeader.length() > 27 ? authHeader.substring(0, 27) + "..." : (authHeader != null ? authHeader : "NONE")
+                ));
+
                 // Authenticate
                 String userId = extractUserIdFromToken(event);
                 if (userId != null) {
@@ -288,6 +297,11 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
                 }
 
                 if (userId == null) {
+                    LoggingService.warn("rest_auth_failed", Map.of(
+                        "method", httpMethod,
+                        "path", rawPath,
+                        "hadAuthHeader", authHeader != null && !authHeader.isEmpty()
+                    ));
                     return ApiResponse.unauthorizedMessage("Unauthorized: Authentication required").toLambdaResponse();
                 }
 
