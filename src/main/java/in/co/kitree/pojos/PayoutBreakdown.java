@@ -46,10 +46,15 @@ public final class PayoutBreakdown {
         this.expertEarnings = expertEarnings;
     }
 
-    /** Package-private factory — callers should use {@link PayoutCalculationService#calculate}. */
-    static PayoutBreakdown of(double gatewayAmount, double walletDeduction, double realRatio,
-                               double effectiveRealAmount, double platformFeePercent,
-                               double platformFee, double expertEarnings) {
+    /**
+     * Public factory for creating payout breakdowns.
+     *
+     * <p>Intended to be used by {@code PayoutCalculationService} and tests only, but exposed as
+     * {@code public} so that it is accessible across packages.</p>
+     */
+    public static PayoutBreakdown of(double gatewayAmount, double walletDeduction, double realRatio,
+                                     double effectiveRealAmount, double platformFeePercent,
+                                     double platformFee, double expertEarnings) {
         return new PayoutBreakdown(gatewayAmount, walletDeduction, realRatio,
                 effectiveRealAmount, platformFeePercent, platformFee, expertEarnings);
     }
