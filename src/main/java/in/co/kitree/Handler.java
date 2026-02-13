@@ -280,11 +280,16 @@ public class Handler implements RequestHandler<RequestEvent, Object> {
 
                 // Debug: log incoming REST request with auth header presence
                 String authHeader = event.getHeaders() != null ? AuthenticationService.extractTokenFromHeaders(event.getHeaders()) : null;
+                // Log all header keys (not values) to diagnose CloudFront header forwarding
+                String headerKeys = event.getHeaders() != null
+                    ? String.join(",", event.getHeaders().keySet().stream().sorted().collect(java.util.stream.Collectors.toList()))
+                    : "null";
                 LoggingService.info("rest_request_received", Map.of(
                     "method", httpMethod,
                     "path", rawPath,
                     "hasAuthHeader", authHeader != null && !authHeader.isEmpty(),
-                    "authHeaderPrefix", authHeader != null && authHeader.length() > 27 ? authHeader.substring(0, 27) + "..." : (authHeader != null ? authHeader : "NONE")
+                    "authHeaderPrefix", authHeader != null && authHeader.length() > 27 ? authHeader.substring(0, 27) + "..." : (authHeader != null ? authHeader : "NONE"),
+                    "headerKeys", headerKeys
                 ));
 
                 // Authenticate
