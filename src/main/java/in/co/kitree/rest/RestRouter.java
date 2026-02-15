@@ -380,6 +380,12 @@ public class RestRouter {
             return ResponseConverter.fromHandlerResponse(result);
         });
 
+        // --- Calls (scheduled consultation start from expert bookings) ---
+        post("/api/v1/calls/create", "create_call", (userId, body, pathParams, queryParams) -> {
+            String result = sessionHandler.handleRequest("create_call", userId, body);
+            return ResponseConverter.fromHandlerResponse(result);
+        });
+
         // --- Stream ---
         get("/api/v1/stream/token", "get_stream_user_token", (userId, body, pathParams, queryParams) -> {
             String result = sessionHandler.handleRequest("get_stream_user_token", userId, body);

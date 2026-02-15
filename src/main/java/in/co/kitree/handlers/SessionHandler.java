@@ -33,6 +33,7 @@ public class SessionHandler {
     public String handleRequest(String action, String userId, RequestBody requestBody) throws Exception {
         return switch (action) {
             case "get_stream_user_token" -> handleGetStreamUserToken(userId, requestBody);
+            case "create_call" -> handleCreateCall(userId, requestBody);
             case "create_session_plan" -> handleCreateSessionPlan(userId, requestBody);
             case "add_course_session" -> handleAddCourseSession(userId, requestBody);
             case "start_session" -> handleStartSession(userId, requestBody);
@@ -67,16 +68,19 @@ public class SessionHandler {
     }
 
     private String handleCreateCall(String userId, RequestBody requestBody) throws Exception {
+        if (requestBody.getUserId() == null || requestBody.getOrderId() == null) {
+            return gson.toJson(Map.of("success", false, "errorMessage", "userId and orderId are required"));
+        }
         FirebaseOrder order = fetchOrder(requestBody.getUserId(), requestBody.getOrderId());
         if (order == null) {
-            return "Not authorized";
+            return gson.toJson(Map.of("success", false, "errorMessage", "Not authorized"));
         }
         String expertId = order.getExpertId();
         if (java.util.Objects.equals(requestBody.getUserId(), expertId)) {
-            return "Cannot call yourself";
+            return gson.toJson(Map.of("success", false, "errorMessage", "Cannot call yourself"));
         }
         if (!userId.equals(expertId)) {
-            return "Not authorized";
+            return gson.toJson(Map.of("success", false, "errorMessage", "Not authorized"));
         }
 
         PythonLambdaEventRequest createCallEvent = new PythonLambdaEventRequest();
@@ -91,7 +95,7 @@ public class SessionHandler {
         createCallEvent.setTest(isTest);
 
         pythonLambdaService.invokePythonLambda(createCallEvent);
-        return "Success";
+        return gson.toJson(Map.of("success", true));
     }
 
     private String handleCreateSessionPlan(String userId, RequestBody requestBody) throws Exception {
